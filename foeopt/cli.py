@@ -37,7 +37,7 @@ def _cmd_roads(args) -> int:
     for k, v in s.items():
         print(f"  {k}: {v}")
     html = render_html(layout, optimized_roads=optimized)
-    Path(args.out).write_text(html)
+    Path(args.out).write_text(html, encoding="utf-8")
     print(f"Wrote map to {args.out}")
     if args.diff:
         Path(args.diff).write_text(json.dumps(road_diff(layout.roads, optimized), indent=2))
