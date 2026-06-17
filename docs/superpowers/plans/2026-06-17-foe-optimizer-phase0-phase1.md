@@ -529,9 +529,9 @@ git commit -m "feat: buildable region from unlocked_areas"
 **Interfaces:**
 - Consumes: `city_data` (dict), `helper_data` (dict), `Catalog`, `build_region`.
 - Produces: `build_layout(city_data: dict, helper_data: dict) -> Layout`.
-  - Excludes types `{off_grid, outpost_ship, friends_tavern}` and entities outside `0 ≤ x,y < 200` or without `x`/`y`.
-  - `street` entities become entries in `Layout.roads` (`{(x,y): provided_level}`); they are not `Building`s.
-  - `needs_road = "connected" in entity`. `road_level = catalog.required_level(...)`.
+  - **On-grid filter:** an entity is considered only if it has `x`/`y` and its **anchor `(x, y)` is inside the buildable region** (`build_region(...).cells`). This single test is the off-grid exclusion (catches `off_grid`, `outpost_ship`, `friends_tavern`, and the `hub_main`/`hub_part` settlement hubs — all sit outside the region). No per-type list.
+  - `street` entities (on-grid) become entries in `Layout.roads` (`{(x,y): provided_level}`); they are not `Building`s.
+  - **Two passes:** first collect roads + candidate buildings (with footprints), then set `needs_road`. `needs_road = ("connected" in entity) and (footprint.border_cells() ∩ road_cells != ∅)` — i.e. has the `connected` key AND is currently road-adjacent. `road_level = catalog.required_level(...)`.
   - The `main_building` entity becomes `layout.townhall` with `is_townhall=True`.
   - Buildings whose size cannot be resolved raise `ValueError` (should not happen on real data).
 
@@ -546,22 +546,36 @@ def test_build_layout_counts(city_data, helper_data):
     layout = build_layout(city_data, helper_data)
     # 142 streets currently
     assert len(layout.roads) == 142
+    # all in-region buildings (anchor inside the unlocked region)
+    assert len(layout.buildings) == 292
     # townhall identified
     assert layout.townhall is not None
     assert layout.townhall.is_townhall
     assert layout.townhall.cityentity_id == "H_SpaceAgeSpaceHub_Townhall"
-    # 99 road-needing buildings (incl. townhall) -> 98 consumers via road_needing()
+    # 81 road-needing (incl. townhall) -> 80 consumers via road_needing()
     needing_incl_th = [b for b in layout.buildings if b.needs_road]
-    assert len(needing_incl_th) == 99
-    assert len(layout.road_needing()) == 98
+    assert len(needing_incl_th) == 81
+    assert len(layout.road_needing()) == 80
 
 
-def test_build_layout_excludes_offgrid(city_data, helper_data):
+def test_offgrid_excluded_by_region(city_data, helper_data):
     layout = build_layout(city_data, helper_data)
+    cids = {b.cityentity_id for b in layout.buildings}
+    # settlement hubs sit outside the region -> excluded
+    assert "O_OceanicFuture_Hub1" not in cids
+    assert "O_ArcticFuture_Hub1" not in cids
+    # every kept building's anchor is inside the buildable region
     for b in layout.buildings:
-        assert b.type not in {"off_grid", "outpost_ship", "friends_tavern"}
-        for (cx, cy) in b.footprint.cells():
-            assert 0 <= cx < 200 and 0 <= cy < 200
+        assert (b.footprint.x, b.footprint.y) in layout.region.cells
+
+
+def test_yukitomo_not_road_needing(city_data, helper_data):
+    # Yukitomo residences carry the `connected` key but no adjacent road -> not road-needing
+    layout = build_layout(city_data, helper_data)
+    yuki = [b for b in layout.buildings
+            if b.cityentity_id in {"W_MultiAge_WIN24A13", "W_MultiAge_WIN24A14"}]
+    assert yuki  # present in the city
+    assert all(not b.needs_road for b in yuki)
 
 
 def test_every_building_has_size(city_data, helper_data):
@@ -585,49 +599,43 @@ from foeopt.catalog import Catalog
 from foeopt.model import Building, Footprint, Layout
 from foeopt.region import build_region
 
-EXCLUDED_TYPES = {"off_grid", "outpost_ship", "friends_tavern"}
-
-
-def _on_main_grid(e: dict) -> bool:
-    if "x" not in e or "y" not in e:
-        return False
-    return 0 <= e["x"] < 200 and 0 <= e["y"] < 200
-
 
 def build_layout(city_data: dict, helper_data: dict) -> Layout:
     catalog = Catalog(helper_data["CityEntities"])
     region = build_region(city_data["unlocked_areas"])
 
-    buildings: list[Building] = []
+    # Pass 1: collect roads and candidate (entity, footprint) pairs on the grid.
     roads: dict[tuple[int, int], int] = {}
-    townhall: Building | None = None
-
+    candidates: list[tuple[dict, Footprint]] = []
     for e in city_data["entities"]:
-        if not _on_main_grid(e):
+        if "x" not in e or "y" not in e:
             continue
-        etype = e["type"]
-        if etype in EXCLUDED_TYPES:
+        if (e["x"], e["y"]) not in region.cells:  # off-grid: anchor outside region
             continue
-
         cid = e["cityentity_id"]
-        x, y = e["x"], e["y"]
-
-        if etype == "street":
-            roads[(x, y)] = catalog.provided_level(cid)
+        if e["type"] == "street":
+            roads[(e["x"], e["y"])] = catalog.provided_level(cid)
             continue
-
         size = catalog.size(cid)
         if size is None:
             raise ValueError(f"Cannot resolve size for {cid}")
         w, length = size
+        candidates.append((e, Footprint(e["x"], e["y"], w, length)))
 
-        is_th = etype == "main_building"
+    # Pass 2: a building needs a road iff it has the `connected` key AND is road-adjacent.
+    road_cells = set(roads)
+    buildings: list[Building] = []
+    townhall: Building | None = None
+    for e, fp in candidates:
+        cid = e["cityentity_id"]
+        is_th = e["type"] == "main_building"
+        needs_road = ("connected" in e) and bool(fp.border_cells() & road_cells)
         building = Building(
             entity_id=e["id"],
             cityentity_id=cid,
-            type=etype,
-            footprint=Footprint(x, y, w, length),
-            needs_road="connected" in e,
+            type=e["type"],
+            footprint=fp,
+            needs_road=needs_road,
             road_level=catalog.required_level(cid),
             is_townhall=is_th,
             set_id=catalog.set_id(cid),
@@ -1139,7 +1147,7 @@ def test_shared_corridor_reused():
 
 
 def test_level_two_requirement():
-    layout = Layout(_region(4, 1), [_th(0, 0), _house(2, 3, level=2)], _th(0, 0))
+    layout = Layout(_region(4, 1), [_th(0, 0), _house(2, 3, 0, level=2)], _th(0, 0))
     roads = route(layout)
     layout.roads = roads
     assert is_valid(layout)
@@ -1227,8 +1235,11 @@ def route(layout: Layout) -> dict[tuple[int, int], int]:
     candidates = free_cells(layout)
     th_roots = layout.townhall.footprint.border_cells() & candidates
 
-    tree: set[tuple[int, int]] = set()  # chosen road cells
-    levels: dict[tuple[int, int], int] = {}
+    # Seed the tree with the Townhall's free border cells as roots: these become
+    # actual road tiles (level 1) so the network is rooted at the Townhall. The
+    # prune pass below removes any root that turns out to be unneeded.
+    tree: set[tuple[int, int]] = set(th_roots)  # chosen road cells
+    levels: dict[tuple[int, int], int] = {cell: 1 for cell in th_roots}
 
     consumers = sorted(
         layout.road_needing(),
