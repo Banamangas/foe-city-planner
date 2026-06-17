@@ -2,11 +2,16 @@
 
 ## FoE data model
 
-### Road-need detection: use the live `connected` field, NOT metadata
-- **Mistake:** I derived "needs a road" from `CityEntities[id].requirements.street_connection_level`, getting only 16 buildings.
-- **Reality:** That metadata field is only populated for a subset (Great Buildings, military, Townhall — ~16). Most event/special buildings (`W_MultiAge_*`) carry no road info in metadata at all.
-- **Correct signal:** A placed entity needs a road **iff it has a `connected` key** in `city-user-data.json`. This is the game's authoritative flag (streets also carry it). In the sample city: 99 non-street buildings need roads.
-- **Rule:** road-needing = non-street entity with `connected` key present. Road *level* = def `street_connection_level` if present, else default level 1.
+### Road-need detection: `connected` key AND currently road-adjacent (derived from the valid layout)
+- **Mistake 1:** Derived "needs a road" from `CityEntities[id].requirements.street_connection_level` → only 16 buildings (Great Buildings/military/Townhall). That field is absent for event buildings.
+- **Mistake 2:** Switched to "has `connected` key" → 99 buildings, but this **over-counts by 11**: the Yukitomo residences (`W_MultiAge_WIN24A13` *Yukitomo Impérial*, `W_MultiAge_WIN24A14` *Résidence Céleste Yukitomo*) have `connected=1` yet are buried with no adjacent road, and the player confirmed they do **not** need roads. Event-building defs carry no road/street info at all.
+- **Correct rule (player-confirmed):** a building needs a road **iff** it has a `connected` key **AND** is orthogonally adjacent to a road tile in the input layout. Computed once at load, treating the export as a valid layout; then a fixed per-building property. Sample city: **80 consumers + Townhall**.
+- **Key data fact:** the 2×2 of (`connected` key) × (road-adjacent) had **0** in the "no key + road-adjacent" cell — roads are placed only where needed, so the rule is unambiguous.
+- Road *level* = def `street_connection_level` if present, else default 1.
+
+### Off-grid = footprint anchor outside the buildable region
+- **Mistake:** Excluded off-grid by a type list (`off_grid`/`outpost_ship`/`friends_tavern`) + `coords < 200`. This missed the settlement **hub** structures (`hub_main`/`hub_part`: *Port de l'arctique*, *Terminal océanique*) which have in-range coords but sit outside the unlocked region.
+- **Correct rule (player-confirmed):** a building is on-grid (movable, optimization-relevant) **iff its footprint anchor `(x,y)` is inside the buildable region** (union of `UnlockedAreas`). Anything else is off-grid, immovable, ignored. One test replaces the type list and catches hubs + the other ~10–13 off-grid buildings.
 
 ### Townhall does NOT substitute for a road
 - **Mistake:** Assumed a building adjacent to the Townhall footprint counts as connected without a road tile.
