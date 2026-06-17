@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import html as _html
 import json
 
 from foeopt.model import Layout
@@ -61,7 +60,7 @@ def render_html(
         "optimized_roads": road_list(optimized_roads) if optimized_roads else None,
     }
 
-    payload = _html.escape(json.dumps(data), quote=True)
+    payload = json.dumps(data).replace("</", "<\\/")
     return _TEMPLATE.replace("__DATA__", payload)
 
 

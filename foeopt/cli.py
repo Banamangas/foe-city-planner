@@ -15,7 +15,7 @@ def _load(path: str) -> dict:
 def _cmd_view(args) -> int:
     layout = build_layout(_load(args.city), _load(args.helper))
     html = render_html(layout)
-    Path(args.out).write_text(html)
+    Path(args.out).write_text(html, encoding="utf-8")
     print(f"Wrote map to {args.out} ({len(layout.buildings)} buildings, "
           f"{len(layout.roads)} roads)")
     return 0
