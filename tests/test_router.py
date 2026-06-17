@@ -1,0 +1,66 @@
+import pytest
+
+from foeopt.model import Building, Footprint, Layout, Region
+from foeopt.router import route, free_cells, RouteError
+from foeopt.validate import is_valid, unsatisfied
+
+
+def _th(x, y, w=1, h=1):
+    return Building(1, "TH", "main_building", Footprint(x, y, w, h),
+                    needs_road=True, road_level=1, is_townhall=True,
+                    set_id=None, chain_id=None, name="Townhall")
+
+
+def _house(eid, x, y, level=1):
+    return Building(eid, "H", "generic_building", Footprint(x, y, 1, 1),
+                    needs_road=True, road_level=level, is_townhall=False,
+                    set_id=None, chain_id=None, name="House")
+
+
+def _region(w, h):
+    return Region(frozenset((x, y) for x in range(w) for y in range(h)))
+
+
+def test_free_cells_excludes_buildings():
+    layout = Layout(_region(3, 1), [_th(0, 0), _house(2, 2, 0)], _th(0, 0))
+    assert free_cells(layout) == {(1, 0)}
+
+
+def test_straight_line_minimal():
+    # TH at (0,0), house at (4,0). One road at (1,0),(2,0),(3,0) connects:
+    # house border includes (3,0); that road must be connected back to TH.
+    layout = Layout(_region(5, 1), [_th(0, 0), _house(2, 4, 0)], _th(0, 0))
+    roads = route(layout)
+    layout.roads = roads
+    assert is_valid(layout)
+    # optimal: cells (1,0),(2,0),(3,0) -> 3 tiles
+    assert len(roads) == 3
+
+
+def test_shared_corridor_reused():
+    # Two houses at (4,0) and (4,1); TH at (0,0) on a 5x2 grid.
+    # A single corridor along row 0 plus one tap should serve both cheaply.
+    layout = Layout(_region(5, 2),
+                    [_th(0, 0), _house(2, 4, 0), _house(3, 4, 1)],
+                    _th(0, 0))
+    roads = route(layout)
+    layout.roads = roads
+    assert is_valid(layout)
+    # both houses adjacent to (3,0)/(3,1); corridor (1,0),(2,0),(3,0),(3,1) = 4
+    assert len(roads) <= 4
+
+
+def test_level_two_requirement():
+    layout = Layout(_region(4, 1), [_th(0, 0), _house(2, 3, 0, level=2)], _th(0, 0))
+    roads = route(layout)
+    layout.roads = roads
+    assert is_valid(layout)
+    # the connector adjacent to the house must be level >= 2
+    assert any(lvl >= 2 for lvl in roads.values())
+
+
+def test_unreachable_raises():
+    # House walled off: region only has the two footprints, no free cells
+    layout = Layout(_region(2, 1), [_th(0, 0), _house(2, 1, 0)], _th(0, 0))
+    with pytest.raises(RouteError):
+        route(layout)
