@@ -61,6 +61,8 @@ def route(layout: Layout) -> dict[tuple[int, int], int]:
 
     candidates = free_cells(layout)
     th_roots = layout.townhall.footprint.border_cells() & candidates
+    if not th_roots:
+        raise RouteError("townhall has no free adjacent cell to root the network")
 
     # Seed the tree with all Townhall-root cells (brief §1: "tree starts as the
     # set of free cells adjacent to the Townhall footprint").
@@ -84,24 +86,23 @@ def route(layout: Layout) -> dict[tuple[int, int], int]:
         if any(t in tree for t in targets):
             connector = next(t for t in targets if t in tree)
         else:
-            starts = tree | th_roots
+            starts = tree
             path = _bfs_path(candidates, starts, targets)
             if path is None:
                 raise RouteError(f"cannot reach {b.name} ({b.entity_id})")
             for cell in path:
                 tree.add(cell)
                 levels.setdefault(cell, 1)
-            connector = path[-1] if path else next(iter(targets & tree))
+            connector = path[-1]
         levels[connector] = max(levels.get(connector, 1), b.road_level)
 
     roads = dict(levels)
-    return _prune(layout, roads, th_roots)
+    return _prune(layout, roads)
 
 
 def _prune(
     layout: Layout,
     roads: dict[tuple[int, int], int],
-    th_roots: set[tuple[int, int]],
 ) -> dict[tuple[int, int], int]:
     """Remove road cells whose removal keeps every consumer satisfied."""
     from foeopt.validate import unsatisfied
@@ -114,7 +115,7 @@ def _prune(
             trial = dict(roads)
             del trial[cell]
             probe = Layout(layout.region, layout.buildings, layout.townhall, trial)
-            if unsatisfied(probe) == []:
+            if not unsatisfied(probe):
                 roads = trial
                 changed = True
                 break

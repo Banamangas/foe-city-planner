@@ -42,4 +42,4 @@ def unsatisfied(layout: Layout) -> list[Building]:
 
 
 def is_valid(layout: Layout) -> bool:
-    return unsatisfied(layout) == []
+    return not unsatisfied(layout)

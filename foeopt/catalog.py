@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-def _ability_value(defn: dict, key: str):
+def _ability_value(defn: dict, key: str) -> str | None:
     for ability in defn.get("abilities", []):
         if isinstance(ability, dict) and key in ability:
             return ability[key]
