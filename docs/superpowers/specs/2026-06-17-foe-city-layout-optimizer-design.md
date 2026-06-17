@@ -58,14 +58,27 @@ achieve a better (lower) road count.
   This resolves 100% of placed buildings. `x` → width, `y` → length.
 - **No rotation:** footprint orientation is fixed.
 
-### 4.3 Road-need detection (authoritative: live `connected` field)
-- A non-street placed entity **needs a road iff it has a `connected` key** in
-  `city-user-data.json`. This is the game's own flag. (Streets also carry `connected`; they
-  are handled separately as road tiles.)
-- Sample city: **99 road-needing buildings** (76 event/generic, 14 Great Buildings, 5
-  `hub_part`, 2 `hub_main`, 1 military, 1 Townhall).
-- **Do NOT use** `requirements.street_connection_level` as the road-need test — it is only
-  populated for ~16 defs (Great-Building class) and misses the 83 event buildings.
+### 4.3 Road-need detection (derived from the player's valid layout)
+A building **needs a road iff** in the input city it (a) has a `connected` key **and**
+(b) is orthogonally adjacent to a road tile. Both conditions are required; the rule is
+computed once at load time, treating the exported city as a *validly connected* layout
+(true of any real export), and then the result is a fixed per-building property used by
+all phases.
+
+Why this rule (validated against the sample city's 2×2 of `connected`-key × road-adjacent):
+
+| in-region building | road-adjacent | count | meaning |
+|---|---|---|---|
+| has `connected` key | yes | **81** (incl. Townhall) | needs a road |
+| has `connected` key | no | 11 | Yukitomo residences — confirmed by the player to **not** need roads |
+| no `connected` key | yes | **0** | (none — roads are placed only where needed) |
+| no `connected` key | no | 200 | no road needed |
+
+- The decisive cell is **0**: no building lacking the `connected` key sits next to a road,
+  and the only `connected`-key buildings without a road (the Yukitomo) genuinely don't need
+  one. So `connected`-key **and** road-adjacent cleanly isolates the 80 consumers + Townhall.
+- **Do NOT use** `requirements.street_connection_level` as the road-need test (only ~16 defs
+  carry it) **nor** the `connected` key alone (it over-counts the Yukitomo by 11).
 - **Road level required** by a building = its def `street_connection_level` if present, else
   **default level 1**. In the sample city all needs are level 1.
 
@@ -99,12 +112,20 @@ needs no adjacent road.
 - **Sample city: 0 placed buildings belong to any set or chain** — this constraint is
   inactive here but supported for generality.
 
-### 4.8 Exclusions
-Excluded from optimization (left untouched, rendered for context only):
-- `off_grid` entities (negative / special coords).
-- `outpost_ship` and any entity on a non-`main` grid (coords ≥ 500).
-- `friends_tavern`.
-- Inventory entities lacking `x`/`y`.
+### 4.8 Exclusions (off-grid = outside the buildable region)
+A building participates in optimization **iff its footprint anchor `(x, y)` is inside the
+buildable region** (the union of `UnlockedAreas`). Everything else is **off-grid**:
+immovable and ignored for both road routing and layout (rendered for context only).
+
+This single region-membership test cleanly excludes, with no per-type list:
+- `off_grid` entities (negative / special coords),
+- `outpost_ship` and any entity on a non-`main` grid (coords ≥ 500),
+- `friends_tavern` (negative coords),
+- the settlement **hub** structures (`hub_main` / `hub_part` — e.g. *Port de l'arctique*,
+  *Terminal océanique*) which sit outside the region (x > 72 or y > 68),
+- inventory entities lacking `x`/`y`.
+
+The player confirmed all such off-grid buildings are immovable and must not be considered.
 
 ## 5. Architecture — Python package `foeopt/`
 
