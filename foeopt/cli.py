@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 
 from foeopt.build import build_layout
+from foeopt.router import route, RouteError
+from foeopt.report import stats, road_diff
 from foeopt.viz import render_html
 
 
@@ -21,6 +23,28 @@ def _cmd_view(args) -> int:
     return 0
 
 
+def _cmd_roads(args) -> int:
+    city = _load(args.city)
+    helper = _load(args.helper)
+    layout = build_layout(city, helper)
+    try:
+        optimized = route(layout)
+    except RouteError as exc:
+        print(f"ERROR: {exc}")
+        return 2
+    s = stats(layout, optimized)
+    print("Road optimization (buildings fixed):")
+    for k, v in s.items():
+        print(f"  {k}: {v}")
+    html = render_html(layout, optimized_roads=optimized)
+    Path(args.out).write_text(html)
+    print(f"Wrote map to {args.out}")
+    if args.diff:
+        Path(args.diff).write_text(json.dumps(road_diff(layout.roads, optimized), indent=2))
+        print(f"Wrote diff to {args.diff}")
+    return 0 if s["unsatisfied"] == 0 else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="foeopt")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -30,6 +54,13 @@ def main(argv: list[str] | None = None) -> int:
     p_view.add_argument("helper")
     p_view.add_argument("-o", "--out", default="city.html")
     p_view.set_defaults(func=_cmd_view)
+
+    p_roads = sub.add_parser("roads", help="minimize roads with buildings fixed")
+    p_roads.add_argument("city")
+    p_roads.add_argument("helper")
+    p_roads.add_argument("-o", "--out", default="roads.html")
+    p_roads.add_argument("--diff", default=None)
+    p_roads.set_defaults(func=_cmd_roads)
 
     args = parser.parse_args(argv)
     return args.func(args)
