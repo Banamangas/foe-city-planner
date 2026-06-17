@@ -22,8 +22,8 @@ and toggle current vs optimized roads.
     uv run pytest
 
 ## Inputs
-- `city-user-data.json` — live game CityMap response (authoritative state; `connected`
-  flag marks road-needing buildings).
+- `city-user-data.json` — live game CityMap response (authoritative state; a building
+  needs a road iff it has the `connected` key and is currently road-adjacent).
 - `city-user-data-foe-helper.json` — FOE Helper rework with building definitions
   (sizes, levels, sets/chains).
 - `metadata-grid.json` — static grid geometry (reference).
