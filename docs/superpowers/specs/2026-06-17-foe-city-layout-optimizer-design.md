@@ -57,6 +57,10 @@ achieve a better (lower) road count.
 
   This resolves 100% of placed buildings. `x` → width, `y` → length.
 - **No rotation:** footprint orientation is fixed.
+- **Zero-omission coordinates:** the export **omits the `x` field when x=0 and the `y` field
+  when y=0** (the same convention as `unlocked_areas`). Read coordinates as
+  `x = e.get("x", 0)`, `y = e.get("y", 0)` — never require both keys, or buildings on the
+  left edge (x=0) and top edge (y=0) are dropped. Sample city: **314 placed buildings**.
 
 ### 4.3 Road-need detection (derived from the player's valid layout)
 A building **needs a road iff** in the input city it (a) has a `connected` key **and**
@@ -69,14 +73,14 @@ Why this rule (validated against the sample city's 2×2 of `connected`-key × ro
 
 | in-region building | road-adjacent | count | meaning |
 |---|---|---|---|
-| has `connected` key | yes | **81** (incl. Townhall) | needs a road |
-| has `connected` key | no | 11 | Yukitomo residences — confirmed by the player to **not** need roads |
+| has `connected` key | yes | **83** (incl. Townhall) | needs a road |
+| has `connected` key | no | 15 | Yukitomo residences & similar — confirmed by the player to **not** need roads |
 | no `connected` key | yes | **0** | (none — roads are placed only where needed) |
-| no `connected` key | no | 200 | no road needed |
+| no `connected` key | no | 216 | no road needed |
 
 - The decisive cell is **0**: no building lacking the `connected` key sits next to a road,
   and the only `connected`-key buildings without a road (the Yukitomo) genuinely don't need
-  one. So `connected`-key **and** road-adjacent cleanly isolates the 80 consumers + Townhall.
+  one. So `connected`-key **and** road-adjacent cleanly isolates the 82 consumers + Townhall.
 - **Do NOT use** `requirements.street_connection_level` as the road-need test (only ~16 defs
   carry it) **nor** the `connected` key alone (it over-counts the Yukitomo by 11).
 - **Road level required** by a building = its def `street_connection_level` if present, else

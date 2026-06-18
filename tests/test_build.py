@@ -5,16 +5,17 @@ def test_build_layout_counts(city_data, helper_data):
     layout = build_layout(city_data, helper_data)
     # 142 streets currently
     assert len(layout.roads) == 142
-    # all in-region buildings (anchor inside the unlocked region)
-    assert len(layout.buildings) == 292
+    # all in-region buildings (anchor inside the unlocked region), including the
+    # x=0 / y=0 edge buildings whose zero coordinate FoE omits from the export
+    assert len(layout.buildings) == 314
     # townhall identified
     assert layout.townhall is not None
     assert layout.townhall.is_townhall
     assert layout.townhall.cityentity_id == "H_SpaceAgeSpaceHub_Townhall"
-    # 81 road-needing (incl. townhall) -> 80 consumers via road_needing()
+    # 83 road-needing (incl. townhall) -> 82 consumers via road_needing()
     needing_incl_th = [b for b in layout.buildings if b.needs_road]
-    assert len(needing_incl_th) == 81
-    assert len(layout.road_needing()) == 80
+    assert len(needing_incl_th) == 83
+    assert len(layout.road_needing()) == 82
 
 
 def test_offgrid_excluded_by_region(city_data, helper_data):
