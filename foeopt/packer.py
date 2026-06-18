@@ -10,7 +10,8 @@ from foeopt.validate import is_valid
 
 @dataclass
 class PackConfig:
-    orientation: str   # "h" (horizontal road rows) — only mode in Phase 2
+    orientation: str   # reserved; always "h" (horizontal road rows). Column
+                       # mode is a deferred sweep dimension, not yet consulted.
     spacing: int       # rows between corridor lines
     trunk_x: int       # column for the vertical connecting trunk
 
@@ -36,6 +37,7 @@ def bbox(region: Region) -> tuple[int, int]:
 
 
 def _corridor_cells(region: frozenset[tuple[int, int]], w: int, h: int, cfg: PackConfig) -> set:
+    # Always lays horizontal road rows; cfg.orientation is reserved for future use.
     cells = set()
     for y in range(0, h, cfg.spacing):          # horizontal road rows
         for x in range(w):
@@ -126,10 +128,6 @@ def _configs(layout: Layout, thorough: bool) -> list[PackConfig]:
         for s in (3, 4, 5, 6)
         for t in trunks
     ]
-
-
-def _score(res: PackResult) -> tuple[int, int]:
-    return (len(res.unplaced), len(res.layout.roads))
 
 
 def repack(layout: Layout, thorough: bool = False) -> PackResult:
