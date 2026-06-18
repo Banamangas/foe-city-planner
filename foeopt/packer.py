@@ -34,7 +34,7 @@ def bbox(region: Region) -> tuple[int, int]:
     return (max(xs) + 1, max(ys) + 1)
 
 
-def _corridor_cells(region: set, w: int, h: int, cfg: PackConfig) -> set:
+def _corridor_cells(region: frozenset[tuple[int, int]], w: int, h: int, cfg: PackConfig) -> set:
     cells = set()
     for y in range(0, h, cfg.spacing):          # horizontal road rows
         for x in range(w):
@@ -107,7 +107,9 @@ def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
     try:
         candidate.roads = route(candidate)
     except RouteError:
-        # No feasible road network for this placement — mark consumers unplaced
-        # so the caller rejects this candidate.
-        return PackResult(layout=candidate, unplaced=unplaced + list(consumers))
+        # No feasible road network for this placement — every consumer is
+        # unsatisfiable. Add the spatially-placed consumers to the ones that
+        # already failed placement, without double-counting.
+        placed_consumers = [b for b in consumers if b.entity_id in placed]
+        return PackResult(layout=candidate, unplaced=unplaced + placed_consumers)
     return PackResult(layout=candidate, unplaced=unplaced)

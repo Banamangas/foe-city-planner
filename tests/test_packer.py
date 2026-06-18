@@ -64,3 +64,16 @@ def test_build_candidate_reports_unplaced_when_too_tight():
     layout = Layout(_full_region(2, 2), [th, cons], th)
     res = build_candidate(layout, PackConfig("h", spacing=2, trunk_x=0))
     assert any(b.entity_id == 2 for b in res.unplaced)
+
+
+def test_unplaced_has_no_duplicate_entity_ids():
+    # 4x4 region: townhall (2x2) + 4 consumers (2x2 each). The region is too
+    # tight to place them all, so at least some end up unplaced. Regardless of
+    # whether the failure is spatial or a RouteError, no entity_id must appear
+    # twice in PackResult.unplaced.
+    th = _b(1, 0, 0, 2, 2, th=True)
+    cons = [_b(10 + i, 0, 0, 2, 2, needs=True) for i in range(4)]
+    layout = Layout(_full_region(4, 4), [th, *cons], th)
+    res = build_candidate(layout, PackConfig("h", spacing=2, trunk_x=0))
+    ids = [b.entity_id for b in res.unplaced]
+    assert len(ids) == len(set(ids)), f"Duplicate entity_ids in unplaced: {ids}"
