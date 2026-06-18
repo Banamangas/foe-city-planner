@@ -75,10 +75,7 @@ while time.monotonic() < deadline:
 return OptimizeResult(layout=best, moves_applied=<count of confirmed best updates>)
 ```
 
-- **Temperature:** `T0` auto-scaled from the mean absolute proxy delta over a small sample of
-  random moves (so acceptance starts reasonable regardless of city scale). `cooling` is a
-  geometric factor derived from an estimated iteration count for the budget; the schedule is
-  bounded and deterministic given the seed.
+- **Temperature:** `T0` auto-scaled from the mean of the POSITIVE sampled proxy deltas (zero-delta no-op moves excluded; fallback 1.0) over a small sample of random moves (so acceptance starts reasonable regardless of city scale). `cooling` is a geometric factor derived from an estimated iteration count for the budget; the schedule is bounded and deterministic given the seed.
 - **Move proposal (`random_move`):** randomly choose a same-footprint swap (two random
   buildings of identical size) or a relocation (a random non-Townhall building to a random
   free cell). Returns a validated new `Layout` (via the local-search transforms) or `None`.

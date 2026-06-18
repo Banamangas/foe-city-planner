@@ -1,7 +1,10 @@
 import random
 
 from foeopt.model import Building, Footprint, Layout, Region
-from foeopt.anneal import _mst_length, mst_cost, random_move
+from foeopt.anneal import _mst_length, mst_cost, random_move, anneal
+from foeopt.localsearch import OptimizeResult
+from foeopt.router import route
+from foeopt.validate import is_valid
 
 
 def _rn(eid, x, y, w=1, l=1, needs=True, th=False):
@@ -80,12 +83,6 @@ def test_random_move_is_deterministic_for_seed():
     assert anchors(m1) == anchors(m2)
 
 
-from foeopt.anneal import anneal
-from foeopt.localsearch import OptimizeResult
-from foeopt.router import route
-from foeopt.validate import is_valid
-
-
 def test_anneal_never_worse_and_valid():
     # tiny already-tight layout: TH(0,0) road(1,0) house(2,0)
     th = _rn(1, 0, 0, th=True, needs=False)
@@ -130,3 +127,28 @@ def test_anneal_can_beat_inflated_start():
     # the route-confirmed result is self-consistent
     assert len(res.layout.roads) == len(route(
         Layout(res.layout.region, res.layout.buildings, res.layout.townhall, {})))
+
+
+def test_anneal_moves_applied_on_improvement():
+    # When annealing can confirm an improvement, moves_applied >= 1.
+    # Reuse the inflated-start setup: seed=3 reliably finds an improvement.
+    th = _rn(1, 0, 0, th=True, needs=False)
+    a = _rn(2, 2, 0)
+    region = _region(6, 2)
+    minimal = route(Layout(region, [th, a], th, {}))
+    inflated = dict(minimal)
+    inflated[(0, 1)] = 1
+    inflated[(1, 1)] = 1
+    layout = Layout(region, [th, a], th, roads=inflated)
+    res = anneal(layout, seed=3, budget_seconds=2.0, max_iters=500)
+    assert res.moves_applied >= 1, f"Expected >=1 confirmed improvement with seed=3, got {res.moves_applied}"
+
+
+def test_anneal_moves_applied_zero_on_tight_layout():
+    # When layout is already tight (no improvement possible), moves_applied == 0.
+    # tiny already-tight layout: TH(0,0) road(1,0) house(2,0)
+    th = _rn(1, 0, 0, th=True, needs=False)
+    house = _rn(2, 2, 0)
+    layout = Layout(_region(3, 1), [th, house], th, roads={(1, 0): 1})
+    res = anneal(layout, seed=1, budget_seconds=1.0, max_iters=200)
+    assert res.moves_applied == 0

@@ -5,7 +5,7 @@ import random
 import time
 
 from foeopt.model import Building, Layout
-from foeopt.localsearch import free_cells, move_building, swap_buildings
+from foeopt.localsearch import OptimizeResult, free_cells, move_building, swap_buildings
 
 
 def _mst_length(points: list[tuple[float, float]]) -> float:
@@ -63,8 +63,6 @@ def random_move(layout: Layout, rng: random.Random) -> Layout | None:
     x, y = rng.choice(free)
     return move_building(layout, b.entity_id, x, y)
 
-
-from foeopt.localsearch import OptimizeResult
 
 _T_FLOOR = 1e-9
 _COOLING = 0.9995
