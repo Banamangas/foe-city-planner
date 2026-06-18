@@ -9,6 +9,7 @@ from foeopt.router import route, RouteError
 from foeopt.report import stats, road_diff
 from foeopt.viz import render_html, render_comparison
 from foeopt.packer import repack
+from foeopt.localsearch import optimize
 
 
 def _load(path: str) -> dict:
@@ -64,6 +65,19 @@ def _cmd_layout(args) -> int:
     return 0
 
 
+def _cmd_improve(args) -> int:
+    current = build_layout(_load(args.city), _load(args.helper))
+    budget = 120.0 if args.thorough else 30.0
+    res = optimize(current, budget_seconds=budget)
+    s = stats(current, res.layout.roads)
+    print("Local-search road optimization:")
+    print(f"  current roads: {s['current_roads']} | optimized roads: {s['optimized_roads']}"
+          f" | tiles_saved: {s['tiles_saved']} | moves: {res.moves_applied}")
+    Path(args.out).write_text(render_comparison(current, res.layout), encoding="utf-8")
+    print(f"Wrote before/after map to {args.out}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="foeopt")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -88,6 +102,14 @@ def main(argv: list[str] | None = None) -> int:
     p_layout.add_argument("--thorough", action="store_true",
                           help="sweep more configurations (slower, better)")
     p_layout.set_defaults(func=_cmd_layout)
+
+    p_improve = sub.add_parser("improve", help="lower roads via local-search building moves")
+    p_improve.add_argument("city")
+    p_improve.add_argument("helper")
+    p_improve.add_argument("-o", "--out", default="improve.html")
+    p_improve.add_argument("--thorough", action="store_true",
+                           help="use a larger time budget")
+    p_improve.set_defaults(func=_cmd_improve)
 
     args = parser.parse_args(argv)
     return args.func(args)
