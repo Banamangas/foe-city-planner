@@ -85,6 +85,95 @@ def render_html(
     return _TEMPLATE.replace("__DATA__", payload)
 
 
+def render_comparison(current: Layout, optimized: Layout) -> str:
+    # shared bounds over both layouts so the two views align
+    cx0, cy0, cx1, cy1 = _bounds(current)
+    ox0, oy0, ox1, oy1 = _bounds(optimized)
+    min_x, min_y = min(cx0, ox0), min(cy0, oy0)
+    max_x, max_y = max(cx1, ox1), max(cy1, oy1)
+    width = (max_x - min_x + 1) * _CELL
+    height = (max_y - min_y + 1) * _CELL
+
+    def view(layout: Layout) -> dict:
+        def px(x, y):
+            return (x - min_x) * _CELL, (y - min_y) * _CELL
+        buildings = []
+        for b in layout.buildings:
+            bx, by = px(b.footprint.x, b.footprint.y)
+            buildings.append({
+                "x": bx, "y": by,
+                "w": b.footprint.width * _CELL, "h": b.footprint.length * _CELL,
+                "name": b.name, "size": f"{b.footprint.width}x{b.footprint.length}",
+                "needs_road": b.needs_road, "townhall": b.is_townhall,
+            })
+        roads = [{"x": (x - min_x) * _CELL, "y": (y - min_y) * _CELL, "level": lvl}
+                 for (x, y), lvl in layout.roads.items()]
+        region = [((x - min_x) * _CELL, (y - min_y) * _CELL)
+                  for (x, y) in sorted(layout.region.cells)]
+        return {"buildings": buildings, "roads": roads, "region": region}
+
+    data = {
+        "cell": _CELL, "width": width, "height": height,
+        "palette": {
+            "background": COLOR_BACKGROUND, "region": COLOR_REGION,
+            "current_road": COLOR_CURRENT_ROAD, "optimized_road": COLOR_OPTIMIZED_ROAD,
+            "townhall": COLOR_TOWNHALL, "road_building": COLOR_ROAD_BUILDING,
+            "plain_building": COLOR_PLAIN_BUILDING, "border": COLOR_BUILDING_BORDER,
+        },
+        "views": {"current": view(current), "optimized": view(optimized)},
+    }
+    payload = json.dumps(data).replace("</", "<\\/")
+    return _COMPARE_TEMPLATE.replace("__DATA__", payload)
+
+
+_COMPARE_TEMPLATE = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>FoE City — before/after</title>
+<style>
+  body { font-family: sans-serif; margin: 0; background: #141414; color: #eee; }
+  #toolbar { padding: 8px; }
+  canvas { display: block; }
+  #tip { position: fixed; pointer-events: none; background: #000; color: #fff;
+         padding: 4px 8px; border-radius: 4px; font-size: 12px; display: none; }
+</style></head><body>
+<div id="toolbar">
+  <label><input type="radio" name="view" value="current" checked> current</label>
+  <label><input type="radio" name="view" value="optimized"> optimized</label>
+</div>
+<div><canvas id="cv"></canvas><div id="tip"></div></div>
+<script id="data" type="application/json">__DATA__</script>
+<script>
+const DATA = JSON.parse(document.getElementById('data').textContent);
+const PAL = DATA.palette, cell = DATA.cell;
+const cv = document.getElementById('cv'); cv.width = DATA.width; cv.height = DATA.height;
+const ctx = cv.getContext('2d'); const tip = document.getElementById('tip');
+let activeRoadColor = PAL.current_road;
+function current(){ return document.querySelector('input[name=view]:checked').value; }
+function draw() {
+  const v = DATA.views[current()];
+  activeRoadColor = current() === 'optimized' ? PAL.optimized_road : PAL.current_road;
+  ctx.fillStyle = PAL.background; ctx.fillRect(0,0,cv.width,cv.height);
+  ctx.fillStyle = PAL.region; for (const [x,y] of v.region) ctx.fillRect(x,y,cell,cell);
+  ctx.fillStyle = activeRoadColor; for (const r of v.roads) ctx.fillRect(r.x,r.y,cell,cell);
+  for (const b of v.buildings) {
+    ctx.fillStyle = b.townhall ? PAL.townhall : (b.needs_road ? PAL.road_building : PAL.plain_building);
+    ctx.fillRect(b.x,b.y,b.w,b.h); ctx.strokeStyle = PAL.border; ctx.strokeRect(b.x,b.y,b.w,b.h);
+  }
+}
+function buildingAt(mx,my){ for (const b of DATA.views[current()].buildings)
+  if (mx>=b.x&&mx<b.x+b.w&&my>=b.y&&my<b.y+b.h) return b; return null; }
+cv.addEventListener('mousemove', e => {
+  const r = cv.getBoundingClientRect(); const b = buildingAt(e.clientX-r.left, e.clientY-r.top);
+  if (b) { tip.style.display='block'; tip.style.left=(e.clientX+12)+'px'; tip.style.top=(e.clientY+12)+'px';
+    tip.setAttribute('data-name', b.name); tip.setAttribute('data-size', b.size);
+    tip.textContent = b.name + ' (' + b.size + ')'; } else { tip.style.display='none'; }
+});
+for (const el of document.querySelectorAll('input[name=view]')) el.addEventListener('change', draw);
+draw();
+</script>
+</body></html>
+"""
+
+
 _TEMPLATE = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><title>FoE City Map</title>
 <style>
