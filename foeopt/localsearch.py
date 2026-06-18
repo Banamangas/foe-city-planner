@@ -103,3 +103,21 @@ def relocate_candidates(
                 out.append((b.entity_id, x, y))
                 break
     return out
+
+
+_ORTHO = ((1, 0), (-1, 0), (0, 1), (0, -1))
+
+
+def _road_degree(road_cells: set[tuple[int, int]], cell: tuple[int, int]) -> int:
+    cx, cy = cell
+    return sum(1 for dx, dy in _ORTHO if (cx + dx, cy + dy) in road_cells)
+
+
+def spur_served_buildings(layout: Layout) -> list[int]:
+    road = set(layout.roads)
+    out: list[int] = []
+    for b in layout.road_needing():
+        adjacent = [c for c in b.footprint.border_cells() if c in road]
+        if adjacent and any(_road_degree(road, c) == 1 for c in adjacent):
+            out.append(b.entity_id)
+    return sorted(out)
