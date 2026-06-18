@@ -22,13 +22,18 @@
 - Multi-age buildings store size in `components.<Age>.placement.size` → `(x, y)`, constant across ages.
 - Resolution order: top-level `width`/`length`, else any component's `placement.size`. Resolves 100% of placed buildings.
 
-### "Missing buildings" on the map was a contrast bug, not missing data
-- **Symptom:** User reported buildings (top row of 4×4, left-side 7×7/5×6) not showing on the rendered map.
-- **Investigation:** Confirmed via data that all 292 buildings reached the canvas payload at correct pixels (only the 7 off-grid hubs are excluded), and there were no overlapping footprints. Then **rendered the actual canvas draw order to a PNG and looked at it** — buildings were drawn but non-road `#555` was nearly identical to region `#3a3a3a`.
-- **Root cause:** insufficient colour contrast between non-road buildings and the region background. Isolated/edge buildings read as background.
-- **Fix:** hoisted the palette into testable `foeopt/viz.py` constants; non-road buildings are now amber (`#d89b3c`) on a darker region (`#262626`).
-- **Test lesson:** a string-inequality check on colours is useless (`#555` != `#3a3a3a` is "true" but they look identical). The regression guard measures **channel-sum distance** and requires ≥150 (old pairing was 81).
-- **Debugging lesson:** for a visual bug, render the real output to an image and inspect it — don't reason about pixels from code alone.
+### FoE omits the x (or y) coordinate when it is 0 — don't require both keys
+- **Symptom:** User reported buildings missing on the **left side** and **top line** of the map; building count was 292 but should be 314.
+- **Misdiagnosis (avoid repeating):** I first assumed it was a colour-contrast problem (non-road `#555` vs region `#3a3a3a`) and "fixed" the palette. That was wrong — it addressed a real but secondary issue and did NOT restore the buildings. **The count (292 vs 314) was the decisive clue I should have checked first.**
+- **Root cause:** `city-user-data.json` **omits the `x` field when x=0 and the `y` field when y=0** (same zero-omission convention as `unlocked_areas`). `build_layout` required both keys present, silently dropping all 22 buildings on the x=0 column (left edge) and y=0 row (top edge) — including 2 Great Buildings.
+- **Fix:** `x, y = e.get("x", 0), e.get("y", 0)`, then exclude by region membership. Verified: 0 entities have *neither* coord, edge cells are in-region, result = 314 buildings / 82 road-needing consumers.
+- **Lessons:**
+  - When a **count** is off, chase the count directly — it localises the bug faster than reasoning about symptoms (rendering, contrast).
+  - Apply the zero-omission rule **everywhere** coordinates are read, not just `unlocked_areas`.
+  - For a visual bug, render the real output to a PNG and inspect it (this did confirm the buildings once coords were fixed).
+
+### Map contrast (secondary improvement, kept)
+- Non-road buildings were `#555` on region `#3a3a3a` (channel distance 81) — low contrast. Hoisted the palette into testable `foeopt/viz.py` constants; non-road buildings are now amber (`#d89b3c`) on darker region (`#262626`). Regression guard measures **channel-sum distance ≥150** (string inequality is useless: `#555` != `#3a3a3a` is "true" yet they look identical).
 
 ### Process lesson
 - When a derived count "feels off" or contradicts domain knowledge (FoE: most buildings need roads), validate against the live game-state signal before designing around the metadata-derived value.
