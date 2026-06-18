@@ -529,7 +529,8 @@ git commit -m "feat: buildable region from unlocked_areas"
 **Interfaces:**
 - Consumes: `city_data` (dict), `helper_data` (dict), `Catalog`, `build_region`.
 - Produces: `build_layout(city_data: dict, helper_data: dict) -> Layout`.
-  - **On-grid filter:** an entity is considered only if it has `x`/`y` and its **anchor `(x, y)` is inside the buildable region** (`build_region(...).cells`). This single test is the off-grid exclusion (catches `off_grid`, `outpost_ship`, `friends_tavern`, and the `hub_main`/`hub_part` settlement hubs — all sit outside the region). No per-type list.
+  - **Coordinates:** read `x = e.get("x", 0)`, `y = e.get("y", 0)` — FoE omits the field when the value is 0, so requiring both keys would drop left-edge (x=0) and top-edge (y=0) buildings. (No entity in the export lacks *both* coords.)
+  - **On-grid filter:** an entity is considered only if its **anchor `(x, y)` is inside the buildable region** (`build_region(...).cells`). This single test is the off-grid exclusion (catches `off_grid`, `outpost_ship`, `friends_tavern`, and the `hub_main`/`hub_part` settlement hubs — all sit outside the region). No per-type list.
   - `street` entities (on-grid) become entries in `Layout.roads` (`{(x,y): provided_level}`); they are not `Building`s.
   - **Two passes:** first collect roads + candidate buildings (with footprints), then set `needs_road`. `needs_road = ("connected" in entity) and (footprint.border_cells() ∩ road_cells != ∅)` — i.e. has the `connected` key AND is currently road-adjacent. `road_level = catalog.required_level(...)`.
   - The `main_building` entity becomes `layout.townhall` with `is_townhall=True`.
@@ -546,16 +547,17 @@ def test_build_layout_counts(city_data, helper_data):
     layout = build_layout(city_data, helper_data)
     # 142 streets currently
     assert len(layout.roads) == 142
-    # all in-region buildings (anchor inside the unlocked region)
-    assert len(layout.buildings) == 292
+    # all in-region buildings (anchor inside the unlocked region), including the
+    # x=0 / y=0 edge buildings whose zero coordinate FoE omits from the export
+    assert len(layout.buildings) == 314
     # townhall identified
     assert layout.townhall is not None
     assert layout.townhall.is_townhall
     assert layout.townhall.cityentity_id == "H_SpaceAgeSpaceHub_Townhall"
-    # 81 road-needing (incl. townhall) -> 80 consumers via road_needing()
+    # 83 road-needing (incl. townhall) -> 82 consumers via road_needing()
     needing_incl_th = [b for b in layout.buildings if b.needs_road]
-    assert len(needing_incl_th) == 81
-    assert len(layout.road_needing()) == 80
+    assert len(needing_incl_th) == 83
+    assert len(layout.road_needing()) == 82
 
 
 def test_offgrid_excluded_by_region(city_data, helper_data):
@@ -608,19 +610,21 @@ def build_layout(city_data: dict, helper_data: dict) -> Layout:
     roads: dict[tuple[int, int], int] = {}
     candidates: list[tuple[dict, Footprint]] = []
     for e in city_data["entities"]:
-        if "x" not in e or "y" not in e:
-            continue
-        if (e["x"], e["y"]) not in region.cells:  # off-grid: anchor outside region
+        # FoE omits the x (or y) field when its value is 0 — the same
+        # zero-omission convention used by unlocked_areas. Default to 0 so that
+        # buildings on the left edge (x=0) and top edge (y=0) are not dropped.
+        x, y = e.get("x", 0), e.get("y", 0)
+        if (x, y) not in region.cells:  # off-grid: anchor outside region
             continue
         cid = e["cityentity_id"]
         if e["type"] == "street":
-            roads[(e["x"], e["y"])] = catalog.provided_level(cid)
+            roads[(x, y)] = catalog.provided_level(cid)
             continue
         size = catalog.size(cid)
         if size is None:
             raise ValueError(f"Cannot resolve size for {cid}")
         w, length = size
-        candidates.append((e, Footprint(e["x"], e["y"], w, length)))
+        candidates.append((e, Footprint(x, y, w, length)))
 
     # Pass 2: a building needs a road iff it has the `connected` key AND is road-adjacent.
     road_cells = set(roads)
