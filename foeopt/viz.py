@@ -6,6 +6,17 @@ from foeopt.model import Layout
 
 _CELL = 12  # pixels per grid cell
 
+# Map palette. Non-road buildings MUST contrast clearly with the region
+# background — an earlier #555-on-#3a3a3a pairing made them read as "missing".
+COLOR_BACKGROUND = "#141414"
+COLOR_REGION = "#262626"          # buildable cells (empty)
+COLOR_CURRENT_ROAD = "rgba(150,150,150,0.95)"
+COLOR_OPTIMIZED_ROAD = "rgba(80,200,120,0.95)"
+COLOR_TOWNHALL = "#c0392b"        # red
+COLOR_ROAD_BUILDING = "#2980b9"   # blue — needs a road
+COLOR_PLAIN_BUILDING = "#d89b3c"  # amber — no road needed
+COLOR_BUILDING_BORDER = "#0a0a0a"
+
 
 def _bounds(layout: Layout) -> tuple[int, int, int, int]:
     xs, ys = [], []
@@ -58,6 +69,16 @@ def render_html(
         "buildings": buildings,
         "current_roads": road_list(layout.roads),
         "optimized_roads": road_list(optimized_roads) if optimized_roads else None,
+        "palette": {
+            "background": COLOR_BACKGROUND,
+            "region": COLOR_REGION,
+            "current_road": COLOR_CURRENT_ROAD,
+            "optimized_road": COLOR_OPTIMIZED_ROAD,
+            "townhall": COLOR_TOWNHALL,
+            "road_building": COLOR_ROAD_BUILDING,
+            "plain_building": COLOR_PLAIN_BUILDING,
+            "border": COLOR_BUILDING_BORDER,
+        },
     }
 
     payload = json.dumps(data).replace("</", "<\\/")
@@ -70,7 +91,7 @@ _TEMPLATE = """<!DOCTYPE html>
   body { font-family: sans-serif; margin: 0; background: #1e1e1e; color: #eee; }
   #toolbar { padding: 8px; }
   #wrap { position: relative; }
-  canvas { background: #2a2a2a; display: block; }
+  canvas { display: block; }
   #tip { position: fixed; pointer-events: none; background: #000; color: #fff;
          padding: 4px 8px; border-radius: 4px; font-size: 12px; display: none; }
   label { margin-right: 12px; }
@@ -88,23 +109,25 @@ cv.width = DATA.width; cv.height = DATA.height;
 const ctx = cv.getContext('2d');
 const tip = document.getElementById('tip');
 const cell = DATA.cell;
+const PAL = DATA.palette;
 
 function draw() {
-  ctx.clearRect(0, 0, cv.width, cv.height);
-  ctx.fillStyle = '#3a3a3a';
+  ctx.fillStyle = PAL.background;
+  ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.fillStyle = PAL.region;
   for (const [x, y] of DATA.region) ctx.fillRect(x, y, cell, cell);
   if (document.getElementById('showCurrent').checked) {
-    ctx.fillStyle = 'rgba(120,120,120,0.9)';
+    ctx.fillStyle = PAL.current_road;
     for (const r of DATA.current_roads) ctx.fillRect(r.x, r.y, cell, cell);
   }
   if (DATA.optimized_roads && document.getElementById('showOptimized').checked) {
-    ctx.fillStyle = 'rgba(80,200,120,0.9)';
+    ctx.fillStyle = PAL.optimized_road;
     for (const r of DATA.optimized_roads) ctx.fillRect(r.x, r.y, cell, cell);
   }
   for (const b of DATA.buildings) {
-    ctx.fillStyle = b.townhall ? '#c0392b' : (b.needs_road ? '#2980b9' : '#555');
+    ctx.fillStyle = b.townhall ? PAL.townhall : (b.needs_road ? PAL.road_building : PAL.plain_building);
     ctx.fillRect(b.x, b.y, b.w, b.h);
-    ctx.strokeStyle = '#111'; ctx.strokeRect(b.x, b.y, b.w, b.h);
+    ctx.strokeStyle = PAL.border; ctx.strokeRect(b.x, b.y, b.w, b.h);
   }
 }
 function buildingAt(mx, my) {

@@ -1,6 +1,26 @@
 from foeopt.build import build_layout
 from foeopt.model import Building, Footprint, Layout, Region
-from foeopt.viz import render_html
+from foeopt.viz import (
+    COLOR_PLAIN_BUILDING,
+    COLOR_REGION,
+    render_html,
+)
+
+
+def _rgb(hexcolor: str) -> tuple[int, int, int]:
+    h = hexcolor.lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+def test_plain_building_contrasts_with_region():
+    """Regression: non-road buildings must be clearly distinguishable from the
+    region background. The original #555 building on #3a3a3a region had a
+    channel-sum distance of only 81 and read as 'missing' on the map."""
+    distance = sum(abs(a - b) for a, b in zip(_rgb(COLOR_PLAIN_BUILDING), _rgb(COLOR_REGION)))
+    assert distance >= 150, (
+        f"plain building {COLOR_PLAIN_BUILDING} too close to region "
+        f"{COLOR_REGION} (distance {distance})"
+    )
 
 
 def test_render_html_is_self_contained(city_data, helper_data):

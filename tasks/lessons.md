@@ -22,5 +22,13 @@
 - Multi-age buildings store size in `components.<Age>.placement.size` → `(x, y)`, constant across ages.
 - Resolution order: top-level `width`/`length`, else any component's `placement.size`. Resolves 100% of placed buildings.
 
+### "Missing buildings" on the map was a contrast bug, not missing data
+- **Symptom:** User reported buildings (top row of 4×4, left-side 7×7/5×6) not showing on the rendered map.
+- **Investigation:** Confirmed via data that all 292 buildings reached the canvas payload at correct pixels (only the 7 off-grid hubs are excluded), and there were no overlapping footprints. Then **rendered the actual canvas draw order to a PNG and looked at it** — buildings were drawn but non-road `#555` was nearly identical to region `#3a3a3a`.
+- **Root cause:** insufficient colour contrast between non-road buildings and the region background. Isolated/edge buildings read as background.
+- **Fix:** hoisted the palette into testable `foeopt/viz.py` constants; non-road buildings are now amber (`#d89b3c`) on a darker region (`#262626`).
+- **Test lesson:** a string-inequality check on colours is useless (`#555` != `#3a3a3a` is "true" but they look identical). The regression guard measures **channel-sum distance** and requires ≥150 (old pairing was 81).
+- **Debugging lesson:** for a visual bug, render the real output to an image and inspect it — don't reason about pixels from code alone.
+
 ### Process lesson
 - When a derived count "feels off" or contradicts domain knowledge (FoE: most buildings need roads), validate against the live game-state signal before designing around the metadata-derived value.
