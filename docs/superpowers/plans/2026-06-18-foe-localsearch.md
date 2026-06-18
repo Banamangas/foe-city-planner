@@ -411,21 +411,18 @@ def test_optimize_never_worse_and_valid():
 
 def test_optimize_finds_improving_swap():
     # Two same-size road-needing houses; one is far (needs a long spur), one near.
-    # A 6x1 strip: TH(0,0) road(1,0) houseNear(2,0)  gap road road  houseFar(5,0)
-    # Start: houseFar at (5,0) needs roads (1,0),(2,0)? Actually craft so a swap helps.
+    # A 6x2 grid: TH(0,0) houseNear(2,0) houseFar(5,0); row 1 used for routing.
+    # Start: houseFar at (5,0) reached via long detour through row 1.
     th = _b(1, 0, 0, 1, 1, th=True)
-    near = _rn(2, 2, 0, 1, 1)        # adjacent to road (1,0)
-    far = _rn(3, 5, 0, 1, 1)         # far end
-    # current roads: a long chain to reach the far house
-    layout = Layout(_region(6, 1), [th, near, far], th,
-                    roads={(1, 0): 1, (3, 0): 1, (4, 0): 1})
+    near = _rn(2, 2, 0, 1, 1)        # adjacent to TH, can be reached directly or near
+    far = _rn(3, 5, 0, 1, 1)         # far end, reachable via row 1
+    layout = Layout(_region(6, 2), [th, near, far], th, {})
     # this start may not even be valid/minimal; optimize must still return valid & not worse
-    start_roads = len(route(Layout(layout.region, layout.buildings, layout.townhall, {})))
-    base = Layout(layout.region, layout.buildings, layout.townhall,
-                  route(Layout(layout.region, layout.buildings, layout.townhall, {})))
+    baseline_roads = route(Layout(layout.region, layout.buildings, layout.townhall, {}))
+    base = Layout(layout.region, layout.buildings, layout.townhall, baseline_roads)
     res = optimize(base, budget_seconds=2.0)
     assert is_valid(res.layout)
-    assert len(res.layout.roads) <= start_roads
+    assert len(res.layout.roads) <= len(baseline_roads)
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
