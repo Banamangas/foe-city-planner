@@ -19,6 +19,15 @@ Re-pack the whole city to minimize roads (Phase 2, moves buildings):
 
     uv run python -m foeopt.cli layout city-user-data.json city-user-data-foe-helper.json -o output/layout.html --thorough
 
+Lower the road count by moving buildings (local search; keeps everything else valid):
+
+    uv run python -m foeopt.cli improve city-user-data.json city-user-data-foe-helper.json -o output/improve.html --thorough
+
+This starts from your current layout and only makes moves that keep the city valid and reduce
+roads, so the result is never worse than what you have. Savings depend on free space: a city
+with empty cells can cluster road-needing buildings and save more; a near-full city saves
+little or nothing but stays valid. Produces a before/after map (toggle current vs improved).
+
 Open the generated `.html` in a browser; hover a building to see its name and size,
 and toggle current vs optimized roads.
 
