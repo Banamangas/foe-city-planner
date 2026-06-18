@@ -255,7 +255,7 @@ git commit -m "feat: seeded random move proposer for annealing"
 **Interfaces:**
 - Consumes: `mst_cost`, `random_move`, `foeopt.localsearch.OptimizeResult`, `foeopt.router.route`/`RouteError`, `foeopt.validate.is_valid`, `time`, `math`, `random`.
 - Produces: `anneal(layout: Layout, *, seed: int = 0, budget_seconds: float = 30.0, max_iters: int = 1_000_000) -> OptimizeResult`.
-  - Metropolis acceptance on `mst_cost` (accept if `delta < 0` else with probability `exp(-delta / T)`); geometric cooling `T *= 0.9995` per iteration; `T0` auto-scaled from the mean absolute proxy delta of a few sampled moves (fallback `1.0`).
+  - Metropolis acceptance on `mst_cost` (accept if `delta < 0` else with probability `exp(-delta / T)`); geometric cooling `T *= 0.9995` per iteration; `T0` auto-scaled from the mean of the POSITIVE sampled proxy deltas (zero-delta no-op moves excluded; fallback `1.0`).
   - Tracks the best **route-confirmed** layout: when the proxy reaches a new low, call `route(state)`; if it succeeds, `is_valid`, and `len(roads) < best_roads`, adopt it. `best` is seeded as the input layout (so the result is never worse).
   - Stops at the time budget or `max_iters`. `moves_applied` = number of confirmed best updates.
 
