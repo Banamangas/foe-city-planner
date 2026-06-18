@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import replace
+import time
+from dataclasses import dataclass, replace
 
 from foeopt.model import Building, Footprint, Layout
 
@@ -121,3 +122,80 @@ def spur_served_buildings(layout: Layout) -> list[int]:
         if adjacent and any(_road_degree(road, c) == 1 for c in adjacent):
             out.append(b.entity_id)
     return sorted(out)
+
+
+@dataclass
+class OptimizeResult:
+    layout: Layout
+    moves_applied: int
+
+
+def _candidate_moves(layout: Layout):
+    """Yield ('swap', a, b) or ('move', eid, x, y) in priority order."""
+    road_cells = set(layout.roads)
+    spur_ids = set(spur_served_buildings(layout))
+
+    swaps = same_footprint_swaps(layout)
+    relocs = relocate_candidates(layout, road_cells)
+
+    # 1) swaps touching a spur-served building
+    for a, b in swaps:
+        if a in spur_ids or b in spur_ids:
+            yield ("swap", a, b)
+    # 2) relocations of spur-served buildings
+    for eid, x, y in relocs:
+        if eid in spur_ids:
+            yield ("move", eid, x, y)
+    # 3) all remaining swaps
+    for a, b in swaps:
+        if a not in spur_ids and b not in spur_ids:
+            yield ("swap", a, b)
+    # 4) all remaining relocations
+    for eid, x, y in relocs:
+        if eid not in spur_ids:
+            yield ("move", eid, x, y)
+
+
+def _apply(layout: Layout, move) -> Layout | None:
+    if move[0] == "swap":
+        return swap_buildings(layout, move[1], move[2])
+    return move_building(layout, move[1], move[2], move[3])
+
+
+def optimize(
+    layout: Layout, budget_seconds: float = 30.0, max_iters: int = 1_000_000
+) -> OptimizeResult:
+    from foeopt.router import RouteError, route
+    from foeopt.validate import is_valid
+
+    state = layout
+    best = len(state.roads)
+    moves_applied = 0
+    deadline = time.monotonic() + budget_seconds
+    iters = 0
+
+    while time.monotonic() < deadline and iters < max_iters:
+        iters += 1
+        improved = False
+        for move in _candidate_moves(state):
+            if time.monotonic() >= deadline:
+                break
+            cand = _apply(state, move)
+            if cand is None:
+                continue
+            try:
+                roads = route(cand)
+            except RouteError:
+                continue
+            if len(roads) < best:
+                candidate = Layout(cand.region, cand.buildings, cand.townhall, roads)
+                if is_valid(candidate):
+                    state = candidate
+                    best = len(roads)
+                    moves_applied += 1
+                    improved = True
+                    break
+        if not improved:
+            break
+
+    return OptimizeResult(layout=state, moves_applied=moves_applied)
