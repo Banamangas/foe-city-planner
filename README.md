@@ -28,6 +28,15 @@ roads, so the result is never worse than what you have. Savings depend on free s
 with empty cells can cluster road-needing buildings and save more; a near-full city saves
 little or nothing but stays valid. Produces a before/after map (toggle current vs improved).
 
+For a deeper search that can escape the plateau where hill-climbing stalls, add `--anneal`
+(simulated annealing on a fast spanning-tree proxy, confirmed with the real router):
+
+    uv run python -m foeopt.cli improve city-user-data.json city-user-data-foe-helper.json --anneal --thorough -o output/anneal.html
+
+`--anneal` is deterministic for a given `--seed` (default 0) and is still never worse than your
+current layout. Like every engine here, it only finds savings when the city has free space to
+rearrange into; on a near-full, already-tuned city it may report no improvement.
+
 Open the generated `.html` in a browser; hover a building to see its name and size,
 and toggle current vs optimized roads.
 
