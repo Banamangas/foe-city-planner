@@ -5,6 +5,21 @@ from foeopt.viz import (
     COLOR_REGION,
     render_html,
 )
+from foeopt.viz import render_comparison
+
+
+def test_render_comparison_embeds_both_layouts(city_data, helper_data):
+    from foeopt.build import build_layout
+    from foeopt.packer import repack
+    current = build_layout(city_data, helper_data)
+    optimized = repack(current, thorough=False).layout
+    html = render_comparison(current, optimized)
+    assert html.lstrip().startswith("<!DOCTYPE html>")
+    assert "http://" not in html and "https://" not in html
+    # a view toggle is present
+    assert "current" in html and "optimized" in html
+    # both building sets are embedded (data-name hover metadata present)
+    assert "data-name" in html
 
 
 def _rgb(hexcolor: str) -> tuple[int, int, int]:
