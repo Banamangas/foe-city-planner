@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import math
+import random
 
 from foeopt.model import Building, Layout
+from foeopt.localsearch import free_cells, move_building, swap_buildings
 
 
 def _mst_length(points: list[tuple[float, float]]) -> float:
@@ -36,3 +38,26 @@ def mst_cost(layout: Layout) -> float:
     if layout.townhall is not None:
         points.append(_centroid(layout.townhall))
     return _mst_length(points)
+
+
+def random_move(layout: Layout, rng: random.Random) -> Layout | None:
+    movable = [b for b in layout.buildings if not b.is_townhall]
+    if not movable:
+        return None
+
+    if rng.random() < 0.5:
+        by_size: dict[tuple[int, int], list[Building]] = {}
+        for b in movable:
+            by_size.setdefault((b.footprint.width, b.footprint.length), []).append(b)
+        groups = [g for g in by_size.values() if len(g) >= 2]
+        if groups:
+            group = rng.choice(groups)
+            a, b = rng.sample(group, 2)
+            return swap_buildings(layout, a.entity_id, b.entity_id)
+
+    free = sorted(free_cells(layout))
+    if not free:
+        return None
+    b = rng.choice(movable)
+    x, y = rng.choice(free)
+    return move_building(layout, b.entity_id, x, y)

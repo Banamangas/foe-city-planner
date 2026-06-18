@@ -1,5 +1,7 @@
+import random
+
 from foeopt.model import Building, Footprint, Layout, Region
-from foeopt.anneal import _mst_length, mst_cost
+from foeopt.anneal import _mst_length, mst_cost, random_move
 
 
 def _rn(eid, x, y, w=1, l=1, needs=True, th=False):
@@ -42,3 +44,37 @@ def test_mst_cost_drops_when_buildings_cluster():
     far = Layout(_region(2, 10), [th, _rn(2, 0, 8)], th)
     near = Layout(_region(2, 10), [th, _rn(2, 0, 2)], th)
     assert mst_cost(near) < mst_cost(far)
+
+
+def test_random_move_returns_valid_or_none():
+    th = _rn(1, 0, 0, th=True, needs=False)
+    a = _rn(2, 2, 0)
+    b = _rn(3, 4, 0)
+    layout = Layout(_region(8, 1), [th, a, b], th)
+    rng = random.Random(123)
+    region = layout.region.cells
+    for _ in range(50):
+        cand = random_move(layout, rng)
+        if cand is None:
+            continue
+        occ = set()
+        for bld in cand.buildings:
+            cells = bld.footprint.cells()
+            assert cells <= region            # in region
+            assert not (cells & occ)          # no overlap
+            occ |= cells
+        assert len(cand.buildings) == len(layout.buildings)   # conserved
+
+
+def test_random_move_is_deterministic_for_seed():
+    th = _rn(1, 0, 0, th=True, needs=False)
+    a = _rn(2, 2, 0)
+    layout = Layout(_region(6, 1), [th, a], th)
+    m1 = random_move(layout, random.Random(7))
+    m2 = random_move(layout, random.Random(7))
+    # same seed -> same proposal (both None or both the same anchors)
+    def anchors(layout_or_none):
+        if layout_or_none is None:
+            return None
+        return sorted((b.entity_id, b.footprint.x, b.footprint.y) for b in layout_or_none.buildings)
+    assert anchors(m1) == anchors(m2)
