@@ -10,6 +10,7 @@ from foeopt.report import stats, road_diff
 from foeopt.viz import render_html, render_comparison
 from foeopt.packer import repack
 from foeopt.localsearch import optimize
+from foeopt.anneal import anneal
 
 
 def _load(path: str) -> dict:
@@ -68,9 +69,14 @@ def _cmd_layout(args) -> int:
 def _cmd_improve(args) -> int:
     current = build_layout(_load(args.city), _load(args.helper))
     budget = 120.0 if args.thorough else 30.0
-    res = optimize(current, budget_seconds=budget)
+    if args.anneal:
+        res = anneal(current, seed=args.seed, budget_seconds=budget)
+        engine = "simulated annealing"
+    else:
+        res = optimize(current, budget_seconds=budget)
+        engine = "hill-climbing"
     s = stats(current, res.layout.roads)
-    print("Local-search road optimization:")
+    print(f"Road optimization ({engine}):")
     print(f"  current roads: {s['current_roads']} | optimized roads: {s['optimized_roads']}"
           f" | tiles_saved: {s['tiles_saved']} | moves: {res.moves_applied}")
     Path(args.out).write_text(render_comparison(current, res.layout), encoding="utf-8")
@@ -109,6 +115,10 @@ def main(argv: list[str] | None = None) -> int:
     p_improve.add_argument("-o", "--out", default="improve.html")
     p_improve.add_argument("--thorough", action="store_true",
                            help="use a larger time budget")
+    p_improve.add_argument("--anneal", action="store_true",
+                           help="use simulated annealing instead of hill-climbing")
+    p_improve.add_argument("--seed", type=int, default=0,
+                           help="RNG seed for --anneal (deterministic)")
     p_improve.set_defaults(func=_cmd_improve)
 
     args = parser.parse_args(argv)
