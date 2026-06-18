@@ -1,5 +1,5 @@
 from foeopt.model import Building, Footprint, Layout, Region
-from foeopt.localsearch import move_building, swap_buildings
+from foeopt.localsearch import move_building, swap_buildings, free_cells, same_footprint_swaps, relocate_candidates
 
 
 def _b(eid, x, y, w, l, th=False):
@@ -51,3 +51,32 @@ def test_swap_updates_townhall_reference():
     swapped = swap_buildings(layout, 1, 2)
     assert swapped.townhall is not None
     assert (swapped.townhall.footprint.x, swapped.townhall.footprint.y) == (3, 0)
+
+
+def test_free_cells():
+    a = _b(1, 0, 0, 1, 1)
+    layout = Layout(_region(3, 1), [a], None)
+    assert free_cells(layout) == {(1, 0), (2, 0)}
+
+
+def test_same_footprint_swaps_pairs_equal_sizes():
+    a = _b(1, 0, 0, 2, 2)
+    b = _b(2, 2, 0, 2, 2)
+    c = _b(3, 4, 0, 1, 1)        # different size -> not paired
+    layout = Layout(_region(6, 2), [a, b, c], None)
+    assert same_footprint_swaps(layout) == [(1, 2)]
+
+
+def test_same_footprint_swaps_excludes_townhall():
+    th = _b(1, 0, 0, 2, 2, th=True)
+    b = _b(2, 2, 0, 2, 2)
+    layout = Layout(_region(6, 2), [th, b], th)
+    assert same_footprint_swaps(layout) == []   # townhall not swappable
+
+
+def test_relocate_candidates_finds_free_spot_by_road():
+    # building at (0,0); free cells (1,0),(2,0); road_cells {(2,1)} touches (2,0)
+    a = _b(1, 0, 0, 1, 1)
+    layout = Layout(_region(3, 2), [a], None)
+    cands = relocate_candidates(layout, road_cells={(2, 1)})
+    assert (1, 2, 0) in cands     # (2,0) borders the road (2,1)
