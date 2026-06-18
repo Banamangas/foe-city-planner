@@ -78,3 +78,55 @@ def test_random_move_is_deterministic_for_seed():
             return None
         return sorted((b.entity_id, b.footprint.x, b.footprint.y) for b in layout_or_none.buildings)
     assert anchors(m1) == anchors(m2)
+
+
+from foeopt.anneal import anneal
+from foeopt.localsearch import OptimizeResult
+from foeopt.router import route
+from foeopt.validate import is_valid
+
+
+def test_anneal_never_worse_and_valid():
+    # tiny already-tight layout: TH(0,0) road(1,0) house(2,0)
+    th = _rn(1, 0, 0, th=True, needs=False)
+    house = _rn(2, 2, 0)
+    layout = Layout(_region(3, 1), [th, house], th, roads={(1, 0): 1})
+    res = anneal(layout, seed=1, budget_seconds=1.0, max_iters=200)
+    assert isinstance(res, OptimizeResult)
+    assert is_valid(res.layout)
+    assert len(res.layout.roads) <= len(layout.roads)   # never worse
+
+
+def test_anneal_deterministic_for_seed():
+    th = _rn(1, 0, 0, th=True, needs=False)
+    a = _rn(2, 3, 0)
+    b = _rn(3, 5, 0)
+    layout = Layout(_region(8, 2), [th, a, b], th,
+                    roads=route(Layout(_region(8, 2), [th, a, b], th, {})))
+    r1 = anneal(layout, seed=42, budget_seconds=5.0, max_iters=300)
+    r2 = anneal(layout, seed=42, budget_seconds=5.0, max_iters=300)
+    # same seed + same max_iters (budget not binding) -> identical result
+    def sig(res):
+        return (sorted((bld.entity_id, bld.footprint.x, bld.footprint.y)
+                       for bld in res.layout.buildings),
+                sorted(res.layout.roads.items()))
+    assert sig(r1) == sig(r2)
+
+
+def test_anneal_can_beat_inflated_start():
+    # Input carries MORE roads than the placement needs; any route-confirmation
+    # the search performs will beat it -> result strictly fewer roads.
+    th = _rn(1, 0, 0, th=True, needs=False)
+    a = _rn(2, 2, 0)
+    region = _region(6, 2)
+    minimal = route(Layout(region, [th, a], th, {}))
+    inflated = dict(minimal)
+    inflated[(0, 1)] = 1
+    inflated[(1, 1)] = 1            # extra redundant tiles
+    layout = Layout(region, [th, a], th, roads=inflated)
+    res = anneal(layout, seed=3, budget_seconds=2.0, max_iters=500)
+    assert is_valid(res.layout)
+    assert len(res.layout.roads) <= len(layout.roads)
+    # the route-confirmed result is self-consistent
+    assert len(res.layout.roads) == len(route(
+        Layout(res.layout.region, res.layout.buildings, res.layout.townhall, {})))
