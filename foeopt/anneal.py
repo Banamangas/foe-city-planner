@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import random
+import time
 
 from foeopt.model import Building, Layout
 from foeopt.localsearch import free_cells, move_building, swap_buildings
@@ -61,3 +62,69 @@ def random_move(layout: Layout, rng: random.Random) -> Layout | None:
     b = rng.choice(movable)
     x, y = rng.choice(free)
     return move_building(layout, b.entity_id, x, y)
+
+
+from foeopt.localsearch import OptimizeResult
+
+_T_FLOOR = 1e-9
+_COOLING = 0.9995
+
+
+def _initial_temperature(layout: Layout, rng: random.Random, samples: int = 20) -> float:
+    base = mst_cost(layout)
+    deltas: list[float] = []
+    for _ in range(samples):
+        cand = random_move(layout, rng)
+        if cand is not None:
+            deltas.append(abs(mst_cost(cand) - base))
+    positive = [d for d in deltas if d > 0]
+    return (sum(positive) / len(positive)) if positive else 1.0
+
+
+def anneal(
+    layout: Layout,
+    *,
+    seed: int = 0,
+    budget_seconds: float = 30.0,
+    max_iters: int = 1_000_000,
+) -> OptimizeResult:
+    from foeopt.router import RouteError, route
+    from foeopt.validate import is_valid
+
+    rng = random.Random(seed)
+    temperature = _initial_temperature(layout, rng)
+
+    state = layout
+    cost = mst_cost(state)
+    best = layout
+    best_roads = len(layout.roads)
+    best_proxy = cost
+    moves_applied = 0
+
+    deadline = time.monotonic() + budget_seconds
+    for _ in range(max_iters):
+        if time.monotonic() >= deadline:
+            break
+        cand = random_move(state, rng)
+        if cand is None:
+            temperature = max(temperature * _COOLING, _T_FLOOR)
+            continue
+        new_cost = mst_cost(cand)
+        delta = new_cost - cost
+        if delta < 0 or rng.random() < math.exp(-delta / max(temperature, _T_FLOOR)):
+            state, cost = cand, new_cost
+            if new_cost < best_proxy:
+                best_proxy = new_cost
+                try:
+                    roads = route(state)
+                except RouteError:
+                    roads = None
+                if roads is not None:
+                    confirmed = Layout(state.region, state.buildings,
+                                       state.townhall, roads)
+                    if is_valid(confirmed) and len(roads) < best_roads:
+                        best, best_roads = confirmed, len(roads)
+                        moves_applied += 1
+        temperature = max(temperature * _COOLING, _T_FLOOR)
+
+    return OptimizeResult(layout=best, moves_applied=moves_applied)
