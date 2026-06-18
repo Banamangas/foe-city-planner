@@ -1,5 +1,6 @@
 from foeopt.model import Building, Footprint, Layout, Region
-from foeopt.packer import PackConfig, PackResult, classify, bbox
+from foeopt.packer import PackConfig, PackResult, classify, bbox, build_candidate
+from foeopt.validate import is_valid
 
 
 def _b(eid, x, y, w, l, needs=False, th=False):
@@ -29,3 +30,37 @@ def test_packconfig_and_packresult_construct():
     assert cfg.spacing == 4
     res = PackResult(layout=Layout(Region(frozenset()), [], None), unplaced=[])
     assert res.unplaced == []
+
+
+def _full_region(w, h):
+    return Region(frozenset((x, y) for x in range(w) for y in range(h)))
+
+
+def test_build_candidate_places_all_in_sparse_city():
+    # Sparse 10x10 region, a townhall + 3 small road-needing + 3 fillers.
+    th = _b(1, 0, 0, 2, 2, th=True)
+    cons = [_b(10 + i, 0, 0, 2, 2, needs=True) for i in range(3)]
+    fill = [_b(20 + i, 0, 0, 1, 1, needs=False) for i in range(3)]
+    layout = Layout(_full_region(10, 10), [th, *cons, *fill], th)
+    res = build_candidate(layout, PackConfig("h", spacing=4, trunk_x=0))
+    assert res.unplaced == []
+    # every building inside region, no overlap
+    occ = set()
+    for b in res.layout.buildings:
+        cells = b.footprint.cells()
+        assert cells <= layout.region.cells
+        assert not (cells & occ)
+        occ |= cells
+    # roads connect every consumer to the townhall
+    assert is_valid(res.layout)
+    # buildings are conserved (same count)
+    assert len(res.layout.buildings) == len(layout.buildings)
+
+
+def test_build_candidate_reports_unplaced_when_too_tight():
+    # 2x2 region but a 2x2 townhall + a consumer that cannot fit.
+    th = _b(1, 0, 0, 2, 2, th=True)
+    cons = _b(2, 0, 0, 2, 2, needs=True)
+    layout = Layout(_full_region(2, 2), [th, cons], th)
+    res = build_candidate(layout, PackConfig("h", spacing=2, trunk_x=0))
+    assert any(b.entity_id == 2 for b in res.unplaced)
