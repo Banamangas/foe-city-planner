@@ -7,7 +7,8 @@ from pathlib import Path
 from foeopt.build import build_layout
 from foeopt.router import route, RouteError
 from foeopt.report import stats, road_diff
-from foeopt.viz import render_html
+from foeopt.viz import render_html, render_comparison
+from foeopt.packer import repack
 
 
 def _load(path: str) -> dict:
@@ -45,6 +46,24 @@ def _cmd_roads(args) -> int:
     return 0 if s["unsatisfied"] == 0 else 1
 
 
+def _cmd_layout(args) -> int:
+    current = build_layout(_load(args.city), _load(args.helper))
+    res = repack(current, thorough=args.thorough)
+    s = stats(current, res.layout.roads)
+    print("Full re-pack (Phase 2):")
+    print(f"  buildings: {len(current.buildings)} | placed: "
+          f"{len(res.layout.buildings)} | unplaced: {len(res.unplaced)}")
+    print(f"  current roads: {s['current_roads']} | optimized roads: {s['optimized_roads']}"
+          f" | tiles_saved: {s['tiles_saved']}")
+    Path(args.out).write_text(render_comparison(current, res.layout), encoding="utf-8")
+    print(f"Wrote before/after map to {args.out}")
+    if res.unplaced:
+        print(f"  WARNING: {len(res.unplaced)} buildings could not be placed "
+              f"(city too dense for a full re-pack).")
+        return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="foeopt")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -61,6 +80,14 @@ def main(argv: list[str] | None = None) -> int:
     p_roads.add_argument("-o", "--out", default="roads.html")
     p_roads.add_argument("--diff", default=None)
     p_roads.set_defaults(func=_cmd_roads)
+
+    p_layout = sub.add_parser("layout", help="re-pack the whole city to minimize roads")
+    p_layout.add_argument("city")
+    p_layout.add_argument("helper")
+    p_layout.add_argument("-o", "--out", default="layout.html")
+    p_layout.add_argument("--thorough", action="store_true",
+                          help="sweep more configurations (slower, better)")
+    p_layout.set_defaults(func=_cmd_layout)
 
     args = parser.parse_args(argv)
     return args.func(args)
