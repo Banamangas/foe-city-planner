@@ -93,12 +93,13 @@ def relocate_candidates(
     layout: Layout, road_cells: set[tuple[int, int]]
 ) -> list[tuple[int, int, int]]:
     free = free_cells(layout)
+    ordered = sorted(free, key=lambda p: (p[1], p[0]))  # sort once before the per-building loop
     out: list[tuple[int, int, int]] = []
     for b in layout.buildings:
         if b.is_townhall:
             continue
         w, l = b.footprint.width, b.footprint.length
-        for (x, y) in sorted(free, key=lambda p: (p[1], p[0])):
+        for (x, y) in ordered:
             fp = Footprint(x, y, w, l)
             if fp.cells() <= free and (fp.border_cells() & road_cells):
                 out.append((b.entity_id, x, y))
@@ -168,14 +169,14 @@ def optimize(
     from foeopt.router import RouteError, route
     from foeopt.validate import is_valid
 
-    state = layout
-    best = len(state.roads)
+    state = layout  # input is assumed valid (as produced by build_layout); never-worse guarantee is relative to it
+    best = len(state.roads)  # best road count so far
     moves_applied = 0
     deadline = time.monotonic() + budget_seconds
     iters = 0
 
     while time.monotonic() < deadline and iters < max_iters:
-        iters += 1
+        iters += 1  # iters counts improving passes (not candidate evaluations); deadline is the real bound
         improved = False
         for move in _candidate_moves(state):
             if time.monotonic() >= deadline:
