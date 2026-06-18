@@ -1,5 +1,5 @@
 from foeopt.model import Building, Footprint, Layout, Region
-from foeopt.localsearch import move_building, swap_buildings, free_cells, same_footprint_swaps, relocate_candidates
+from foeopt.localsearch import move_building, swap_buildings, free_cells, same_footprint_swaps, relocate_candidates, spur_served_buildings
 
 
 def _b(eid, x, y, w, l, th=False):
@@ -10,6 +10,12 @@ def _b(eid, x, y, w, l, th=False):
 
 def _region(w, h):
     return Region(frozenset((x, y) for x in range(w) for y in range(h)))
+
+
+def _rn(eid, x, y, w, l):
+    return Building(eid, f"c{eid}", "generic", Footprint(x, y, w, l),
+                    needs_road=True, road_level=1, is_townhall=False,
+                    set_id=None, chain_id=None, name=f"b{eid}")
 
 
 def test_move_building_to_free_spot():
@@ -80,3 +86,21 @@ def test_relocate_candidates_finds_free_spot_by_road():
     layout = Layout(_region(3, 2), [a], None)
     cands = relocate_candidates(layout, road_cells={(2, 1)})
     assert (1, 2, 0) in cands     # (2,0) borders the road (2,1)
+
+
+def test_spur_served_building_detected():
+    # road (1,0) is a dead-end (only neighbour (0,0) is road); building at (1,1)
+    # touches (1,0). Townhall at (0,0) roots the network.
+    th = _b(1, 0, 0, 1, 1, th=True)
+    house = _rn(2, 1, 1, 1, 1)
+    layout = Layout(_region(3, 3), [th, house], th, roads={(0, 0): 1, (1, 0): 1})
+    assert spur_served_buildings(layout) == [2]
+
+
+def test_no_spur_when_road_not_dead_end():
+    # both road tiles have degree >= ... here (1,0) neighbours (0,0) and (2,0): degree 2
+    th = _b(1, 0, 0, 1, 1, th=True)
+    house = _rn(2, 1, 1, 1, 1)
+    layout = Layout(_region(3, 3), [th, house], th,
+                    roads={(0, 0): 1, (1, 0): 1, (2, 0): 1})
+    assert spur_served_buildings(layout) == []
