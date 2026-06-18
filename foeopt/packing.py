@@ -40,3 +40,23 @@ def first_fit(grid: Grid, w: int, l: int) -> tuple[int, int] | None:
             if grid.fits(x, y, w, l):
                 return (x, y)
     return None
+
+
+def _border_cells(x: int, y: int, w: int, l: int) -> set[tuple[int, int]]:
+    own = {(x + dx, y + dy) for dx in range(w) for dy in range(l)}
+    border: set[tuple[int, int]] = set()
+    for (cx, cy) in own:
+        for n in ((cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)):
+            if n not in own:
+                border.add(n)
+    return border
+
+
+def first_fit_adjacent(
+    grid: Grid, w: int, l: int, targets: set[tuple[int, int]]
+) -> tuple[int, int] | None:
+    for y in range(grid.height):
+        for x in range(grid.width):
+            if grid.fits(x, y, w, l) and (_border_cells(x, y, w, l) & targets):
+                return (x, y)
+    return None
