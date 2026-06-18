@@ -1,5 +1,5 @@
 from foeopt.model import Building, Footprint, Layout, Region
-from foeopt.packer import PackConfig, PackResult, classify, bbox, build_candidate
+from foeopt.packer import PackConfig, PackResult, classify, bbox, build_candidate, repack
 from foeopt.validate import is_valid
 
 
@@ -77,3 +77,29 @@ def test_unplaced_has_no_duplicate_entity_ids():
     res = build_candidate(layout, PackConfig("h", spacing=2, trunk_x=0))
     ids = [b.entity_id for b in res.unplaced]
     assert len(ids) == len(set(ids)), f"Duplicate entity_ids in unplaced: {ids}"
+
+
+def test_repack_sparse_city_is_valid_and_conserves_buildings():
+    th = _b(1, 0, 0, 2, 2, th=True)
+    cons = [_b(10 + i, 0, 0, 2, 2, needs=True) for i in range(4)]
+    fill = [_b(20 + i, 0, 0, 1, 1, needs=False) for i in range(5)]
+    layout = Layout(_full_region(12, 12), [th, *cons, *fill], th)
+    res = repack(layout, thorough=True)
+    assert res.unplaced == []
+    assert is_valid(res.layout)
+    assert len(res.layout.buildings) == len(layout.buildings)
+
+
+def test_repack_prefers_fewer_unplaced():
+    # Tight region: some configs may place fewer; repack keeps the best.
+    th = _b(1, 0, 0, 2, 2, th=True)
+    cons = [_b(10 + i, 0, 0, 2, 2, needs=True) for i in range(3)]
+    layout = Layout(_full_region(6, 6), [th, *cons], th)
+    res = repack(layout, thorough=True)
+    # whatever the outcome, the returned layout never overlaps / leaves region
+    occ = set()
+    for b in res.layout.buildings:
+        cells = b.footprint.cells()
+        assert cells <= layout.region.cells
+        assert not (cells & occ)
+        occ |= cells

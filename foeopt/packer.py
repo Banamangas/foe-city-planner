@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 from foeopt.model import Building, Footprint, Layout, Region
 from foeopt.packing import Grid, first_fit, first_fit_adjacent
 from foeopt.router import RouteError, route
+from foeopt.validate import is_valid
 
 
 @dataclass
@@ -113,3 +114,33 @@ def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
         placed_consumers = [b for b in consumers if b.entity_id in placed]
         return PackResult(layout=candidate, unplaced=unplaced + placed_consumers)
     return PackResult(layout=candidate, unplaced=unplaced)
+
+
+def _configs(layout: Layout, thorough: bool) -> list[PackConfig]:
+    if not thorough:
+        return [PackConfig("h", spacing=4, trunk_x=0)]
+    w, _ = bbox(layout.region)
+    trunks = sorted({0, w // 2, max(0, w - 1)})
+    return [
+        PackConfig("h", spacing=s, trunk_x=t)
+        for s in (3, 4, 5, 6)
+        for t in trunks
+    ]
+
+
+def _score(res: PackResult) -> tuple[int, int]:
+    return (len(res.unplaced), len(res.layout.roads))
+
+
+def repack(layout: Layout, thorough: bool = False) -> PackResult:
+    best: PackResult | None = None
+    best_key: tuple[int, int, int] | None = None
+    for cfg in _configs(layout, thorough):
+        res = build_candidate(layout, cfg)
+        fully_valid = not res.unplaced and is_valid(res.layout)
+        # sort key: valid candidates first (0), then fewer unplaced, then roads
+        key = (0 if fully_valid else 1, len(res.unplaced), len(res.layout.roads))
+        if best_key is None or key < best_key:
+            best, best_key = res, key
+    assert best is not None  # _configs always yields at least one config
+    return best
