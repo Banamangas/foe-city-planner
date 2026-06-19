@@ -29,7 +29,7 @@ with empty cells can cluster road-needing buildings and save more; a near-full c
 little or nothing but stays valid. Produces a before/after map (toggle current vs improved).
 
 For a deeper search that can escape the plateau where hill-climbing stalls, add `--anneal`
-(simulated annealing on a fast spanning-tree proxy, confirmed with the real router):
+(simulated annealing on the real road count — accepts some worse moves to find a better one):
 
     uv run python -m foeopt.cli improve city-user-data.json city-user-data-foe-helper.json --anneal --thorough -o output/anneal.html
 
