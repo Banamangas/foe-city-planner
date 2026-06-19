@@ -16,3 +16,11 @@ def test_optimize_real_city_valid_and_not_worse(city_data, helper_data):
         assert not (cells & occ)
         occ |= cells
     assert len(res.layout.buildings) == len(current.buildings)
+
+
+def test_resolve_budget_precedence():
+    from foeopt.cli import _resolve_budget
+    assert _resolve_budget(None, False) == 30.0      # default
+    assert _resolve_budget(None, True) == 120.0      # --thorough
+    assert _resolve_budget(600.0, False) == 600.0    # explicit --budget overrides default
+    assert _resolve_budget(600.0, True) == 600.0     # explicit --budget overrides --thorough

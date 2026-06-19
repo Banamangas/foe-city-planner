@@ -37,6 +37,11 @@ For a deeper search that can escape the plateau where hill-climbing stalls, add 
 current layout. Like every engine here, it only finds savings when the city has free space to
 rearrange into; on a near-full, already-tuned city it may report no improvement.
 
+The time budget defaults to 30s (`--thorough` raises it to 120s). For a longer search, set it
+explicitly with `--budget SECONDS` (overrides both), e.g. a 10-minute anneal:
+
+    uv run python -m foeopt.cli improve darkzig.json --anneal --budget 600 -o output/anneal.html
+
 Open the generated `.html` in a browser; hover a building to see its name and size,
 and toggle current vs optimized roads.
 
