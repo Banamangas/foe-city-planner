@@ -97,3 +97,14 @@ def test_articulation_cycle_no_cut():
 def test_articulation_empty():
     assert _articulation_points({}, set()) == set()
     assert _articulation_points({(0, 0): 1}, {(0, 0)}) == set()
+
+
+def test_prune_real_city_output_is_valid(city_data, helper_data):
+    from foeopt.build import build_layout
+    from foeopt.validate import unsatisfied
+    from foeopt.model import Layout
+    layout = build_layout(city_data, helper_data)
+    roads = route(layout)
+    probe = Layout(layout.region, layout.buildings, layout.townhall, roads)
+    assert unsatisfied(probe) == []        # every consumer connected & covered
+    assert len(roads) == 142               # golden count preserved

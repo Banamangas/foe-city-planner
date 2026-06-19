@@ -164,25 +164,22 @@ def _prune(
     layout: Layout,
     roads: dict[tuple[int, int], int],
 ) -> dict[tuple[int, int], int]:
-    """Remove road cells whose removal keeps every consumer satisfied.
+    """Remove redundant road cells, keeping every consumer connected & covered.
 
-    Building positions are fixed during pruning, so each consumer's border
-    cells and the Townhall's border are computed once and reused across all
-    trial removals (recomputing them per trial dominated the cost). This is a
-    pure speedup: the satisfaction predicate and the deterministic removal
-    order (highest-coordinate cell first) are identical to evaluating
-    `validate.unsatisfied` on each trial.
+    Building positions are fixed during pruning, so consumer borders and the
+    Townhall border are computed once. Each pass finds all articulation points
+    in one O(roads) Tarjan pass; only a non-articulation cell can be removed
+    without disconnecting another road, so we never run a per-cell connectivity
+    BFS. Same deterministic removal order and result as the prior implementation.
     """
     th_border = (
         layout.townhall.footprint.border_cells() if layout.townhall is not None else set()
     )
-    # (border cells, required level) per road-needing consumer, computed once.
     consumers = [
         (b.footprint.border_cells(), b.road_level) for b in layout.road_needing()
     ]
 
-    def satisfied(rd: dict[tuple[int, int], int]) -> bool:
-        # roads orthogonally connected to the Townhall footprint
+    def connected(rd: dict[tuple[int, int], int]) -> set[tuple[int, int]]:
         seen = {c for c in rd if c in th_border}
         queue: deque[tuple[int, int]] = deque(seen)
         while queue:
@@ -192,20 +189,28 @@ def _prune(
                 if n in rd and n not in seen:
                     seen.add(n)
                     queue.append(n)
-        for border, level in consumers:
-            if not any(c in seen and rd[c] >= level for c in border):
-                return False
-        return True
+        return seen
 
+    roads = dict(roads)
     changed = True
     while changed:
         changed = False
-        # try removing the highest-coordinate cells first (stable, deterministic)
+        art = _articulation_points(roads, th_border)
+        conn = connected(roads)
         for cell in sorted(roads, reverse=True):
-            trial = dict(roads)
-            del trial[cell]
-            if satisfied(trial):
-                roads = trial
+            if cell in art:
+                continue  # removing it would disconnect another road from the Townhall
+            # Non-articulation: every other road stays connected. The cell itself
+            # disappears, so each consumer bordering it must keep another covered road.
+            ok = True
+            for border, level in consumers:
+                if cell in border and not any(
+                    c != cell and c in conn and roads.get(c, 0) >= level for c in border
+                ):
+                    ok = False
+                    break
+            if ok:
+                del roads[cell]
                 changed = True
                 break
     return roads
