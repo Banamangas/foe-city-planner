@@ -60,9 +60,16 @@ def _cmd_layout(args) -> int:
     return 0
 
 
+def _resolve_budget(budget: float | None, thorough: bool) -> float:
+    """Time budget in seconds: explicit --budget wins, else 120 (--thorough) or 30."""
+    if budget is not None:
+        return budget
+    return 120.0 if thorough else 30.0
+
+
 def _cmd_improve(args) -> int:
     current = load_layout(args.city, args.helper)
-    budget = 120.0 if args.thorough else 30.0
+    budget = _resolve_budget(args.budget, args.thorough)
     if args.anneal:
         res = anneal(current, seed=args.seed, budget_seconds=budget)
         engine = "simulated annealing"
@@ -108,7 +115,9 @@ def main(argv: list[str] | None = None) -> int:
     p_improve.add_argument("helper", nargs="?", default=None)
     p_improve.add_argument("-o", "--out", default="improve.html")
     p_improve.add_argument("--thorough", action="store_true",
-                           help="use a larger time budget")
+                           help="use a larger time budget (120s)")
+    p_improve.add_argument("--budget", type=float, default=None,
+                           help="time budget in seconds (overrides default/--thorough)")
     p_improve.add_argument("--anneal", action="store_true",
                            help="use simulated annealing instead of hill-climbing")
     p_improve.add_argument("--seed", type=int, default=0,
