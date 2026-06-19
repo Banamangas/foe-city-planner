@@ -109,6 +109,7 @@ def anneal(
 
     best = layout
     best_roads = len(layout.roads)
+    moves_applied = 0
 
     # Route the input placement to seed the SA's current cost (also captures the
     # roads-only "Phase 1" win when the input network is not minimal).
@@ -118,6 +119,7 @@ def anneal(
         cur = len(roads0)
         if is_valid(state) and cur < best_roads:
             best, best_roads = state, cur
+            moves_applied = 1
     except RouteError:
         state, cur = layout, len(layout.roads)
 
@@ -135,8 +137,6 @@ def anneal(
         if d > 0:
             deltas.append(d)
     temperature = (sum(deltas) / len(deltas)) if deltas else 1.0
-
-    moves_applied = 0
     deadline = time.monotonic() + budget_seconds
     for _ in range(max_iters):
         if time.monotonic() >= deadline:

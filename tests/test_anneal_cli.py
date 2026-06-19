@@ -1,5 +1,8 @@
-from foeopt.build import build_layout
+import pathlib
+
 from foeopt.anneal import anneal
+from foeopt.build import build_layout
+from foeopt.loader import load_layout
 from foeopt.validate import is_valid
 
 
@@ -18,10 +21,6 @@ def test_anneal_real_city_valid_and_not_worse(city_data, helper_data):
 
 
 def test_anneal_darkzig_valid_and_not_worse():
-    from foeopt.loader import load_layout
-    from foeopt.anneal import anneal
-    from foeopt.validate import is_valid
-    import pathlib
     repo = pathlib.Path(__file__).resolve().parent.parent
     current = load_layout(str(repo / "darkzig.json"))
     res = anneal(current, seed=0, budget_seconds=3.0, max_iters=10_000)
