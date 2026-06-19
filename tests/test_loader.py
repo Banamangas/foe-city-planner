@@ -101,6 +101,32 @@ def test_build_combined_old_schema_in_combined_file():
     assert by_id[2].needs_road
 
 
+def test_build_combined_old_schema_connected_not_adjacent_to_road():
+    # old-style entity with connected=1 but placed away from roads -> needs_road False
+    # Tests that road-need is truly AND-ed: connected=true AND road-adjacent.
+    data = {
+        "UnlockedAreas": [_area(0, 0, 10, 1)],
+        "CityEntities": {
+            "H": {"id": "H", "name": "House", "type": "residential",
+                  "width": 1, "length": 1,
+                  "requirements": {"street_connection_level": 1}},
+            "S": {"id": "S", "name": "Street", "type": "street",
+                  "width": 1, "length": 1,
+                  "requirements": {"street_connection_level": 1}},
+        },
+        "CityMapData": {
+            "1": {"id": 1, "cityentity_id": "H", "type": "residential",
+                  "x": 0, "y": 0, "connected": 1},
+            "2": {"id": 2, "cityentity_id": "S", "type": "street", "x": 5, "y": 0},
+        },
+    }
+    layout = _build_combined(data)
+    assert layout.roads == {(5, 0): 1}
+    by_id = {b.entity_id: b for b in layout.buildings}
+    # house at (0,0) is connected BUT not adjacent to road at (5,0) -> needs_road False
+    assert not by_id[1].needs_road
+
+
 def test_load_layout_split_old_matches_build_layout():
     layout = load_layout(str(REPO / "city-user-data.json"),
                          str(REPO / "city-user-data-foe-helper.json"))
