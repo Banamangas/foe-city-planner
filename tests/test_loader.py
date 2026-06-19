@@ -161,3 +161,12 @@ def test_load_layout_unrecognized(tmp_path):
     p.write_text("{\"nope\": 1}")
     with pytest.raises(ValueError):
         load_layout(str(p))
+
+
+def test_route_output_unchanged_after_prune_speedup():
+    """Regression guard: the cached-border prune must yield the same minimal
+    road counts as before (darkzig 236, sample 142)."""
+    from foeopt.router import route
+    assert len(route(load_layout(str(REPO / "darkzig.json")))) == 236
+    assert len(route(load_layout(str(REPO / "city-user-data.json"),
+                                 str(REPO / "city-user-data-foe-helper.json")))) == 142
