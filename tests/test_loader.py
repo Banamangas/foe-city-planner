@@ -1,5 +1,10 @@
 import json
-from foeopt.loader import read_json, _build_combined
+import pytest
+from foeopt.loader import read_json, _build_combined, load_layout
+from foeopt.build import build_layout
+from foeopt.validate import is_valid
+
+REPO = __import__("pathlib").Path(__file__).resolve().parent.parent
 
 
 def test_read_json_plain(tmp_path):
@@ -94,3 +99,39 @@ def test_build_combined_old_schema_in_combined_file():
     by_id = {b.entity_id: b for b in layout.buildings}
     # house at (2,0) is connected AND borders the road (1,0) -> needs_road True
     assert by_id[2].needs_road
+
+
+def test_load_layout_split_old_matches_build_layout():
+    layout = load_layout(str(REPO / "city-user-data.json"),
+                         str(REPO / "city-user-data-foe-helper.json"))
+    assert len(layout.buildings) == 314
+    assert len(layout.roads) == 142
+    assert len(layout.road_needing()) == 82
+
+
+def test_load_layout_split_old_requires_helper():
+    with pytest.raises(ValueError):
+        load_layout(str(REPO / "city-user-data.json"))     # helper missing
+
+
+def test_load_layout_combined_old_city_txt():
+    layout = load_layout(str(REPO / "city.txt"))
+    assert len(layout.buildings) == 88
+    assert len(layout.roads) == 92
+    assert is_valid(layout)
+
+
+def test_load_layout_combined_new_darkzig():
+    layout = load_layout(str(REPO / "darkzig.json"))
+    assert len(layout.buildings) == 224
+    assert len(layout.roads) == 250
+    assert len(layout.road_needing()) == 63
+    assert layout.townhall is not None
+    assert is_valid(layout)
+
+
+def test_load_layout_unrecognized(tmp_path):
+    p = tmp_path / "bad.json"
+    p.write_text("{\"nope\": 1}")
+    with pytest.raises(ValueError):
+        load_layout(str(p))
