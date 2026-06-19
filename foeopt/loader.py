@@ -33,7 +33,7 @@ def _entity_size(e: dict, catalog: Catalog) -> tuple[int, int] | None:
 
 def _street_level(e: dict, catalog: Catalog) -> int:
     if "needsStreet" in e:
-        return e["needsStreet"] or 1
+        return e["needsStreet"] or 1  # FOE streets always provide level ≥ 1; fallback for 0/absent
     return catalog.provided_level(_cid(e))
 
 
