@@ -104,8 +104,38 @@ def _prune(
     layout: Layout,
     roads: dict[tuple[int, int], int],
 ) -> dict[tuple[int, int], int]:
-    """Remove road cells whose removal keeps every consumer satisfied."""
-    from foeopt.validate import unsatisfied
+    """Remove road cells whose removal keeps every consumer satisfied.
+
+    Building positions are fixed during pruning, so each consumer's border
+    cells and the Townhall's border are computed once and reused across all
+    trial removals (recomputing them per trial dominated the cost). This is a
+    pure speedup: the satisfaction predicate and the deterministic removal
+    order (highest-coordinate cell first) are identical to evaluating
+    `validate.unsatisfied` on each trial.
+    """
+    th_border = (
+        layout.townhall.footprint.border_cells() if layout.townhall is not None else set()
+    )
+    # (border cells, required level) per road-needing consumer, computed once.
+    consumers = [
+        (b.footprint.border_cells(), b.road_level) for b in layout.road_needing()
+    ]
+
+    def satisfied(rd: dict[tuple[int, int], int]) -> bool:
+        # roads orthogonally connected to the Townhall footprint
+        seen = {c for c in rd if c in th_border}
+        queue: deque[tuple[int, int]] = deque(seen)
+        while queue:
+            cx, cy = queue.popleft()
+            for dx, dy in _ORTHO:
+                n = (cx + dx, cy + dy)
+                if n in rd and n not in seen:
+                    seen.add(n)
+                    queue.append(n)
+        for border, level in consumers:
+            if not any(c in seen and rd[c] >= level for c in border):
+                return False
+        return True
 
     changed = True
     while changed:
@@ -114,8 +144,7 @@ def _prune(
         for cell in sorted(roads, reverse=True):
             trial = dict(roads)
             del trial[cell]
-            probe = Layout(layout.region, layout.buildings, layout.townhall, trial)
-            if not unsatisfied(probe):
+            if satisfied(trial):
                 roads = trial
                 changed = True
                 break
