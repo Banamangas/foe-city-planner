@@ -55,6 +55,66 @@ def _bfs_path(
     return None
 
 
+def _articulation_points(
+    roads: dict[tuple[int, int], int], th_border: set[tuple[int, int]]
+) -> set[tuple[int, int]]:
+    """Road cells whose removal disconnects another road cell from the Townhall.
+
+    Iterative Tarjan over the road graph plus a virtual root connected to the
+    road cells bordering the Townhall. The virtual root is never returned.
+    """
+    if len(roads) <= 1:
+        return set()
+
+    root = ("__townhall_root__",)  # sentinel distinct from any (x, y) cell
+    adj: dict[object, list[object]] = {}
+    for c in roads:
+        cx, cy = c
+        adj[c] = [(cx + dx, cy + dy) for dx, dy in _ORTHO
+                  if (cx + dx, cy + dy) in roads]
+    roots = [c for c in roads if c in th_border]
+    adj[root] = list(roots)
+    for c in roots:
+        adj[c] = adj[c] + [root]
+
+    disc: dict[object, int] = {}
+    low: dict[object, int] = {}
+    art: set[tuple[int, int]] = set()
+    timer = 0
+    root_children = 0
+
+    stack: list[tuple[object, object, object]] = [(root, None, iter(adj[root]))]
+    disc[root] = low[root] = timer
+    timer += 1
+    while stack:
+        node, parent, it = stack[-1]
+        advanced = False
+        for nb in it:
+            if nb == parent:
+                continue
+            if nb in disc:
+                low[node] = min(low[node], disc[nb])
+            else:
+                if node == root:
+                    root_children += 1
+                disc[nb] = low[nb] = timer
+                timer += 1
+                stack.append((nb, node, iter(adj[nb])))
+                advanced = True
+                break
+        if not advanced:
+            stack.pop()
+            if stack:
+                p = stack[-1][0]
+                low[p] = min(low[p], low[node])
+                if p != root and stack[-1][1] is not None and low[node] >= disc[p]:
+                    art.add(p)
+    if root_children > 1:
+        art.add(root)
+    art.discard(root)
+    return art
+
+
 def route(layout: Layout) -> dict[tuple[int, int], int]:
     if layout.townhall is None:
         raise RouteError("layout has no townhall")
