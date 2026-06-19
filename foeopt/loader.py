@@ -90,3 +90,16 @@ def _build_combined(data: dict) -> Layout:
             townhall = building
 
     return Layout(region=region, buildings=buildings, townhall=townhall, roads=roads)
+
+
+def load_layout(city_path: str, helper_path: str | None = None) -> Layout:
+    data = read_json(city_path)
+    if "entities" in data:
+        if helper_path is None:
+            raise ValueError(
+                "this city file is the split format; a helper file is required"
+            )
+        return build_layout(data, read_json(helper_path))
+    if "CityMapData" in data:
+        return _build_combined(data)
+    raise ValueError("unrecognized city file format")
