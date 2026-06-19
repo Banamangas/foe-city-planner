@@ -7,38 +7,9 @@ import time
 from foeopt.model import Building, Layout
 from foeopt.localsearch import OptimizeResult, free_cells, move_building, swap_buildings
 
-
-def _mst_length(points: list[tuple[float, float]]) -> float:
-    n = len(points)
-    if n <= 1:
-        return 0.0
-    in_tree = [False] * n
-    dist = [math.inf] * n
-    dist[0] = 0.0
-    total = 0.0
-    for _ in range(n):
-        u = min((i for i in range(n) if not in_tree[i]), key=lambda i: dist[i])
-        in_tree[u] = True
-        total += dist[u]
-        ux, uy = points[u]
-        for v in range(n):
-            if not in_tree[v]:
-                d = abs(ux - points[v][0]) + abs(uy - points[v][1])
-                if d < dist[v]:
-                    dist[v] = d
-    return total
-
-
-def _centroid(b: Building) -> tuple[float, float]:
-    return (b.footprint.x + b.footprint.width / 2,
-            b.footprint.y + b.footprint.length / 2)
-
-
-def mst_cost(layout: Layout) -> float:
-    points = [_centroid(b) for b in layout.road_needing()]
-    if layout.townhall is not None:
-        points.append(_centroid(layout.townhall))
-    return _mst_length(points)
+_T_FLOOR = 1e-9
+_COOLING = 0.9995
+_WARMUP_SAMPLES = 12
 
 
 def random_move(layout: Layout, rng: random.Random) -> Layout | None:
@@ -64,21 +35,6 @@ def random_move(layout: Layout, rng: random.Random) -> Layout | None:
     return move_building(layout, b.entity_id, x, y)
 
 
-_T_FLOOR = 1e-9
-_COOLING = 0.9995
-
-
-def _initial_temperature(layout: Layout, rng: random.Random, samples: int = 20) -> float:
-    base = mst_cost(layout)
-    deltas: list[float] = []
-    for _ in range(samples):
-        cand = random_move(layout, rng)
-        if cand is not None:
-            deltas.append(abs(mst_cost(cand) - base))
-    positive = [d for d in deltas if d > 0]
-    return (sum(positive) / len(positive)) if positive else 1.0
-
-
 def anneal(
     layout: Layout,
     *,
@@ -86,19 +42,49 @@ def anneal(
     budget_seconds: float = 30.0,
     max_iters: int = 1_000_000,
 ) -> OptimizeResult:
+    """Simulated annealing on the true road count (len(route(candidate))).
+
+    Starts from the input layout, routes it once to seed the cost (capturing any
+    free roads-only improvement), and accepts worsening moves probabilistically to
+    escape the plateau where hill-climbing stops. The returned `best` is anchored
+    at the input and only replaced by a valid layout with strictly fewer roads, so
+    the result is never worse than the input. Deterministic for a fixed seed.
+    """
     from foeopt.router import RouteError, route
     from foeopt.validate import is_valid
 
     rng = random.Random(seed)
-    temperature = _initial_temperature(layout, rng)
 
-    state = layout
-    cost = mst_cost(state)
     best = layout
     best_roads = len(layout.roads)
-    best_proxy = cost
     moves_applied = 0
 
+    # Route the input placement to seed the SA's current cost (also captures the
+    # roads-only "Phase 1" win when the input network is not minimal).
+    try:
+        roads0 = route(layout)
+        state = Layout(layout.region, layout.buildings, layout.townhall, roads0)
+        cur = len(roads0)
+        if is_valid(state) and cur < best_roads:
+            best, best_roads = state, cur
+            moves_applied = 1
+    except RouteError:
+        state, cur = layout, len(layout.roads)
+
+    # Initial temperature: mean of positive |Δroads| over a few sampled routed
+    # moves (small integer deltas); fallback 1.0.
+    deltas: list[int] = []
+    for _ in range(_WARMUP_SAMPLES):
+        cand = random_move(state, rng)
+        if cand is None:
+            continue
+        try:
+            d = abs(len(route(cand)) - cur)
+        except RouteError:
+            continue
+        if d > 0:
+            deltas.append(d)
+    temperature = (sum(deltas) / len(deltas)) if deltas else 1.0
     deadline = time.monotonic() + budget_seconds
     for _ in range(max_iters):
         if time.monotonic() >= deadline:
@@ -107,22 +93,18 @@ def anneal(
         if cand is None:
             temperature = max(temperature * _COOLING, _T_FLOOR)
             continue
-        new_cost = mst_cost(cand)
-        delta = new_cost - cost
+        try:
+            roads = route(cand)
+        except RouteError:
+            temperature = max(temperature * _COOLING, _T_FLOOR)
+            continue
+        delta = len(roads) - cur
         if delta < 0 or rng.random() < math.exp(-delta / max(temperature, _T_FLOOR)):
-            state, cost = cand, new_cost
-            if new_cost < best_proxy:
-                best_proxy = new_cost
-                try:
-                    roads = route(state)
-                except RouteError:
-                    roads = None
-                if roads is not None:
-                    confirmed = Layout(state.region, state.buildings,
-                                       state.townhall, roads)
-                    if is_valid(confirmed) and len(roads) < best_roads:
-                        best, best_roads = confirmed, len(roads)
-                        moves_applied += 1
+            state = Layout(cand.region, cand.buildings, cand.townhall, roads)
+            cur = len(roads)
+            if is_valid(state) and cur < best_roads:
+                best, best_roads = state, cur
+                moves_applied += 1
         temperature = max(temperature * _COOLING, _T_FLOOR)
 
     return OptimizeResult(layout=best, moves_applied=moves_applied)

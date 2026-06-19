@@ -1,7 +1,7 @@
 import random
 
 from foeopt.model import Building, Footprint, Layout, Region
-from foeopt.anneal import _mst_length, mst_cost, random_move, anneal
+from foeopt.anneal import random_move, anneal
 from foeopt.localsearch import OptimizeResult
 from foeopt.router import route
 from foeopt.validate import is_valid
@@ -16,37 +16,6 @@ def _rn(eid, x, y, w=1, l=1, needs=True, th=False):
 def _region(w, h):
     return Region(frozenset((x, y) for x in range(w) for y in range(h)))
 
-
-def test_mst_length_collinear():
-    # (0,0)-(0,2)-(0,4): MST connects with edges 2 + 2 = 4
-    assert _mst_length([(0.0, 0.0), (0.0, 2.0), (0.0, 4.0)]) == 4.0
-
-
-def test_mst_length_unit_square():
-    # unit square: MST is any 3 edges of weight 1 = 3
-    assert _mst_length([(0.0, 0.0), (0.0, 1.0), (1.0, 0.0), (1.0, 1.0)]) == 3.0
-
-
-def test_mst_length_trivial():
-    assert _mst_length([]) == 0.0
-    assert _mst_length([(1.0, 1.0)]) == 0.0
-
-
-def test_mst_cost_uses_road_needing_and_townhall():
-    # townhall at (0,0) 1x1 -> centroid (0.5,0.5); two road-needing 1x1 at
-    # (0,2) -> (0.5,2.5) and (0,4) -> (0.5,4.5). Collinear, spacing 2 -> MST 4.
-    th = _rn(1, 0, 0, th=True, needs=False)
-    a = _rn(2, 0, 2)
-    b = _rn(3, 0, 4)
-    layout = Layout(_region(2, 6), [th, a, b], th)
-    assert mst_cost(layout) == 4.0
-
-
-def test_mst_cost_drops_when_buildings_cluster():
-    th = _rn(1, 0, 0, th=True, needs=False)
-    far = Layout(_region(2, 10), [th, _rn(2, 0, 8)], th)
-    near = Layout(_region(2, 10), [th, _rn(2, 0, 2)], th)
-    assert mst_cost(near) < mst_cost(far)
 
 
 def test_random_move_returns_valid_or_none():
