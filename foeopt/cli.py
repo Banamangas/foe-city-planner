@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from foeopt.build import build_layout
+from foeopt.loader import load_layout
 from foeopt.router import route, RouteError
 from foeopt.report import stats, road_diff
 from foeopt.viz import render_html, render_comparison
@@ -13,12 +13,8 @@ from foeopt.localsearch import optimize
 from foeopt.anneal import anneal
 
 
-def _load(path: str) -> dict:
-    return json.loads(Path(path).read_text())
-
-
 def _cmd_view(args) -> int:
-    layout = build_layout(_load(args.city), _load(args.helper))
+    layout = load_layout(args.city, args.helper)
     html = render_html(layout)
     Path(args.out).write_text(html, encoding="utf-8")
     print(f"Wrote map to {args.out} ({len(layout.buildings)} buildings, "
@@ -27,9 +23,7 @@ def _cmd_view(args) -> int:
 
 
 def _cmd_roads(args) -> int:
-    city = _load(args.city)
-    helper = _load(args.helper)
-    layout = build_layout(city, helper)
+    layout = load_layout(args.city, args.helper)
     try:
         optimized = route(layout)
     except RouteError as exc:
@@ -49,7 +43,7 @@ def _cmd_roads(args) -> int:
 
 
 def _cmd_layout(args) -> int:
-    current = build_layout(_load(args.city), _load(args.helper))
+    current = load_layout(args.city, args.helper)
     res = repack(current, thorough=args.thorough)
     s = stats(current, res.layout.roads)
     print("Full re-pack (Phase 2):")
@@ -67,7 +61,7 @@ def _cmd_layout(args) -> int:
 
 
 def _cmd_improve(args) -> int:
-    current = build_layout(_load(args.city), _load(args.helper))
+    current = load_layout(args.city, args.helper)
     budget = 120.0 if args.thorough else 30.0
     if args.anneal:
         res = anneal(current, seed=args.seed, budget_seconds=budget)
@@ -90,20 +84,20 @@ def main(argv: list[str] | None = None) -> int:
 
     p_view = sub.add_parser("view", help="render current city to HTML")
     p_view.add_argument("city")
-    p_view.add_argument("helper")
+    p_view.add_argument("helper", nargs="?", default=None)
     p_view.add_argument("-o", "--out", default="city.html")
     p_view.set_defaults(func=_cmd_view)
 
     p_roads = sub.add_parser("roads", help="minimize roads with buildings fixed")
     p_roads.add_argument("city")
-    p_roads.add_argument("helper")
+    p_roads.add_argument("helper", nargs="?", default=None)
     p_roads.add_argument("-o", "--out", default="roads.html")
     p_roads.add_argument("--diff", default=None)
     p_roads.set_defaults(func=_cmd_roads)
 
     p_layout = sub.add_parser("layout", help="re-pack the whole city to minimize roads")
     p_layout.add_argument("city")
-    p_layout.add_argument("helper")
+    p_layout.add_argument("helper", nargs="?", default=None)
     p_layout.add_argument("-o", "--out", default="layout.html")
     p_layout.add_argument("--thorough", action="store_true",
                           help="sweep more configurations (slower, better)")
@@ -111,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p_improve = sub.add_parser("improve", help="lower roads via local-search building moves")
     p_improve.add_argument("city")
-    p_improve.add_argument("helper")
+    p_improve.add_argument("helper", nargs="?", default=None)
     p_improve.add_argument("-o", "--out", default="improve.html")
     p_improve.add_argument("--thorough", action="store_true",
                            help="use a larger time budget")
