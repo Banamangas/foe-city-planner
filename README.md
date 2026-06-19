@@ -45,6 +45,20 @@ city's density: sparse cities yield real road savings; very dense cities (little
 may not fit a full re-pack, in which case it reports the buildings it could not place rather
 than emitting an invalid layout.
 
+## Input formats
+
+Every command auto-detects the export format — just pass the file(s):
+
+    # newer single-file FOE-Helper export (CityMapData + UnlockedAreas + CityEntities)
+    uv run python -m foeopt.cli improve darkzig.json --anneal -o output/out.html
+
+    # older split export (two files)
+    uv run python -m foeopt.cli roads city-user-data.json city-user-data-foe-helper.json
+
+Supported: the two-file split export, a single combined file with old-style entities, and the
+newer combined file with `coords`/`size`/`needsStreet` entities (UTF-8 BOM tolerated). The
+`needsStreet` flag, when present, is used directly as the road requirement.
+
 ## Tests
     uv run pytest
 
