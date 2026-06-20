@@ -7,13 +7,13 @@ from foeopt.packing import Grid, first_fit, first_fit_adjacent
 from foeopt.router import RouteError, route
 from foeopt.validate import is_valid
 
+_ORTHO = ((1, 0), (-1, 0), (0, 1), (0, -1))
+
 
 @dataclass
 class PackConfig:
-    orientation: str   # reserved; always "h" (horizontal road rows). Column
-                       # mode is a deferred sweep dimension, not yet consulted.
-    spacing: int       # rows between corridor lines
-    trunk_x: int       # column for the vertical connecting trunk
+    anchor: str   # Townhall start corner: "bl" | "br" | "tl" | "tr"
+    order: str    # building order; "area" = largest first (reserved knob)
 
 
 @dataclass
@@ -36,28 +36,33 @@ def bbox(region: Region) -> tuple[int, int]:
     return (max(xs) + 1, max(ys) + 1)
 
 
-def _corridor_cells(region: frozenset[tuple[int, int]], w: int, h: int, cfg: PackConfig) -> set:
-    # Always lays horizontal road rows; cfg.orientation is reserved for future use.
-    cells = set()
-    for y in range(0, h, cfg.spacing):          # horizontal road rows
-        for x in range(w):
-            if (x, y) in region:
-                cells.add((x, y))
-    for y in range(h):                           # vertical trunk joins the rows
-        if (cfg.trunk_x, y) in region:
-            cells.add((cfg.trunk_x, y))
-    return cells
+def _corner_fit(grid: Grid, w: int, l: int, anchor: str) -> tuple[int, int] | None:
+    xs = range(grid.width) if anchor in ("bl", "tl") else range(grid.width - 1, -1, -1)
+    ys = range(grid.height) if anchor in ("bl", "br") else range(grid.height - 1, -1, -1)
+    for y in ys:
+        for x in xs:
+            if grid.fits(x, y, w, l):
+                return (x, y)
+    return None
+
+
+def _road_frontier_cell(grid: Grid, road: set, region) -> tuple[int, int] | None:
+    """Bottom-left-most free region cell orthogonally adjacent to the road set."""
+    best = None
+    for (rx, ry) in road:
+        for dx, dy in _ORTHO:
+            n = (rx + dx, ry + dy)
+            if n in region and n not in road and grid.is_available(n):
+                if best is None or n < best:
+                    best = n
+    return best
 
 
 def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
     region = layout.region.cells
     w, h = bbox(layout.region)
     blocked = {(x, y) for x in range(w) for y in range(h)} - region
-    corridor = _corridor_cells(region, w, h, config)
-
     grid = Grid(w, h, blocked)
-    grid.reserve(corridor)
-
     townhall, consumers, fillers = classify(layout)
     placed: dict[int, tuple[int, int]] = {}
     unplaced: list[Building] = []
@@ -65,26 +70,55 @@ def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
     def area(b: Building) -> int:
         return b.footprint.width * b.footprint.length
 
-    # Townhall first — prefer corridor-adjacent so the trunk can root on it.
+    # 1. Townhall at the chosen corner.
     tw, tl = townhall.footprint.width, townhall.footprint.length
-    pos = first_fit_adjacent(grid, tw, tl, corridor) or first_fit(grid, tw, tl)
+    pos = _corner_fit(grid, tw, tl, config.anchor)
     if pos is None:
-        unplaced.append(townhall)
-    else:
-        grid.occupy(pos[0], pos[1], tw, tl)
-        placed[townhall.entity_id] = pos
+        empty = Layout(layout.region, [], None, {})
+        return PackResult(layout=empty, unplaced=list(layout.buildings))
+    grid.occupy(pos[0], pos[1], tw, tl)
+    placed[townhall.entity_id] = pos
+    th_border = Footprint(pos[0], pos[1], tw, tl).border_cells()
 
-    # Consumers: corridor-adjacent, largest first.
-    for b in sorted(consumers, key=area, reverse=True):
+    # 2. Seed the road network with a free Townhall-border cell.
+    road: set[tuple[int, int]] = set()
+    seed = min((c for c in th_border if c in region and grid.is_available(c)),
+               default=None)
+    if seed is not None:
+        road.add(seed)
+        grid.reserve([seed])
+
+    # 3. Grow the road and attach road-needing buildings.
+    #    road_target ensures the road extends past each placed building so the
+    #    next building has room to attach without boxing in the road.
+    remaining = sorted(consumers, key=area, reverse=True)
+    road_target = 1
+    while remaining and road:
+        b = remaining[0]
         bw, bl = b.footprint.width, b.footprint.length
-        p = first_fit_adjacent(grid, bw, bl, corridor)
-        if p is None:
-            unplaced.append(b)
+        # Pre-grow road to target length before attempting placement.
+        while len(road) < road_target:
+            cell = _road_frontier_cell(grid, road, region)
+            if cell is None:
+                break
+            road.add(cell)
+            grid.reserve([cell])
+        p = first_fit_adjacent(grid, bw, bl, road)
+        if p is not None:
+            grid.occupy(p[0], p[1], bw, bl)
+            placed[b.entity_id] = p
+            remaining.pop(0)
+            # Advance target so road extends past the newly placed building.
+            road_target = len(road) + max(bw, bl)
             continue
-        grid.occupy(p[0], p[1], bw, bl)
-        placed[b.entity_id] = p
+        cell = _road_frontier_cell(grid, road, region)
+        if cell is None:
+            break  # cannot grow the road any further
+        road.add(cell)
+        grid.reserve([cell])
+    unplaced.extend(remaining)
 
-    # Fillers: anywhere, largest first.
+    # 4. Fillers: densest first, anywhere free.
     for b in sorted(fillers, key=area, reverse=True):
         bw, bl = b.footprint.width, b.footprint.length
         p = first_fit(grid, bw, bl)
@@ -94,6 +128,7 @@ def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
         grid.occupy(p[0], p[1], bw, bl)
         placed[b.entity_id] = p
 
+    # 5. Build candidate + route for the minimal road set.
     new_buildings: list[Building] = []
     new_townhall: Building | None = None
     for b in layout.buildings:
@@ -104,29 +139,30 @@ def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
         new_buildings.append(moved)
         if moved.is_townhall:
             new_townhall = moved
-
     candidate = Layout(region=layout.region, buildings=new_buildings,
                        townhall=new_townhall, roads={})
     try:
         candidate.roads = route(candidate)
     except RouteError:
-        # No feasible road network for this placement — every consumer is
-        # unsatisfiable. Add the spatially-placed consumers to the ones that
-        # already failed placement, without double-counting.
+        # No feasible road network (should not happen for the grow-tree, where
+        # every placed consumer borders a connected road). Move the placed
+        # consumers fully to `unplaced` and drop them from the layout so a
+        # building is never listed in both places.
         placed_consumers = [b for b in consumers if b.entity_id in placed]
-        return PackResult(layout=candidate, unplaced=unplaced + placed_consumers)
+        moved_ids = {b.entity_id for b in placed_consumers}
+        kept = [b for b in new_buildings if b.entity_id not in moved_ids]
+        rejected = Layout(region=layout.region, buildings=kept,
+                          townhall=new_townhall, roads={})
+        return PackResult(layout=rejected, unplaced=unplaced + placed_consumers)
     return PackResult(layout=candidate, unplaced=unplaced)
 
 
 def _configs(layout: Layout, thorough: bool) -> list[PackConfig]:
     if not thorough:
-        return [PackConfig("h", spacing=4, trunk_x=0)]
-    w, _ = bbox(layout.region)
-    trunks = sorted({0, w // 2, max(0, w - 1)})
+        return [PackConfig("bl", "area")]
     return [
-        PackConfig("h", spacing=s, trunk_x=t)
-        for s in (3, 4, 5, 6)
-        for t in trunks
+        PackConfig(anchor, "area")
+        for anchor in ("bl", "br", "tl", "tr")
     ]
 
 

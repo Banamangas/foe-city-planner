@@ -34,3 +34,19 @@ def test_stats():
     assert s["road_needing"] == 1
     assert s["satisfied"] == 1
     assert s["unsatisfied"] == 0
+
+
+def test_road_estimate():
+    from foeopt.report import road_estimate
+
+    def rn(eid, w, l):
+        return Building(eid, f"c{eid}", "generic", Footprint(0, 0, w, l),
+                        needs_road=True, road_level=1, is_townhall=False,
+                        set_id=None, chain_id=None, name=f"b{eid}")
+
+    th = Building(1, "TH", "main_building", Footprint(0, 0, 1, 1),
+                  needs_road=False, road_level=0, is_townhall=True,
+                  set_id=None, chain_id=None, name="TH")
+    # road-needing min-sides: 5 (from 5x6) + 4 (from 4x4) = 9 -> //2 = 4
+    layout = Layout(Region(frozenset()), [th, rn(2, 5, 6), rn(3, 4, 4)], th)
+    assert road_estimate(layout) == 4

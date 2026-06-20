@@ -30,3 +30,10 @@ def stats(layout: Layout, optimized_roads: dict) -> dict:
         "satisfied": needing - len(bad),
         "unsatisfied": len(bad),
     }
+
+
+def road_estimate(layout: Layout) -> int:
+    """Target road-tile count: a road serves a double row of buildings, so the
+    minimal road is ~ (sum of each road-needing building's shorter side) / 2."""
+    return sum(min(b.footprint.width, b.footprint.length)
+               for b in layout.road_needing()) // 2
