@@ -44,11 +44,13 @@ def _cmd_roads(args) -> int:
 
 def _cmd_layout(args) -> int:
     current = load_layout(args.city, args.helper)
-    res = repack(current, thorough=args.thorough)
+    budget = _resolve_budget(args.budget, args.thorough)
+    res = repack(current, budget_seconds=budget, seed=args.seed)
     s = stats(current, res.layout.roads)
     print("Full re-pack (Phase 2):")
     print(f"  buildings: {len(current.buildings)} | placed: "
           f"{len(res.layout.buildings)} | unplaced: {len(res.unplaced)}")
+    print(f"  trials: {res.trials}")
     print(f"  current roads: {s['current_roads']} | optimized roads: {s['optimized_roads']}"
           f" | tiles_saved: {s['tiles_saved']}")
     print(f"  estimated optimal roads (target): {road_estimate(current)}")
@@ -86,7 +88,7 @@ def _cmd_improve(args) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="foeopt")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -109,6 +111,10 @@ def main(argv: list[str] | None = None) -> int:
     p_layout.add_argument("-o", "--out", default="layout.html")
     p_layout.add_argument("--thorough", action="store_true",
                           help="sweep more configurations (slower, better)")
+    p_layout.add_argument("--budget", type=float, default=None,
+                          help="time budget in seconds (overrides default/--thorough)")
+    p_layout.add_argument("--seed", type=int, default=0,
+                          help="RNG seed for the multi-start search (deterministic)")
     p_layout.set_defaults(func=_cmd_layout)
 
     p_improve = sub.add_parser("improve", help="lower roads via local-search building moves")
@@ -125,6 +131,11 @@ def main(argv: list[str] | None = None) -> int:
                            help="RNG seed for --anneal (deterministic)")
     p_improve.set_defaults(func=_cmd_improve)
 
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
     return args.func(args)
 
