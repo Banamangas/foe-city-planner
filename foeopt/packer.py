@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import time
 from dataclasses import dataclass, replace
 
 from foeopt.model import Building, Footprint, Layout, Region
@@ -21,6 +22,7 @@ class PackConfig:
 class PackResult:
     layout: Layout
     unplaced: list[Building]
+    trials: int = 0
 
 
 def classify(layout: Layout) -> tuple[Building, list[Building], list[Building]]:
@@ -165,21 +167,30 @@ def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
     return PackResult(layout=candidate, unplaced=unplaced)
 
 
-def _configs(layout: Layout, thorough: bool) -> list[PackConfig]:
-    if not thorough:
-        return [PackConfig("bl", 0)]
-    return [PackConfig(anchor, 0) for anchor in ("bl", "br", "tl", "tr")]
-
-
-def repack(layout: Layout, thorough: bool = False) -> PackResult:
+def repack(layout: Layout, *, thorough: bool = False,
+           budget_seconds: float | None = None, seed: int = 0) -> PackResult:
+    """Budgeted randomized multi-start: try many randomized packings, keep the
+    best by (fewest unplaced, then fewest roads). Deterministic given `seed` and
+    the number of trials completed. Early-exits when a trial places everything."""
+    if budget_seconds is None:
+        budget_seconds = 120.0 if thorough else 30.0
+    master = random.Random(seed)
+    anchors = ("bl", "br", "tl", "tr")
     best: PackResult | None = None
-    best_key: tuple[int, int, int] | None = None
-    for cfg in _configs(layout, thorough):
+    best_key: tuple[int, int] | None = None
+    trials = 0
+    deadline = time.monotonic() + budget_seconds
+    while True:
+        cfg = PackConfig(master.choice(anchors), master.randrange(2 ** 32))
         res = build_candidate(layout, cfg)
-        fully_valid = not res.unplaced and is_valid(res.layout)
-        # sort key: valid candidates first (0), then fewer unplaced, then roads
-        key = (0 if fully_valid else 1, len(res.unplaced), len(res.layout.roads))
+        trials += 1
+        key = (len(res.unplaced), len(res.layout.roads))
         if best_key is None or key < best_key:
             best, best_key = res, key
-    assert best is not None  # _configs always yields at least one config
+        if best_key[0] == 0:            # all placed: can't improve on placement
+            break
+        if time.monotonic() >= deadline:
+            break
+    assert best is not None             # the loop body always runs at least once
+    best.trials = trials
     return best

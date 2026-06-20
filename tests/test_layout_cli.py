@@ -12,7 +12,7 @@ def test_layout_reports_road_estimate(city_data, helper_data):
 
 def test_repack_real_city_is_valid_or_reports_unplaced(city_data, helper_data):
     current = build_layout(city_data, helper_data)
-    res = repack(current, thorough=False)
+    res = repack(current, budget_seconds=0.3)
     # Correctness invariant: never an overlapping / out-of-region layout.
     occ = set()
     for b in res.layout.buildings:
