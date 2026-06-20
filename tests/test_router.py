@@ -1,7 +1,7 @@
 import pytest
 
 from foeopt.model import Building, Footprint, Layout, Region
-from foeopt.router import route, free_cells, RouteError
+from foeopt.router import route, free_cells, RouteError, _articulation_points
 from foeopt.validate import is_valid, unsatisfied
 
 
@@ -64,3 +64,47 @@ def test_unreachable_raises():
     layout = Layout(_region(2, 1), [_th(0, 0), _house(2, 1, 0)], _th(0, 0))
     with pytest.raises(RouteError):
         route(layout)
+
+
+def test_articulation_midchain_is_cut_vertex():
+    # townhall root borders (0,0); chain (0,0)-(1,0)-(2,0). Removing (1,0)
+    # disconnects (2,0) from the root -> (1,0) is an articulation point.
+    roads = {(0, 0): 1, (1, 0): 1, (2, 0): 1}
+    th_border = {(0, 0)}      # a road at (0,0) is the rooted entry
+    art = _articulation_points(roads, th_border)
+    assert (1, 0) in art
+    assert (2, 0) not in art   # leaf, not a cut vertex
+    assert (0, 0) in art       # removing it disconnects (1,0),(2,0)
+
+
+def test_articulation_leaf_not_cut():
+    # star-ish: (0,0) root, (1,0) hub, (2,0) and (1,1) leaves off the hub
+    roads = {(0, 0): 1, (1, 0): 1, (2, 0): 1, (1, 1): 1}
+    art = _articulation_points(roads, {(0, 0)})
+    assert (2, 0) not in art and (1, 1) not in art   # leaves
+    assert (1, 0) in art                              # hub is a cut vertex
+
+
+def test_articulation_cycle_no_cut():
+    # a 2x2 loop of roads, all rooted via (0,0) and (1,0).
+    # With two TH-border entries, the virtual root has 2 children, and
+    # the cycle means no single road removal disconnects any road from the TH.
+    roads = {(0, 0): 1, (1, 0): 1, (0, 1): 1, (1, 1): 1}
+    art = _articulation_points(roads, {(0, 0), (1, 0)})
+    assert art == set()
+
+
+def test_articulation_empty():
+    assert _articulation_points({}, set()) == set()
+    assert _articulation_points({(0, 0): 1}, {(0, 0)}) == set()
+
+
+def test_prune_real_city_output_is_valid(city_data, helper_data):
+    from foeopt.build import build_layout
+    from foeopt.validate import unsatisfied
+    from foeopt.model import Layout
+    layout = build_layout(city_data, helper_data)
+    roads = route(layout)
+    probe = Layout(layout.region, layout.buildings, layout.townhall, roads)
+    assert unsatisfied(probe) == []        # every consumer connected & covered
+    assert len(roads) == 142               # golden count preserved
