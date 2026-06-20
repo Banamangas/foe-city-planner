@@ -163,7 +163,31 @@ def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
         rejected = Layout(region=layout.region, buildings=kept,
                           townhall=new_townhall, roads={})
         return PackResult(layout=rejected, unplaced=unplaced + placed_consumers)
-    return PackResult(layout=candidate, unplaced=unplaced)
+    # Post-route gap-fill: routing prunes the reserved corridor down to the
+    # minimal roads, freeing reserved-but-unused cells. Offer them to the
+    # still-unplaced fillers (road-needing buildings must stay road-adjacent and
+    # are never gap-filled). Roads are unchanged, so no re-route is needed.
+    occupied: set[tuple[int, int]] = set()
+    for b in candidate.buildings:
+        occupied |= b.footprint.cells()
+    free = region - occupied - set(candidate.roads)
+    # block everything outside `free`, so placements stay in-region and off roads
+    gap_grid = Grid(w, h, {(x, y) for x in range(w) for y in range(h)} - free)
+    still_unplaced: list[Building] = []
+    for b in sorted(unplaced, key=lambda b: (-area(b), rng.random())):
+        if b.needs_road:
+            still_unplaced.append(b)
+            continue
+        bw, bl = b.footprint.width, b.footprint.length
+        p = first_fit(gap_grid, bw, bl)
+        if p is None:
+            still_unplaced.append(b)
+            continue
+        gap_grid.occupy(p[0], p[1], bw, bl)
+        candidate.buildings.append(
+            replace(b, footprint=Footprint(p[0], p[1], bw, bl))
+        )
+    return PackResult(layout=candidate, unplaced=still_unplaced)
 
 
 def repack(layout: Layout, *, thorough: bool = False,
