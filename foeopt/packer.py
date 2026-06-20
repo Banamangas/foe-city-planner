@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass, replace
 
 from foeopt.model import Building, Footprint, Layout, Region
@@ -13,7 +14,7 @@ _ORTHO = ((1, 0), (-1, 0), (0, 1), (0, -1))
 @dataclass
 class PackConfig:
     anchor: str   # Townhall start corner: "bl" | "br" | "tl" | "tr"
-    order: str    # building order; "area" = largest first (reserved knob)
+    seed: int     # seeds building order + road-growth tie-breaks
 
 
 @dataclass
@@ -46,16 +47,21 @@ def _corner_fit(grid: Grid, w: int, l: int, anchor: str) -> tuple[int, int] | No
     return None
 
 
-def _road_frontier_cell(grid: Grid, road: set, region) -> tuple[int, int] | None:
-    """Bottom-left-most free region cell orthogonally adjacent to the road set."""
-    best = None
+def _road_frontier_cell(grid: Grid, road: set, region, rng=None) -> tuple[int, int] | None:
+    """A free region cell orthogonally adjacent to the road set. Deterministically
+    the bottom-left-most cell; with `rng`, a random pick among the smallest few."""
+    cands = set()
     for (rx, ry) in road:
         for dx, dy in _ORTHO:
             n = (rx + dx, ry + dy)
             if n in region and n not in road and grid.is_available(n):
-                if best is None or n < best:
-                    best = n
-    return best
+                cands.add(n)
+    if not cands:
+        return None
+    ordered = sorted(cands)
+    if rng is None:
+        return ordered[0]
+    return rng.choice(ordered[:4])
 
 
 def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
@@ -69,6 +75,8 @@ def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
 
     def area(b: Building) -> int:
         return b.footprint.width * b.footprint.length
+
+    rng = random.Random(config.seed)
 
     # 1. Townhall at the chosen corner.
     tw, tl = townhall.footprint.width, townhall.footprint.length
@@ -91,14 +99,14 @@ def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
     # 3. Grow the road and attach road-needing buildings.
     #    road_target ensures the road extends past each placed building so the
     #    next building has room to attach without boxing in the road.
-    remaining = sorted(consumers, key=area, reverse=True)
+    remaining = sorted(consumers, key=lambda b: (-area(b), rng.random()))
     road_target = 1
     while remaining and road:
         b = remaining[0]
         bw, bl = b.footprint.width, b.footprint.length
         # Pre-grow road to target length before attempting placement.
         while len(road) < road_target:
-            cell = _road_frontier_cell(grid, road, region)
+            cell = _road_frontier_cell(grid, road, region, rng)
             if cell is None:
                 break
             road.add(cell)
@@ -111,7 +119,7 @@ def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
             # Advance target so road extends past the newly placed building.
             road_target = len(road) + max(bw, bl)
             continue
-        cell = _road_frontier_cell(grid, road, region)
+        cell = _road_frontier_cell(grid, road, region, rng)
         if cell is None:
             break  # cannot grow the road any further
         road.add(cell)
@@ -119,7 +127,7 @@ def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
     unplaced.extend(remaining)
 
     # 4. Fillers: densest first, anywhere free.
-    for b in sorted(fillers, key=area, reverse=True):
+    for b in sorted(fillers, key=lambda b: (-area(b), rng.random())):
         bw, bl = b.footprint.width, b.footprint.length
         p = first_fit(grid, bw, bl)
         if p is None:
@@ -159,11 +167,8 @@ def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
 
 def _configs(layout: Layout, thorough: bool) -> list[PackConfig]:
     if not thorough:
-        return [PackConfig("bl", "area")]
-    return [
-        PackConfig(anchor, "area")
-        for anchor in ("bl", "br", "tl", "tr")
-    ]
+        return [PackConfig("bl", 0)]
+    return [PackConfig(anchor, 0) for anchor in ("bl", "br", "tl", "tr")]
 
 
 def repack(layout: Layout, thorough: bool = False) -> PackResult:
