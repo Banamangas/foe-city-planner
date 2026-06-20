@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass, replace
 
 from foeopt.model import Building, Footprint, Layout, Region
-from foeopt.packing import Grid, first_fit, first_fit_adjacent
+from foeopt.packing import Grid, first_fit, first_fit_adjacent, first_fit_adjacent_short
 from foeopt.router import RouteError, route
 
 _ORTHO = ((1, 0), (-1, 0), (0, 1), (0, -1))
@@ -112,7 +112,8 @@ def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
                 break
             road.add(cell)
             grid.reserve([cell])
-        p = first_fit_adjacent(grid, bw, bl, road)
+        p = (first_fit_adjacent_short(grid, bw, bl, road)
+             or first_fit_adjacent(grid, bw, bl, road))
         if p is not None:
             grid.occupy(p[0], p[1], bw, bl)
             placed[b.entity_id] = p

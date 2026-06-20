@@ -46,3 +46,25 @@ def test_first_fit_adjacent_none_when_unreachable():
     # block (2,0) so nothing can touch (3,0)
     g.occupy(2, 0, 1, 1)
     assert first_fit_adjacent(g, 1, 1, targets={(3, 0)}) is None
+
+
+def test_first_fit_adjacent_short_prefers_short_side():
+    from foeopt.packing import Grid, first_fit_adjacent, first_fit_adjacent_short
+    grid = Grid(4, 8, set())
+    targets = {(2, 0), (2, 1)}          # a vertical pair (a long-edge for a 2x4 at origin)
+    # plain takes the earliest touching spot — (0,0), where the road meets the LONG edge
+    assert first_fit_adjacent(grid, 2, 4, targets) == (0, 0)
+    # short-side variant skips it and returns the spot whose SHORT (top) edge touches
+    assert first_fit_adjacent_short(grid, 2, 4, targets) == (1, 1)
+
+
+def test_first_fit_adjacent_short_square_returns_none():
+    from foeopt.packing import Grid, first_fit_adjacent_short
+    grid = Grid(6, 6, set())
+    assert first_fit_adjacent_short(grid, 2, 2, {(2, 0), (0, 2)}) is None
+
+
+def test_first_fit_adjacent_short_none_when_no_short_spot():
+    from foeopt.packing import Grid, first_fit_adjacent_short
+    grid = Grid(4, 8, set())
+    assert first_fit_adjacent_short(grid, 2, 4, set()) is None        # no targets
