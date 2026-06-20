@@ -171,6 +171,7 @@ def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
     for b in candidate.buildings:
         occupied |= b.footprint.cells()
     free = region - occupied - set(candidate.roads)
+    # block everything outside `free`, so placements stay in-region and off roads
     gap_grid = Grid(w, h, {(x, y) for x in range(w) for y in range(h)} - free)
     still_unplaced: list[Building] = []
     for b in sorted(unplaced, key=lambda b: (-area(b), rng.random())):
