@@ -26,7 +26,7 @@ def test_bbox_from_region():
 
 
 def test_packconfig_and_packresult_construct():
-    cfg = PackConfig(anchor="bl", order="area")
+    cfg = PackConfig(anchor="bl", seed=0)
     assert cfg.anchor == "bl"
     res = PackResult(layout=Layout(Region(frozenset()), [], None), unplaced=[])
     assert res.unplaced == []
@@ -43,7 +43,7 @@ def test_build_candidate_grows_tree_in_sparse_city():
     cons = [_b(10 + i, 0, 0, 2, 2, needs=True) for i in range(4)]
     fill = [_b(20 + i, 0, 0, 1, 1, needs=False) for i in range(3)]
     layout = Layout(_full_region(12, 12), [th, *cons, *fill], th)
-    res = build_candidate(layout, PackConfig("bl", "area"))
+    res = build_candidate(layout, PackConfig("bl", 0))
     assert res.unplaced == []
     occ = set()
     for b in res.layout.buildings:
@@ -62,7 +62,7 @@ def test_build_candidate_reports_unplaced_when_too_tight():
     th = _b(1, 0, 0, 2, 2, th=True)
     cons = _b(2, 0, 0, 2, 2, needs=True)
     layout = Layout(_full_region(2, 2), [th, cons], th)  # townhall fills the region
-    res = build_candidate(layout, PackConfig("bl", "area"))
+    res = build_candidate(layout, PackConfig("bl", 0))
     assert any(b.entity_id == 2 for b in res.unplaced)
 
 
@@ -74,7 +74,7 @@ def test_unplaced_has_no_duplicate_entity_ids():
     th = _b(1, 0, 0, 2, 2, th=True)
     cons = [_b(10 + i, 0, 0, 2, 2, needs=True) for i in range(4)]
     layout = Layout(_full_region(4, 4), [th, *cons], th)
-    res = build_candidate(layout, PackConfig("bl", "area"))
+    res = build_candidate(layout, PackConfig("bl", 0))
     ids = [b.entity_id for b in res.unplaced]
     assert len(ids) == len(set(ids)), f"Duplicate entity_ids in unplaced: {ids}"
 
@@ -111,7 +111,7 @@ def test_build_candidate_conserves_buildings_even_when_partial():
     cons = [_b(10 + i, 0, 0, 2, 2, needs=True) for i in range(6)]
     fill = [_b(20 + i, 0, 0, 2, 2, needs=False) for i in range(6)]
     layout = Layout(_full_region(5, 5), [th, *cons, *fill], th)  # too tight: some unplaced
-    res = build_candidate(layout, PackConfig("bl", "area"))
+    res = build_candidate(layout, PackConfig("bl", 0))
     placed_ids = {b.entity_id for b in res.layout.buildings}
     unplaced_ids = {b.entity_id for b in res.unplaced}
     assert res.unplaced, "region must be tight enough to leave some unplaced"
@@ -137,3 +137,18 @@ def test_repack_configs_are_corner_anchors():
     thorough = _configs(layout, True)
     assert len(fast) == 1 and fast[0].anchor == "bl"
     assert {c.anchor for c in thorough} == {"bl", "br", "tl", "tr"}
+
+
+def test_build_candidate_deterministic_given_config():
+    from foeopt.packer import build_candidate, PackConfig
+    th = _b(1, 0, 0, 2, 2, th=True)
+    cons = [_b(10 + i, 0, 0, 2, 2, needs=True) for i in range(4)]
+    fill = [_b(20 + i, 0, 0, 1, 1, needs=False) for i in range(3)]
+    layout = Layout(_full_region(12, 12), [th, *cons, *fill], th)
+    a = build_candidate(layout, PackConfig("tr", 42))
+    b = build_candidate(layout, PackConfig("tr", 42))
+    pa = {x.entity_id: (x.footprint.x, x.footprint.y) for x in a.layout.buildings}
+    pb = {x.entity_id: (x.footprint.x, x.footprint.y) for x in b.layout.buildings}
+    assert pa == pb
+    assert a.layout.roads == b.layout.roads
+    assert [x.entity_id for x in a.unplaced] == [x.entity_id for x in b.unplaced]
