@@ -103,3 +103,17 @@ def test_repack_prefers_fewer_unplaced():
         assert cells <= layout.region.cells
         assert not (cells & occ)
         occ |= cells
+
+
+def test_build_candidate_conserves_buildings_even_when_partial():
+    from foeopt.packer import build_candidate, PackConfig
+    th = _b(1, 0, 0, 2, 2, th=True)
+    cons = [_b(10 + i, 0, 0, 2, 2, needs=True) for i in range(6)]
+    fill = [_b(20 + i, 0, 0, 2, 2, needs=False) for i in range(6)]
+    layout = Layout(_full_region(5, 5), [th, *cons, *fill], th)  # too tight: some unplaced
+    res = build_candidate(layout, PackConfig("bl", "area"))
+    placed_ids = {b.entity_id for b in res.layout.buildings}
+    unplaced_ids = {b.entity_id for b in res.unplaced}
+    assert res.unplaced, "region must be tight enough to leave some unplaced"
+    assert len(res.layout.buildings) + len(res.unplaced) == len(layout.buildings)
+    assert not (placed_ids & unplaced_ids)   # disjoint: no double-listing

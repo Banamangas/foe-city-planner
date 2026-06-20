@@ -144,8 +144,16 @@ def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
     try:
         candidate.roads = route(candidate)
     except RouteError:
+        # No feasible road network (should not happen for the grow-tree, where
+        # every placed consumer borders a connected road). Move the placed
+        # consumers fully to `unplaced` and drop them from the layout so a
+        # building is never listed in both places.
         placed_consumers = [b for b in consumers if b.entity_id in placed]
-        return PackResult(layout=candidate, unplaced=unplaced + placed_consumers)
+        moved_ids = {b.entity_id for b in placed_consumers}
+        kept = [b for b in new_buildings if b.entity_id not in moved_ids]
+        rejected = Layout(region=layout.region, buildings=kept,
+                          townhall=new_townhall, roads={})
+        return PackResult(layout=rejected, unplaced=unplaced + placed_consumers)
     return PackResult(layout=candidate, unplaced=unplaced)
 
 
