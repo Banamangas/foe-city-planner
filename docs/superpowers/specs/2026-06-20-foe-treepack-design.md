@@ -61,6 +61,14 @@ Given the input `Layout` (used only for the building catalog + region; positions
    is invalid → treated as all road-needing unplaced.
 7. Return `PackResult(layout=candidate, unplaced=[...])`.
 
+### 4a. Pre-grow note (implementation detail)
+
+Growing the road *only* when the next building is fully stuck can box the road in behind the
+first buildings placed. The implementation therefore **pre-grows** the road by ~`max(width,length)`
+cells after each placement (a `road_target`), keeping the grow-tree spirit while opening enough
+attachment surface. This is a sound, terminating refinement of §4 step 4 (the available-cell set
+strictly shrinks each growth; the loop breaks when the frontier is exhausted).
+
 ## 5. `repack` and tuning
 
 - `repack(layout, thorough)`:
