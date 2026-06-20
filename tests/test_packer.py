@@ -182,3 +182,40 @@ def test_repack_early_exit_on_sparse():
     assert res.unplaced == []
     assert is_valid(res.layout)
     assert res.trials == 1   # first trial places all -> early exit (no 10s spent)
+
+
+def test_gapfill_places_filler_freed_by_routing():
+    # 3x2 region, 2x2 townhall, two 1x1 fillers, no consumers.
+    # The Townhall-border seed cell (2,0) is reserved during the main filler
+    # pass, so only (2,1) is free then -> one filler is unplaced. With no
+    # consumers, route() returns no roads, freeing the seed (2,0); the gap-fill
+    # pass must place the leftover filler there.
+    from foeopt.packer import build_candidate, PackConfig
+    th = _b(1, 0, 0, 2, 2, th=True)
+    f1 = _b(2, 0, 0, 1, 1, needs=False)
+    f2 = _b(3, 0, 0, 1, 1, needs=False)
+    layout = Layout(_full_region(3, 2), [th, f1, f2], th)
+    res = build_candidate(layout, PackConfig("bl", 0))
+    assert res.unplaced == []
+    assert len(res.layout.buildings) == 3
+    occ = set()
+    for b in res.layout.buildings:
+        cells = b.footprint.cells()
+        assert not (cells & occ)          # no overlap
+        occ |= cells
+
+
+def test_gapfill_skips_road_needing_buildings():
+    # Disconnected region: a 2x2 block (for the townhall) plus an isolated cell
+    # at (5,5). The townhall has no in-region border cell, so no road seeds and
+    # the road-needing building cannot attach -> it is unplaced. The isolated
+    # (5,5) is free post-route, but gap-fill must NOT place a road-needing
+    # building there (it would have no road).
+    from foeopt.packer import build_candidate, PackConfig
+    region = Region(frozenset({(0, 0), (1, 0), (0, 1), (1, 1), (5, 5)}))
+    th = _b(1, 0, 0, 2, 2, th=True)
+    consumer = _b(2, 0, 0, 1, 1, needs=True)
+    layout = Layout(region, [th, consumer], th)
+    res = build_candidate(layout, PackConfig("bl", 0))
+    assert 2 in {b.entity_id for b in res.unplaced}        # road-needing stays unplaced
+    assert 2 not in {b.entity_id for b in res.layout.buildings}
