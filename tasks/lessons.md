@@ -37,3 +37,7 @@
 
 ### Process lesson
 - When a derived count "feels off" or contradicts domain knowledge (FoE: most buildings need roads), validate against the live game-state signal before designing around the metadata-derived value.
+
+## Packer config comparisons must use a 0-unplaced budget (2026-06-20)
+**Mistake:** Merged "short-side-facing attachment" believing it cut DarkZig roads 165→154, based on a 20s-budget A/B. Those layouts were PARTIAL (unplaced>0). Because `repack` scores by `(unplaced, roads)` — placement first — a short budget returns an incomplete layout whose road count is artificially LOW (fewer buildings = fewer roads). The comparison was meaningless. A clean A/B at a 0-unplaced budget showed short-side is actually WORSE (best 167 vs 159, mean 177 vs 169, and it even left a seed unplaced). Reverted.
+**Rule:** When comparing packer/`repack` configurations, ALWAYS use a budget large enough that every seed reaches `unplaced == 0`, and compare only 0-unplaced results. Never compare raw road counts across runs without checking `unplaced` — a lower road number with unplaced>0 is a worse (incomplete) layout, not a better one.
