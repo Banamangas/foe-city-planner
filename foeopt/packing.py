@@ -60,30 +60,3 @@ def first_fit_adjacent(
             if grid.fits(x, y, w, l) and (_border_cells(x, y, w, l) & targets):
                 return (x, y)
     return None
-
-
-def _short_border_cells(x: int, y: int, w: int, l: int) -> set[tuple[int, int]]:
-    """Border cells along the short-side edges (perpendicular to the long axis).
-    Empty for a square — no preferred side."""
-    if w < l:        # taller than wide: short edges are top and bottom (width w)
-        return ({(x + i, y - 1) for i in range(w)}
-                | {(x + i, y + l) for i in range(w)})
-    if l < w:        # wider than tall: short edges are left and right (height l)
-        return ({(x - 1, y + j) for j in range(l)}
-                | {(x + w, y + j) for j in range(l)})
-    return set()
-
-
-def first_fit_adjacent_short(
-    grid: Grid, w: int, l: int, targets: set[tuple[int, int]]
-) -> tuple[int, int] | None:
-    """Like first_fit_adjacent, but only accepts a position whose SHORT-side
-    border touches `targets`. Returns None for a square or when no such spot
-    exists (the caller should then fall back to first_fit_adjacent)."""
-    if w == l:
-        return None
-    for y in range(grid.height):
-        for x in range(grid.width):
-            if grid.fits(x, y, w, l) and (_short_border_cells(x, y, w, l) & targets):
-                return (x, y)
-    return None
