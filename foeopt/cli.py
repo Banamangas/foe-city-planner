@@ -6,7 +6,7 @@ from pathlib import Path
 
 from foeopt.loader import load_layout
 from foeopt.router import route, RouteError
-from foeopt.report import stats, road_diff
+from foeopt.report import stats, road_diff, road_estimate
 from foeopt.viz import render_html, render_comparison
 from foeopt.packer import repack
 from foeopt.localsearch import optimize
@@ -51,6 +51,7 @@ def _cmd_layout(args) -> int:
           f"{len(res.layout.buildings)} | unplaced: {len(res.unplaced)}")
     print(f"  current roads: {s['current_roads']} | optimized roads: {s['optimized_roads']}"
           f" | tiles_saved: {s['tiles_saved']}")
+    print(f"  estimated optimal roads (target): {road_estimate(current)}")
     Path(args.out).write_text(render_comparison(current, res.layout), encoding="utf-8")
     print(f"Wrote before/after map to {args.out}")
     if res.unplaced:

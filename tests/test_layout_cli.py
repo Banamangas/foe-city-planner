@@ -1,6 +1,13 @@
 from foeopt.build import build_layout
 from foeopt.packer import repack
+from foeopt.report import road_estimate
 from foeopt.validate import is_valid
+
+
+def test_layout_reports_road_estimate(city_data, helper_data):
+    current = build_layout(city_data, helper_data)
+    est = road_estimate(current)
+    assert isinstance(est, int) and est >= 0
 
 
 def test_repack_real_city_is_valid_or_reports_unplaced(city_data, helper_data):
