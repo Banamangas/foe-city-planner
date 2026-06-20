@@ -171,17 +171,17 @@ def test_repack_no_worse_than_single_pass():
     assert len(multi.unplaced) <= len(single.unplaced)
 
 
-def test_repack_early_exit_on_sparse():
+def test_repack_sparse_places_all():
     from foeopt.packer import repack
     from foeopt.validate import is_valid
     th = _b(1, 0, 0, 2, 2, th=True)
     cons = [_b(10 + i, 0, 0, 2, 2, needs=True) for i in range(3)]
     fill = [_b(20 + i, 0, 0, 1, 1, needs=False) for i in range(3)]
     layout = Layout(_full_region(20, 20), [th, *cons, *fill], th)  # very sparse
-    res = repack(layout, budget_seconds=10.0, seed=0)
+    res = repack(layout, budget_seconds=0.3, seed=0)
     assert res.unplaced == []
     assert is_valid(res.layout)
-    assert res.trials == 1   # first trial places all -> early exit (no 10s spent)
+    assert len(res.layout.buildings) == len(layout.buildings)
 
 
 def test_gapfill_places_filler_freed_by_routing():

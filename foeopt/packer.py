@@ -194,7 +194,8 @@ def repack(layout: Layout, *, thorough: bool = False,
            budget_seconds: float | None = None, seed: int = 0) -> PackResult:
     """Budgeted randomized multi-start: try many randomized packings, keep the
     best by (fewest unplaced, then fewest roads). Deterministic given `seed` and
-    the number of trials completed. Early-exits when a trial places everything."""
+    the number of trials completed. Runs until the time budget so it minimizes
+    roads among fully-placed layouts (no early-exit on first full placement)."""
     if budget_seconds is None:
         budget_seconds = 120.0 if thorough else 30.0
     master = random.Random(seed)
@@ -210,8 +211,6 @@ def repack(layout: Layout, *, thorough: bool = False,
         key = (len(res.unplaced), len(res.layout.roads))
         if best_key is None or key < best_key:
             best, best_key = res, key
-        if best_key[0] == 0:            # all placed: can't improve on placement
-            break
         if time.monotonic() >= deadline:
             break
     assert best is not None             # the loop body always runs at least once
