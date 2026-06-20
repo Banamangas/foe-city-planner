@@ -26,8 +26,8 @@ def test_bbox_from_region():
 
 
 def test_packconfig_and_packresult_construct():
-    cfg = PackConfig(orientation="h", spacing=4, trunk_x=0)
-    assert cfg.spacing == 4
+    cfg = PackConfig(anchor="bl", order="area")
+    assert cfg.anchor == "bl"
     res = PackResult(layout=Layout(Region(frozenset()), [], None), unplaced=[])
     assert res.unplaced == []
 
@@ -36,33 +36,33 @@ def _full_region(w, h):
     return Region(frozenset((x, y) for x in range(w) for y in range(h)))
 
 
-def test_build_candidate_places_all_in_sparse_city():
-    # Sparse 10x10 region, a townhall + 3 small road-needing + 3 fillers.
+def test_build_candidate_grows_tree_in_sparse_city():
+    from foeopt.packer import build_candidate, PackConfig
+    from foeopt.validate import is_valid
     th = _b(1, 0, 0, 2, 2, th=True)
-    cons = [_b(10 + i, 0, 0, 2, 2, needs=True) for i in range(3)]
+    cons = [_b(10 + i, 0, 0, 2, 2, needs=True) for i in range(4)]
     fill = [_b(20 + i, 0, 0, 1, 1, needs=False) for i in range(3)]
-    layout = Layout(_full_region(10, 10), [th, *cons, *fill], th)
-    res = build_candidate(layout, PackConfig("h", spacing=4, trunk_x=0))
+    layout = Layout(_full_region(12, 12), [th, *cons, *fill], th)
+    res = build_candidate(layout, PackConfig("bl", "area"))
     assert res.unplaced == []
-    # every building inside region, no overlap
     occ = set()
     for b in res.layout.buildings:
         cells = b.footprint.cells()
         assert cells <= layout.region.cells
         assert not (cells & occ)
         occ |= cells
-    # roads connect every consumer to the townhall
     assert is_valid(res.layout)
-    # buildings are conserved (same count)
     assert len(res.layout.buildings) == len(layout.buildings)
+    # roads should be modest on a sparse city (near the estimate, not the whole map)
+    assert len(res.layout.roads) <= 30
 
 
 def test_build_candidate_reports_unplaced_when_too_tight():
-    # 2x2 region but a 2x2 townhall + a consumer that cannot fit.
+    from foeopt.packer import build_candidate, PackConfig
     th = _b(1, 0, 0, 2, 2, th=True)
     cons = _b(2, 0, 0, 2, 2, needs=True)
-    layout = Layout(_full_region(2, 2), [th, cons], th)
-    res = build_candidate(layout, PackConfig("h", spacing=2, trunk_x=0))
+    layout = Layout(_full_region(2, 2), [th, cons], th)  # townhall fills the region
+    res = build_candidate(layout, PackConfig("bl", "area"))
     assert any(b.entity_id == 2 for b in res.unplaced)
 
 
@@ -74,7 +74,7 @@ def test_unplaced_has_no_duplicate_entity_ids():
     th = _b(1, 0, 0, 2, 2, th=True)
     cons = [_b(10 + i, 0, 0, 2, 2, needs=True) for i in range(4)]
     layout = Layout(_full_region(4, 4), [th, *cons], th)
-    res = build_candidate(layout, PackConfig("h", spacing=2, trunk_x=0))
+    res = build_candidate(layout, PackConfig("bl", "area"))
     ids = [b.entity_id for b in res.unplaced]
     assert len(ids) == len(set(ids)), f"Duplicate entity_ids in unplaced: {ids}"
 
