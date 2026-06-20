@@ -15,7 +15,7 @@ _ORTHO = ((1, 0), (-1, 0), (0, 1), (0, -1))
 @dataclass
 class PackConfig:
     anchor: str   # Townhall start corner: "bl" | "br" | "tl" | "tr"
-    seed: int     # seeds building order + road-growth tie-breaks
+    seed: int     # seeds the building-order tie-break (road growth is deterministic)
 
 
 @dataclass
@@ -49,21 +49,21 @@ def _corner_fit(grid: Grid, w: int, l: int, anchor: str) -> tuple[int, int] | No
     return None
 
 
-def _road_frontier_cell(grid: Grid, road: set, region, rng=None) -> tuple[int, int] | None:
-    """A free region cell orthogonally adjacent to the road set. Deterministically
-    the bottom-left-most cell; with `rng`, a random pick among the smallest few."""
-    cands = set()
+def _road_frontier_cell(grid: Grid, road: set, region) -> tuple[int, int] | None:
+    """Bottom-left-most free region cell orthogonally adjacent to the road set.
+
+    Deterministic on purpose: randomizing the growth direction measurably degrades
+    the road tree (DarkZig best 58 unplaced vs 17 with bottom-left growth). The
+    multi-start's diversity comes from the anchor and the building order instead.
+    """
+    best = None
     for (rx, ry) in road:
         for dx, dy in _ORTHO:
             n = (rx + dx, ry + dy)
             if n in region and n not in road and grid.is_available(n):
-                cands.add(n)
-    if not cands:
-        return None
-    ordered = sorted(cands)
-    if rng is None:
-        return ordered[0]
-    return rng.choice(ordered[:4])
+                if best is None or n < best:
+                    best = n
+    return best
 
 
 def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
@@ -108,7 +108,7 @@ def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
         bw, bl = b.footprint.width, b.footprint.length
         # Pre-grow road to target length before attempting placement.
         while len(road) < road_target:
-            cell = _road_frontier_cell(grid, road, region, rng)
+            cell = _road_frontier_cell(grid, road, region)
             if cell is None:
                 break
             road.add(cell)
@@ -121,7 +121,7 @@ def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
             # Advance target so road extends past the newly placed building.
             road_target = len(road) + max(bw, bl)
             continue
-        cell = _road_frontier_cell(grid, road, region, rng)
+        cell = _road_frontier_cell(grid, road, region)
         if cell is None:
             break  # cannot grow the road any further
         road.add(cell)
