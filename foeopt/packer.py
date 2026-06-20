@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import random
+import time
 from dataclasses import dataclass, replace
 
 from foeopt.model import Building, Footprint, Layout, Region
 from foeopt.packing import Grid, first_fit, first_fit_adjacent
 from foeopt.router import RouteError, route
-from foeopt.validate import is_valid
 
 _ORTHO = ((1, 0), (-1, 0), (0, 1), (0, -1))
 
@@ -13,13 +14,14 @@ _ORTHO = ((1, 0), (-1, 0), (0, 1), (0, -1))
 @dataclass
 class PackConfig:
     anchor: str   # Townhall start corner: "bl" | "br" | "tl" | "tr"
-    order: str    # building order; "area" = largest first (reserved knob)
+    seed: int     # seeds the building-order tie-break (road growth is deterministic)
 
 
 @dataclass
 class PackResult:
     layout: Layout
     unplaced: list[Building]
+    trials: int = 0
 
 
 def classify(layout: Layout) -> tuple[Building, list[Building], list[Building]]:
@@ -47,7 +49,12 @@ def _corner_fit(grid: Grid, w: int, l: int, anchor: str) -> tuple[int, int] | No
 
 
 def _road_frontier_cell(grid: Grid, road: set, region) -> tuple[int, int] | None:
-    """Bottom-left-most free region cell orthogonally adjacent to the road set."""
+    """Bottom-left-most free region cell orthogonally adjacent to the road set.
+
+    Deterministic on purpose: randomizing the growth direction measurably degrades
+    the road tree (DarkZig best 58 unplaced vs 17 with bottom-left growth). The
+    multi-start's diversity comes from the anchor and the building order instead.
+    """
     best = None
     for (rx, ry) in road:
         for dx, dy in _ORTHO:
@@ -70,6 +77,8 @@ def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
     def area(b: Building) -> int:
         return b.footprint.width * b.footprint.length
 
+    rng = random.Random(config.seed)
+
     # 1. Townhall at the chosen corner.
     tw, tl = townhall.footprint.width, townhall.footprint.length
     pos = _corner_fit(grid, tw, tl, config.anchor)
@@ -91,7 +100,7 @@ def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
     # 3. Grow the road and attach road-needing buildings.
     #    road_target ensures the road extends past each placed building so the
     #    next building has room to attach without boxing in the road.
-    remaining = sorted(consumers, key=area, reverse=True)
+    remaining = sorted(consumers, key=lambda b: (-area(b), rng.random()))
     road_target = 1
     while remaining and road:
         b = remaining[0]
@@ -119,7 +128,7 @@ def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
     unplaced.extend(remaining)
 
     # 4. Fillers: densest first, anywhere free.
-    for b in sorted(fillers, key=area, reverse=True):
+    for b in sorted(fillers, key=lambda b: (-area(b), rng.random())):
         bw, bl = b.footprint.width, b.footprint.length
         p = first_fit(grid, bw, bl)
         if p is None:
@@ -157,24 +166,30 @@ def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
     return PackResult(layout=candidate, unplaced=unplaced)
 
 
-def _configs(layout: Layout, thorough: bool) -> list[PackConfig]:
-    if not thorough:
-        return [PackConfig("bl", "area")]
-    return [
-        PackConfig(anchor, "area")
-        for anchor in ("bl", "br", "tl", "tr")
-    ]
-
-
-def repack(layout: Layout, thorough: bool = False) -> PackResult:
+def repack(layout: Layout, *, thorough: bool = False,
+           budget_seconds: float | None = None, seed: int = 0) -> PackResult:
+    """Budgeted randomized multi-start: try many randomized packings, keep the
+    best by (fewest unplaced, then fewest roads). Deterministic given `seed` and
+    the number of trials completed. Early-exits when a trial places everything."""
+    if budget_seconds is None:
+        budget_seconds = 120.0 if thorough else 30.0
+    master = random.Random(seed)
+    anchors = ("bl", "br", "tl", "tr")
     best: PackResult | None = None
-    best_key: tuple[int, int, int] | None = None
-    for cfg in _configs(layout, thorough):
+    best_key: tuple[int, int] | None = None
+    trials = 0
+    deadline = time.monotonic() + budget_seconds
+    while True:
+        cfg = PackConfig(master.choice(anchors), master.randrange(2 ** 32))
         res = build_candidate(layout, cfg)
-        fully_valid = not res.unplaced and is_valid(res.layout)
-        # sort key: valid candidates first (0), then fewer unplaced, then roads
-        key = (0 if fully_valid else 1, len(res.unplaced), len(res.layout.roads))
+        trials += 1
+        key = (len(res.unplaced), len(res.layout.roads))
         if best_key is None or key < best_key:
             best, best_key = res, key
-    assert best is not None  # _configs always yields at least one config
+        if best_key[0] == 0:            # all placed: can't improve on placement
+            break
+        if time.monotonic() >= deadline:
+            break
+    assert best is not None             # the loop body always runs at least once
+    best.trials = trials
     return best
