@@ -1,5 +1,5 @@
 from foeopt.model import Building, Footprint, Layout, Region
-from foeopt.packer import PackConfig, PackResult, classify, bbox, build_candidate, repack
+from foeopt.packer import PackConfig, PackResult, classify, bbox, build_candidate, repack, _configs
 from foeopt.validate import is_valid
 
 
@@ -117,3 +117,23 @@ def test_build_candidate_conserves_buildings_even_when_partial():
     assert res.unplaced, "region must be tight enough to leave some unplaced"
     assert len(res.layout.buildings) + len(res.unplaced) == len(layout.buildings)
     assert not (placed_ids & unplaced_ids)   # disjoint: no double-listing
+
+
+def test_repack_sparse_city_valid_and_conserves_buildings():
+    th = _b(1, 0, 0, 2, 2, th=True)
+    cons = [_b(10 + i, 0, 0, 2, 2, needs=True) for i in range(4)]
+    fill = [_b(20 + i, 0, 0, 1, 1, needs=False) for i in range(5)]
+    layout = Layout(_full_region(14, 14), [th, *cons, *fill], th)
+    res = repack(layout, thorough=True)
+    assert res.unplaced == []
+    assert is_valid(res.layout)
+    assert len(res.layout.buildings) == len(layout.buildings)
+
+
+def test_repack_configs_are_corner_anchors():
+    th = _b(1, 0, 0, 1, 1, th=True)
+    layout = Layout(_full_region(6, 6), [th], th)
+    fast = _configs(layout, False)
+    thorough = _configs(layout, True)
+    assert len(fast) == 1 and fast[0].anchor == "bl"
+    assert {c.anchor for c in thorough} == {"bl", "br", "tl", "tr"}
