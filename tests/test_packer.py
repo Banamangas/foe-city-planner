@@ -151,8 +151,11 @@ def test_repack_deterministic_given_seed():
     cons = [_b(10 + i, 0, 0, 2, 2, needs=True) for i in range(5)]
     fill = [_b(20 + i, 0, 0, 2, 2, needs=False) for i in range(5)]
     layout = Layout(_full_region(8, 8), [th, *cons, *fill], th)  # tight: not all fit
-    a = repack(layout, budget_seconds=0.3, seed=7)
-    b = repack(layout, budget_seconds=0.3, seed=7)
+    # budget 0.0 pins both runs to exactly one trial, so the comparison is not
+    # subject to timing-dependent trial counts (same seed -> identical result).
+    a = repack(layout, budget_seconds=0.0, seed=7)
+    b = repack(layout, budget_seconds=0.0, seed=7)
+    assert a.trials == b.trials == 1
     assert len(a.unplaced) == len(b.unplaced)
     assert len(a.layout.roads) == len(b.layout.roads)
 
