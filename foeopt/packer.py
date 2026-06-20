@@ -7,7 +7,6 @@ from dataclasses import dataclass, replace
 from foeopt.model import Building, Footprint, Layout, Region
 from foeopt.packing import Grid, first_fit, first_fit_adjacent
 from foeopt.router import RouteError, route
-from foeopt.validate import is_valid
 
 _ORTHO = ((1, 0), (-1, 0), (0, 1), (0, -1))
 
