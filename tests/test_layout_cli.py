@@ -4,6 +4,15 @@ from foeopt.report import road_estimate
 from foeopt.validate import is_valid
 
 
+def test_layout_cli_accepts_budget_and_seed():
+    from foeopt.cli import build_parser
+    parser = build_parser()
+    args = parser.parse_args(["layout", "city.json", "--budget", "0.2", "--seed", "3"])
+    assert args.budget == 0.2
+    assert args.seed == 3
+    assert args.thorough is False
+
+
 def test_layout_reports_road_estimate(city_data, helper_data):
     current = build_layout(city_data, helper_data)
     est = road_estimate(current)
