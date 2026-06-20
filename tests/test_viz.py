@@ -12,7 +12,7 @@ def test_render_comparison_embeds_both_layouts(city_data, helper_data):
     from foeopt.build import build_layout
     from foeopt.packer import repack
     current = build_layout(city_data, helper_data)
-    optimized = repack(current, thorough=False).layout
+    optimized = repack(current, budget_seconds=0.3).layout
     html = render_comparison(current, optimized)
     assert html.lstrip().startswith("<!DOCTYPE html>")
     assert "http://" not in html and "https://" not in html

@@ -1,5 +1,5 @@
 from foeopt.model import Building, Footprint, Layout, Region
-from foeopt.packer import PackConfig, PackResult, classify, bbox, build_candidate, repack, _configs
+from foeopt.packer import PackConfig, PackResult, classify, bbox, build_candidate, repack
 from foeopt.validate import is_valid
 
 
@@ -84,7 +84,7 @@ def test_repack_sparse_city_is_valid_and_conserves_buildings():
     cons = [_b(10 + i, 0, 0, 2, 2, needs=True) for i in range(4)]
     fill = [_b(20 + i, 0, 0, 1, 1, needs=False) for i in range(5)]
     layout = Layout(_full_region(12, 12), [th, *cons, *fill], th)
-    res = repack(layout, thorough=True)
+    res = repack(layout, budget_seconds=0.3, seed=0)
     assert res.unplaced == []
     assert is_valid(res.layout)
     assert len(res.layout.buildings) == len(layout.buildings)
@@ -95,7 +95,7 @@ def test_repack_prefers_fewer_unplaced():
     th = _b(1, 0, 0, 2, 2, th=True)
     cons = [_b(10 + i, 0, 0, 2, 2, needs=True) for i in range(3)]
     layout = Layout(_full_region(6, 6), [th, *cons], th)
-    res = repack(layout, thorough=True)
+    res = repack(layout, budget_seconds=0.3, seed=0)
     # whatever the outcome, the returned layout never overlaps / leaves region
     occ = set()
     for b in res.layout.buildings:
@@ -124,19 +124,10 @@ def test_repack_sparse_city_valid_and_conserves_buildings():
     cons = [_b(10 + i, 0, 0, 2, 2, needs=True) for i in range(4)]
     fill = [_b(20 + i, 0, 0, 1, 1, needs=False) for i in range(5)]
     layout = Layout(_full_region(14, 14), [th, *cons, *fill], th)
-    res = repack(layout, thorough=True)
+    res = repack(layout, budget_seconds=0.3, seed=0)
     assert res.unplaced == []
     assert is_valid(res.layout)
     assert len(res.layout.buildings) == len(layout.buildings)
-
-
-def test_repack_configs_are_corner_anchors():
-    th = _b(1, 0, 0, 1, 1, th=True)
-    layout = Layout(_full_region(6, 6), [th], th)
-    fast = _configs(layout, False)
-    thorough = _configs(layout, True)
-    assert len(fast) == 1 and fast[0].anchor == "bl"
-    assert {c.anchor for c in thorough} == {"bl", "br", "tl", "tr"}
 
 
 def test_build_candidate_deterministic_given_config():
@@ -152,3 +143,39 @@ def test_build_candidate_deterministic_given_config():
     assert pa == pb
     assert a.layout.roads == b.layout.roads
     assert [x.entity_id for x in a.unplaced] == [x.entity_id for x in b.unplaced]
+
+
+def test_repack_deterministic_given_seed():
+    from foeopt.packer import repack
+    th = _b(1, 0, 0, 2, 2, th=True)
+    cons = [_b(10 + i, 0, 0, 2, 2, needs=True) for i in range(5)]
+    fill = [_b(20 + i, 0, 0, 2, 2, needs=False) for i in range(5)]
+    layout = Layout(_full_region(8, 8), [th, *cons, *fill], th)  # tight: not all fit
+    a = repack(layout, budget_seconds=0.3, seed=7)
+    b = repack(layout, budget_seconds=0.3, seed=7)
+    assert len(a.unplaced) == len(b.unplaced)
+    assert len(a.layout.roads) == len(b.layout.roads)
+
+
+def test_repack_no_worse_than_single_pass():
+    from foeopt.packer import repack, build_candidate, PackConfig
+    th = _b(1, 0, 0, 2, 2, th=True)
+    cons = [_b(10 + i, 0, 0, 2, 2, needs=True) for i in range(6)]
+    fill = [_b(20 + i, 0, 0, 2, 2, needs=False) for i in range(6)]
+    layout = Layout(_full_region(8, 8), [th, *cons, *fill], th)  # tight
+    single = build_candidate(layout, PackConfig("bl", 0))
+    multi = repack(layout, budget_seconds=0.5, seed=0)
+    assert len(multi.unplaced) <= len(single.unplaced)
+
+
+def test_repack_early_exit_on_sparse():
+    from foeopt.packer import repack
+    from foeopt.validate import is_valid
+    th = _b(1, 0, 0, 2, 2, th=True)
+    cons = [_b(10 + i, 0, 0, 2, 2, needs=True) for i in range(3)]
+    fill = [_b(20 + i, 0, 0, 1, 1, needs=False) for i in range(3)]
+    layout = Layout(_full_region(20, 20), [th, *cons, *fill], th)  # very sparse
+    res = repack(layout, budget_seconds=10.0, seed=0)
+    assert res.unplaced == []
+    assert is_valid(res.layout)
+    assert res.trials == 1   # first trial places all -> early exit (no 10s spent)
