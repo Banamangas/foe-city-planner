@@ -1,0 +1,13 @@
+:root { --bg:#141414; --panel:#1e1e1e; --fg:#e8e8e8; --accent:#2980b9; }
+body { background:var(--bg); color:var(--fg); font:14px/1.5 system-ui, sans-serif; margin:0; padding:1.5rem; }
+h1 { margin:0 0 1rem; } h2 { margin:0 0 .75rem; font-size:1rem; color:#bbb; }
+.panel { background:var(--panel); border:1px solid #333; border-radius:8px; padding:1rem; margin-bottom:1rem; }
+label { margin-right:1rem; } input, select, button { font:inherit; }
+button { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:.4rem .8rem; cursor:pointer; }
+button:disabled { opacity:.5; cursor:default; }
+table { width:100%; border-collapse:collapse; margin-top:.75rem; }
+th, td { text-align:left; padding:.25rem .5rem; border-bottom:1px solid #2a2a2a; }
+#map svg { max-width:100%; height:auto; background:var(--bg); }
+.removed { opacity:.4; text-decoration:line-through; }
+#stats { margin-bottom:.5rem; color:#9ccc65; }
+.err { color:#e57373; }
