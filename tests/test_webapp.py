@@ -39,6 +39,11 @@ def test_bad_upload_returns_400(client):
     assert r.status_code == 400
 
 
+def test_static_assets_served(client):
+    assert client.get("/static/app.js").status_code == 200
+    assert client.get("/static/style.css").status_code == 200
+
+
 def test_run_and_status(client, repo_root):
     with open(repo_root / CITY, "rb") as cf, open(repo_root / HELPER, "rb") as hf:
         client.post("/load", data={"city": (cf, CITY), "helper": (hf, HELPER)},
