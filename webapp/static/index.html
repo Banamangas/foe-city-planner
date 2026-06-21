@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FoE City Planner</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <h1>FoE City Planner</h1>
+
+  <section class="panel">
+    <h2>1. Load city</h2>
+    <label>City file <input type="file" id="city-file" accept=".json,.txt"></label>
+    <label>Helper (optional) <input type="file" id="helper-file" accept=".json"></label>
+    <button id="load-btn">Load</button>
+    <span id="load-info"></span>
+  </section>
+
+  <section class="panel">
+    <h2>2. Buildings</h2>
+    <form id="add-form">
+      <input type="number" id="add-w" min="1" placeholder="width" required>
+      <input type="number" id="add-l" min="1" placeholder="length" required>
+      <label><input type="checkbox" id="add-road"> needs road</label>
+      <input type="text" id="add-name" placeholder="name (optional)">
+      <button type="submit">Add building</button>
+    </form>
+    <table id="building-table"><thead>
+      <tr><th>keep</th><th>name</th><th>size</th><th>road</th></tr>
+    </thead><tbody></tbody></table>
+  </section>
+
+  <section class="panel">
+    <h2>3. Run</h2>
+    <label>Mode
+      <select id="mode"><option value="repack">Re-pack</option><option value="sweep">Parallel sweep</option></select>
+    </label>
+    <label>Budget (s) <input type="number" id="budget" value="30" min="1"></label>
+    <span id="repack-opts"><label>Seed <input type="number" id="seed" value="0"></label></span>
+    <span id="sweep-opts" hidden><label>Seeds <input type="number" id="seeds" value="8" min="1"></label></span>
+    <button id="run-btn" disabled>Run</button>
+    <span id="run-status"></span>
+  </section>
+
+  <section class="panel">
+    <h2>Result</h2>
+    <div id="stats"></div>
+    <button id="download-btn" hidden>Download map</button>
+    <div id="map"></div>
+  </section>
+  <script src="/static/app.js"></script>
+</body>
+</html>
