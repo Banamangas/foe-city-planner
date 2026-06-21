@@ -38,6 +38,10 @@ def create_app() -> Flask:
             layout = load_layout(city_path, helper_path)
         except Exception as exc:
             return jsonify(error=f"could not parse city: {exc}"), 400
+        finally:
+            for p in (city_path, helper_path):
+                if p:
+                    os.unlink(p)
         state["layout"] = layout
         buildings = [{
             "entity_id": b.entity_id, "name": b.name,
@@ -51,7 +55,7 @@ def create_app() -> Flask:
     def run():
         if state["layout"] is None:
             return jsonify(error="load a city first"), 400
-        data = request.get_json(force=True)
+        data = request.get_json(force=True, silent=True) or {}
         try:
             edited = apply_edits(state["layout"], set(data.get("remove_ids", [])),
                                  data.get("add_specs", []))
