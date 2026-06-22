@@ -31,6 +31,14 @@ def test_jobmanager_runs_and_reports():
     assert st["elapsed"] >= 0
 
 
+def test_run_repack_polish_not_worse_and_reports_base():
+    from webapp.runner import run_repack
+    res = run_repack(_sparse_city(), budget=0.3, seed=0, anneal_budget=0.4)
+    assert res["unplaced"] == 0 and res["valid"] is True
+    assert "base_roads" in res
+    assert res["roads"] <= res["base_roads"]   # anneal never worse
+
+
 def test_jobmanager_reports_error():
     jm = JobManager()
     def boom():
