@@ -17,4 +17,5 @@ def polish(layout: Layout, *, repack_budget: float, anneal_budget: float,
     refined = anneal(base.layout, budget_seconds=anneal_budget, seed=seed)
     final = Layout(layout.region, refined.layout.buildings,
                    refined.layout.townhall, route(refined.layout))
-    return PackResult(layout=final, unplaced=base.unplaced, trials=base.trials)
+    return PackResult(layout=final, unplaced=base.unplaced, trials=base.trials,
+                      base_roads=len(base.layout.roads))
