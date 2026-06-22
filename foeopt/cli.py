@@ -11,6 +11,7 @@ from foeopt.viz import render_html, render_comparison
 from foeopt.packer import repack
 from foeopt.localsearch import optimize
 from foeopt.anneal import anneal
+from foeopt.polish import polish
 
 
 def _cmd_view(args) -> int:
@@ -44,8 +45,13 @@ def _cmd_roads(args) -> int:
 
 def _cmd_layout(args) -> int:
     current = load_layout(args.city, args.helper)
-    budget = _resolve_budget(args.budget, args.thorough)
-    res = repack(current, budget_seconds=budget, seed=args.seed)
+    rbudget = _resolve_budget(args.budget, args.thorough)
+    if args.polish:
+        base = repack(current, budget_seconds=rbudget, seed=args.seed)
+        res = polish(current, repack_budget=rbudget, anneal_budget=args.anneal_budget, seed=args.seed)
+        print(f"  polished roads: {len(base.layout.roads)} -> {len(res.layout.roads)}")
+    else:
+        res = repack(current, budget_seconds=rbudget, seed=args.seed)
     s = stats(current, res.layout.roads)
     print("Full re-pack (Phase 2):")
     print(f"  buildings: {len(current.buildings)} | placed: "
@@ -115,6 +121,10 @@ def build_parser() -> argparse.ArgumentParser:
                           help="time budget in seconds (overrides default/--thorough)")
     p_layout.add_argument("--seed", type=int, default=0,
                           help="RNG seed for the multi-start search (deterministic)")
+    p_layout.add_argument("--polish", action="store_true",
+                          help="refine the re-pack with annealing (lower roads)")
+    p_layout.add_argument("--anneal-budget", type=float, default=120.0,
+                          help="seconds for the anneal phase when --polish (default 120)")
     p_layout.set_defaults(func=_cmd_layout)
 
     p_improve = sub.add_parser("improve", help="lower roads via local-search building moves")
