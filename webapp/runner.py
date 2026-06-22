@@ -61,6 +61,7 @@ def run_sweep(layout: Layout, *, budget: float, seeds: int, workers: int,
             results.append(r)
     ok = [r for r in results if r[2] == 0]
     winner = min(ok, key=lambda r: r[1]) if ok else min(results, key=lambda r: (r[2], r[1]))
+    # the sweep already explored seeds to pick the best base; polish it with a fixed seed
     packed, base_roads = _anneal_base(layout, winner[3], anneal_budget, 0)
     d = _result(layout, packed)
     d["base_roads"] = base_roads

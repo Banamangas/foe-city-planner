@@ -47,9 +47,8 @@ def _cmd_layout(args) -> int:
     current = load_layout(args.city, args.helper)
     rbudget = _resolve_budget(args.budget, args.thorough)
     if args.polish:
-        base = repack(current, budget_seconds=rbudget, seed=args.seed)
         res = polish(current, repack_budget=rbudget, anneal_budget=args.anneal_budget, seed=args.seed)
-        print(f"  polished roads: {len(base.layout.roads)} -> {len(res.layout.roads)}")
+        print(f"  polished roads: {res.base_roads} -> {len(res.layout.roads)}")
     else:
         res = repack(current, budget_seconds=rbudget, seed=args.seed)
     s = stats(current, res.layout.roads)
