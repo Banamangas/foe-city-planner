@@ -36,3 +36,11 @@ def test_repack_real_city_is_valid_or_reports_unplaced(city_data, helper_data):
     else:
         # otherwise the shortfall is reported explicitly (expected at 96.6% density)
         assert len(res.unplaced) > 0
+
+
+def test_layout_cli_accepts_polish_flags():
+    from foeopt.cli import build_parser
+    parser = build_parser()
+    args = parser.parse_args(["layout", "city.json", "--polish", "--anneal-budget", "0.2"])
+    assert args.polish is True
+    assert args.anneal_budget == 0.2
