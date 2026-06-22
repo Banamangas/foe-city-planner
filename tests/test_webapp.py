@@ -44,6 +44,10 @@ def test_static_assets_served(client):
     assert client.get("/static/style.css").status_code == 200
 
 
+def test_index_has_polish_control(client):
+    assert b'id="polish"' in client.get("/").data
+
+
 def test_run_with_polish(client, repo_root):
     import time
     with open(repo_root / CITY, "rb") as cf, open(repo_root / HELPER, "rb") as hf:
