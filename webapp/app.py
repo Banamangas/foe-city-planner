@@ -63,13 +63,16 @@ def create_app() -> Flask:
             return jsonify(error=str(exc)), 400
         mode = data.get("mode", "repack")
         budget = float(data.get("budget", 30))
+        anneal_budget = float(data.get("anneal_budget", 0)) if data.get("polish") else 0.0
         if mode == "sweep":
             seeds = int(data.get("seeds", 8))
             workers = int(data.get("workers", os.cpu_count() or 1))
-            job_id = jobs.submit(lambda: run_sweep(edited, budget=budget, seeds=seeds, workers=workers))
+            job_id = jobs.submit(lambda: run_sweep(edited, budget=budget, seeds=seeds,
+                                                   workers=workers, anneal_budget=anneal_budget))
         else:
             seed = int(data.get("seed", 0))
-            job_id = jobs.submit(lambda: run_repack(edited, budget=budget, seed=seed))
+            job_id = jobs.submit(lambda: run_repack(edited, budget=budget, seed=seed,
+                                                    anneal_budget=anneal_budget))
         return jsonify(job_id=job_id)
 
     @app.get("/status/<job_id>")

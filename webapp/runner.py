@@ -5,9 +5,11 @@ import time
 import uuid
 from concurrent.futures import ProcessPoolExecutor
 
+from foeopt.anneal import anneal
 from foeopt.model import Layout
-from foeopt.packer import repack
+from foeopt.packer import PackResult, repack
 from foeopt.report import road_estimate
+from foeopt.router import route
 from foeopt.validate import is_valid
 from foeopt.viz import render_html
 
@@ -25,8 +27,23 @@ def _result(layout: Layout, packed) -> dict:
     }
 
 
-def run_repack(layout: Layout, *, budget: float, seed: int) -> dict:
-    return _result(layout, repack(layout, budget_seconds=budget, seed=seed))
+def _anneal_base(layout: Layout, packed: PackResult, anneal_budget: float, seed: int):
+    """Return a PackResult refined by annealing (or the base unchanged)."""
+    if anneal_budget <= 0:
+        return packed, len(packed.layout.roads)
+    base_roads = len(packed.layout.roads)
+    refined = anneal(packed.layout, budget_seconds=anneal_budget, seed=seed)
+    final = Layout(layout.region, refined.layout.buildings,
+                   refined.layout.townhall, route(refined.layout))
+    return PackResult(final, packed.unplaced, packed.trials), base_roads
+
+
+def run_repack(layout: Layout, *, budget: float, seed: int, anneal_budget: float = 0.0) -> dict:
+    packed, base_roads = _anneal_base(layout, repack(layout, budget_seconds=budget, seed=seed),
+                                      anneal_budget, seed)
+    d = _result(layout, packed)
+    d["base_roads"] = base_roads
+    return d
 
 
 def _sweep_one(args):
@@ -35,7 +52,8 @@ def _sweep_one(args):
     return seed, len(r.layout.roads), len(r.unplaced), r
 
 
-def run_sweep(layout: Layout, *, budget: float, seeds: int, workers: int) -> dict:
+def run_sweep(layout: Layout, *, budget: float, seeds: int, workers: int,
+              anneal_budget: float = 0.0) -> dict:
     tasks = [(layout, budget, s) for s in range(seeds)]
     results = []
     with ProcessPoolExecutor(max_workers=max(1, workers)) as ex:
@@ -43,7 +61,10 @@ def run_sweep(layout: Layout, *, budget: float, seeds: int, workers: int) -> dic
             results.append(r)
     ok = [r for r in results if r[2] == 0]
     winner = min(ok, key=lambda r: r[1]) if ok else min(results, key=lambda r: (r[2], r[1]))
-    return _result(layout, winner[3])
+    packed, base_roads = _anneal_base(layout, winner[3], anneal_budget, 0)
+    d = _result(layout, packed)
+    d["base_roads"] = base_roads
+    return d
 
 
 class JobManager:
