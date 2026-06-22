@@ -22,6 +22,7 @@ class PackResult:
     layout: Layout
     unplaced: list[Building]
     trials: int = 0
+    base_roads: int | None = None   # roads before any polish (anneal); set by polish()
 
 
 def classify(layout: Layout) -> tuple[Building, list[Building], list[Building]]:
