@@ -60,6 +60,8 @@ $("mode").onchange = () => {
   $("repack-opts").hidden = sweep;
 };
 
+$("polish").onchange = () => { $("polish-opts").hidden = !$("polish").checked; };
+
 $("run-btn").onclick = async () => {
   const body = {
     remove_ids: buildings.filter((b) => b.removed).map((b) => b.entity_id),
@@ -68,6 +70,8 @@ $("run-btn").onclick = async () => {
     budget: +$("budget").value,
     seed: +$("seed").value,
     seeds: +$("seeds").value,
+    polish: $("polish").checked,
+    anneal_budget: +$("anneal-budget").value,
   };
   $("run-btn").disabled = true;
   $("run-status").textContent = "running…";
@@ -84,7 +88,8 @@ async function poll(id) {
   $("run-btn").disabled = false;
   if (st.state === "error") { $("stats").innerHTML = `<span class="err">${st.error}</span>`; return; }
   const res = st.result;
-  $("stats").textContent = `placed ${res.placed} · unplaced ${res.unplaced} · roads ${res.roads} (est ${res.estimate}) · ${res.valid ? "valid" : "partial"}`;
+  const gain = (res.base_roads != null && res.base_roads !== res.roads) ? ` (from ${res.base_roads})` : "";
+  $("stats").textContent = `placed ${res.placed} · unplaced ${res.unplaced} · roads ${res.roads}${gain} (est ${res.estimate}) · ${res.valid ? "valid" : "partial"}`;
   $("map").innerHTML = res.map_html;
   lastMap = res.map_html;
   $("download-btn").hidden = false;
