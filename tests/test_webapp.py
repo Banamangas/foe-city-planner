@@ -44,6 +44,23 @@ def test_static_assets_served(client):
     assert client.get("/static/style.css").status_code == 200
 
 
+def test_run_with_polish(client, repo_root):
+    import time
+    with open(repo_root / CITY, "rb") as cf, open(repo_root / HELPER, "rb") as hf:
+        client.post("/load", data={"city": (cf, CITY), "helper": (hf, HELPER)},
+                    content_type="multipart/form-data")
+    r = client.post("/run", json={"remove_ids": [], "add_specs": [], "mode": "repack",
+                                  "budget": 0.3, "seed": 0, "polish": True, "anneal_budget": 0.3})
+    jid = r.get_json()["job_id"]
+    for _ in range(200):
+        st = client.get(f"/status/{jid}").get_json()
+        if st["state"] in ("done", "error"):
+            break
+        time.sleep(0.1)
+    assert st["state"] == "done", st
+    assert st["result"]["roads"] <= st["result"]["base_roads"]
+
+
 def test_run_and_status(client, repo_root):
     with open(repo_root / CITY, "rb") as cf, open(repo_root / HELPER, "rb") as hf:
         client.post("/load", data={"city": (cf, CITY), "helper": (hf, HELPER)},
