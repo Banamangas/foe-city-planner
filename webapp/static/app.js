@@ -4,6 +4,17 @@ let lastMap = "";
 
 const $ = (id) => document.getElementById(id);
 
+// Parse a response body as JSON, but check status FIRST: an error response may
+// be an HTML page (e.g. a 500), and calling .json() on it throws. Without this
+// guard a single failed request leaves the UI frozen on "running" forever.
+async function jsonOrThrow(resp) {
+  let body = null;
+  try { body = await resp.json(); } catch { /* non-JSON body (HTML error page) */ }
+  if (!resp.ok) throw new Error((body && body.error) || `server error ${resp.status}`);
+  if (body === null) throw new Error("server returned an unreadable response");
+  return body;
+}
+
 function renderTable() {
   const tb = $("building-table").querySelector("tbody");
   tb.innerHTML = "";
@@ -30,18 +41,20 @@ function renderTable() {
 }
 
 $("load-btn").onclick = async () => {
-  const fd = new FormData();
   if (!$("city-file").files[0]) return;
+  const fd = new FormData();
   fd.append("city", $("city-file").files[0]);
   if ($("helper-file").files[0]) fd.append("helper", $("helper-file").files[0]);
-  const r = await fetch("/load", { method: "POST", body: fd });
-  const j = await r.json();
-  if (!r.ok) { $("load-info").innerHTML = `<span class="err">${j.error}</span>`; return; }
-  buildings = j.buildings.map((b) => ({ ...b, removed: false }));
-  added = [];
-  $("load-info").textContent = `${j.buildings.length} buildings · region ${j.region_cells} cells · estimate ${j.road_estimate} roads`;
-  $("run-btn").disabled = false;
-  renderTable();
+  try {
+    const j = await jsonOrThrow(await fetch("/load", { method: "POST", body: fd }));
+    buildings = j.buildings.map((b) => ({ ...b, removed: false }));
+    added = [];
+    $("load-info").textContent = `${j.buildings.length} buildings · region ${j.region_cells} cells · estimate ${j.road_estimate} roads`;
+    $("run-btn").disabled = false;
+    renderTable();
+  } catch (e) {
+    $("load-info").innerHTML = `<span class="err">${e.message}</span>`;
+  }
 };
 
 $("add-form").onsubmit = (e) => {
@@ -75,14 +88,29 @@ $("run-btn").onclick = async () => {
   };
   $("run-btn").disabled = true;
   $("run-status").textContent = "running…";
-  const r = await fetch("/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  const j = await r.json();
-  if (!r.ok) { $("run-status").innerHTML = `<span class="err">${j.error}</span>`; $("run-btn").disabled = false; return; }
-  poll(j.job_id);
+  try {
+    const j = await jsonOrThrow(await fetch("/run", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }));
+    poll(j.job_id);
+  } catch (e) {
+    $("run-status").innerHTML = `<span class="err">${e.message}</span>`;
+    $("run-btn").disabled = false;
+  }
 };
 
-async function poll(id) {
-  const st = await (await fetch(`/status/${id}`)).json();
+async function poll(id, fails = 0) {
+  let st;
+  try {
+    st = await jsonOrThrow(await fetch(`/status/${id}`));
+  } catch (e) {
+    // Transient hiccup (server busy under a sweep, dropped connection): retry a
+    // few times rather than freezing. Give up loudly after persistent failure.
+    if (fails < 5) { setTimeout(() => poll(id, fails + 1), 1000); return; }
+    $("run-status").innerHTML = `<span class="err">lost contact with server: ${e.message}</span>`;
+    $("run-btn").disabled = false;
+    return;
+  }
   $("run-status").textContent = `${st.state} (${st.elapsed}s)`;
   if (st.state === "running") { setTimeout(() => poll(id), 1000); return; }
   $("run-btn").disabled = false;
@@ -90,7 +118,13 @@ async function poll(id) {
   const res = st.result;
   const gain = (res.base_roads != null && res.base_roads !== res.roads) ? ` (from ${res.base_roads})` : "";
   $("stats").textContent = `placed ${res.placed} · unplaced ${res.unplaced} · roads ${res.roads}${gain} (est ${res.estimate}) · ${res.valid ? "valid" : "partial"}`;
-  $("map").innerHTML = res.map_html;
+  // render_html returns a full HTML document with its own <script> (the canvas
+  // renderer). Scripts injected via innerHTML never run, so the map must go in
+  // an iframe via srcdoc, which executes the document in its own context.
+  const frame = document.createElement("iframe");
+  frame.title = "city map";
+  frame.srcdoc = res.map_html;
+  $("map").replaceChildren(frame);
   lastMap = res.map_html;
   $("download-btn").hidden = false;
 }

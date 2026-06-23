@@ -65,6 +65,29 @@ def test_run_with_polish(client, repo_root):
     assert st["result"]["roads"] <= st["result"]["base_roads"]
 
 
+def _load(client, repo_root):
+    with open(repo_root / CITY, "rb") as cf, open(repo_root / HELPER, "rb") as hf:
+        client.post("/load", data={"city": (cf, CITY), "helper": (hf, HELPER)},
+                    content_type="multipart/form-data")
+
+
+@pytest.mark.parametrize("payload", [
+    {"mode": "repack", "budget": 0.3, "add_specs": [{"name": "x"}]},        # missing width/length
+    {"mode": "repack", "budget": 0.3, "add_specs": [{"width": 2}]},          # missing length
+    {"mode": "repack", "budget": 0.3, "add_specs": "notalist"},              # add_specs not a list
+    {"mode": "repack", "budget": "abc"},                                      # non-numeric budget
+    {"mode": "sweep", "budget": 0.3, "seeds": "lots"},                       # non-numeric seeds
+])
+def test_run_bad_input_returns_400_json(client, repo_root, payload):
+    """Malformed run input must return a structured 400 JSON error, never a 500
+    HTML page (which makes the browser's r.json() throw and freezes the UI)."""
+    _load(client, repo_root)
+    r = client.post("/run", json=payload)
+    assert r.status_code == 400, r.data
+    assert r.is_json, r.content_type
+    assert "error" in r.get_json()
+
+
 def test_run_and_status(client, repo_root):
     with open(repo_root / CITY, "rb") as cf, open(repo_root / HELPER, "rb") as hf:
         client.post("/load", data={"city": (cf, CITY), "helper": (hf, HELPER)},
