@@ -108,3 +108,45 @@ def test_prune_real_city_output_is_valid(city_data, helper_data):
     probe = Layout(layout.region, layout.buildings, layout.townhall, roads)
     assert unsatisfied(probe) == []        # every consumer connected & covered
     assert len(roads) == 142               # golden count preserved
+
+
+def test_route_free_param_matches_full_route_small():
+    # The optional precomputed `free` set must produce byte-identical output to
+    # the from-scratch free_cells(layout) computation.
+    layout = Layout(_region(5, 1), [_th(0, 0), _house(2, 4, 0)], _th(0, 0))
+    assert route(layout, free=free_cells(layout)) == route(layout)
+    layout2 = Layout(_region(5, 2),
+                     [_th(0, 0), _house(2, 4, 0), _house(3, 4, 1)], _th(0, 0))
+    assert route(layout2, free=free_cells(layout2)) == route(layout2)
+
+
+def test_route_free_param_oracle_on_real_city(city_data, helper_data):
+    # Incremental-scoring oracle (OPTIMIZER_REVIEW.md Task A): route(cand, free=F)
+    # with F == free_cells(cand) must agree with full route(cand) on the entire
+    # road dict AND on raising RouteError, over a corpus of random single moves.
+    import random
+    from foeopt.build import build_layout
+    from foeopt.anneal import random_move
+    from foeopt.model import Layout
+
+    layout = build_layout(city_data, helper_data)
+    base = route(layout)
+    assert route(layout, free=free_cells(layout)) == base
+    state = Layout(layout.region, layout.buildings, layout.townhall, base)
+    rng = random.Random(2024)
+    matched = errors = 0
+    for _ in range(1500):
+        cand = random_move(state, rng)
+        if cand is None:
+            continue
+        f = free_cells(cand)
+        try:
+            plain = route(cand)
+        except RouteError:
+            with pytest.raises(RouteError):
+                route(cand, free=f)
+            errors += 1
+            continue
+        assert route(cand, free=f) == plain      # byte-identical road dict
+        matched += 1
+    assert matched > 0 and errors > 0            # the corpus exercised both paths

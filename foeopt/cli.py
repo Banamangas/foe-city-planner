@@ -87,7 +87,8 @@ def _cmd_improve(args) -> int:
     s = stats(current, res.layout.roads)
     print(f"Road optimization ({engine}):")
     print(f"  current roads: {s['current_roads']} | optimized roads: {s['optimized_roads']}"
-          f" | tiles_saved: {s['tiles_saved']} | moves: {res.moves_applied}")
+          f" | tiles_saved: {s['tiles_saved']} | moves: {res.moves_applied}"
+          f" | evaluated: {res.moves_evaluated}")
     Path(args.out).write_text(render_comparison(current, res.layout), encoding="utf-8")
     print(f"Wrote before/after map to {args.out}")
     return 0
