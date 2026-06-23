@@ -50,6 +50,15 @@ city's density: sparse cities yield real road savings; very dense cities (little
 may not fit a full re-pack, in which case it reports the buildings it could not place rather
 than emitting an invalid layout.
 
+## Web UI
+
+A Flask app wraps the same engines in a browser: upload an export, run a repack (with an
+optional anneal/polish pass), and view the before/after map inline.
+
+    uv run python -m webapp.app
+
+Then open http://localhost:5000 — upload your export file, choose a budget, and run.
+
 ## Input formats
 
 Every command auto-detects the export format — just pass the file(s):
