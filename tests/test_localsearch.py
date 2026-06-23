@@ -120,6 +120,59 @@ def test_optimize_never_worse_and_valid():
     assert is_valid(res.layout)
 
 
+def _positions(layout):
+    return [(b.entity_id, b.footprint.x, b.footprint.y) for b in layout.buildings]
+
+
+def test_incremental_move_matches_move_building(city_data, helper_data):
+    # _move_with_free must produce a layout identical to move_building and a
+    # cand_free identical to free_cells(cand) — the basis for incremental scoring.
+    import random
+    from foeopt.build import build_layout
+    from foeopt.localsearch import _move_with_free
+    from foeopt.router import route
+    layout = build_layout(city_data, helper_data)
+    layout = Layout(layout.region, layout.buildings, layout.townhall, route(layout))
+    free = free_cells(layout)
+    movable = [b for b in layout.buildings if not b.is_townhall]
+    free_list = sorted(free)
+    rng = random.Random(99)
+    valid = 0
+    for _ in range(800):
+        b = rng.choice(movable)
+        x, y = rng.choice(free_list)
+        ref = move_building(layout, b.entity_id, x, y)
+        inc = _move_with_free(layout, b, x, y, free)
+        assert (ref is None) == (inc is None)        # validity agrees
+        if ref is None:
+            continue
+        valid += 1
+        cand, cand_free = inc
+        assert _positions(cand) == _positions(ref)   # same layout
+        assert cand_free == free_cells(ref)          # free maintained exactly
+    assert valid > 0                                  # corpus exercised valid moves
+
+
+def test_incremental_swap_matches_swap_buildings(city_data, helper_data):
+    import random
+    from foeopt.build import build_layout
+    from foeopt.localsearch import _swap_with_free, _find
+    from foeopt.router import route
+    layout = build_layout(city_data, helper_data)
+    layout = Layout(layout.region, layout.buildings, layout.townhall, route(layout))
+    free = free_cells(layout)
+    pairs = same_footprint_swaps(layout)
+    assert pairs
+    for ida, idb in random.Random(7).sample(pairs, min(500, len(pairs))):
+        a, b = _find(layout, ida), _find(layout, idb)
+        ref = swap_buildings(layout, ida, idb)
+        cand, cand_free = _swap_with_free(layout, a, b, free)
+        assert ref is not None
+        assert _positions(cand) == _positions(ref)   # same layout
+        # equal-footprint swap leaves occupancy (and hence the free set) unchanged
+        assert cand_free == free == free_cells(ref)
+
+
 def test_optimize_finds_improving_swap():
     # Two same-size road-needing houses; one is far (needs a long spur), one near.
     # A 6x2 grid: TH(0,0) houseNear(2,0) houseFar(5,0); row 1 used for routing.
