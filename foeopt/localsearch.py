@@ -75,6 +75,59 @@ def free_cells(layout: Layout) -> set[tuple[int, int]]:
     return set(layout.region.cells) - _cells_except(layout, set())
 
 
+# --- Incremental candidate construction (for the search loops) ---------------
+# These mirror move_building / swap_buildings exactly but, given the parent
+# layout's free-cell set, produce the candidate's free set by an O(footprint)
+# delta instead of the O(all-buildings) occupancy rebuild that move_building /
+# swap_buildings / free_cells each pay. route(cand, free=cand_free) then skips
+# its own occupancy rebuild. Equivalence to the non-incremental path (same
+# layout, and cand_free == free_cells(cand)) is asserted in tests.
+
+def _move_with_free(
+    layout: Layout, target: Building, new_x: int, new_y: int, free: set[tuple[int, int]]
+) -> tuple[Layout, set[tuple[int, int]]] | None:
+    """Incremental move_building. Returns (cand, cand_free) or None for an invalid
+    move, with cand identical to move_building(layout, target.entity_id, nx, ny)."""
+    fp = Footprint(new_x, new_y, target.footprint.width, target.footprint.length)
+    new_cells = fp.cells()
+    if not new_cells <= layout.region.cells:
+        return None
+    old_cells = target.footprint.cells()
+    # newly-occupied cells (new minus the building's own vacated cells) must be free
+    if not (new_cells - old_cells) <= free:
+        return None
+    moved = replace(target, footprint=fp)
+    buildings = [moved if b.entity_id == target.entity_id else b for b in layout.buildings]
+    townhall = moved if target.is_townhall else layout.townhall
+    cand = Layout(region=layout.region, buildings=buildings, townhall=townhall, roads={})
+    cand_free = (free | old_cells) - new_cells
+    return cand, cand_free
+
+
+def _swap_with_free(
+    layout: Layout, a: Building, b: Building, free: set[tuple[int, int]]
+) -> tuple[Layout, set[tuple[int, int]]]:
+    """Incremental swap_buildings for an EQUAL-footprint pair (the only kind the
+    search proposes). The two buildings exchange cells, so occupancy — and hence
+    the free set — is unchanged. cand is identical to swap_buildings(a, b)."""
+    fa = Footprint(b.footprint.x, b.footprint.y, a.footprint.width, a.footprint.length)
+    fb = Footprint(a.footprint.x, a.footprint.y, b.footprint.width, b.footprint.length)
+    na, nb = replace(a, footprint=fa), replace(b, footprint=fb)
+    townhall = layout.townhall
+    buildings: list[Building] = []
+    for bld in layout.buildings:
+        if bld.entity_id == a.entity_id:
+            buildings.append(na)
+            townhall = na if a.is_townhall else townhall
+        elif bld.entity_id == b.entity_id:
+            buildings.append(nb)
+            townhall = nb if b.is_townhall else townhall
+        else:
+            buildings.append(bld)
+    cand = Layout(region=layout.region, buildings=buildings, townhall=townhall, roads={})
+    return cand, free
+
+
 def same_footprint_swaps(layout: Layout) -> list[tuple[int, int]]:
     by_size: dict[tuple[int, int], list[Building]] = {}
     for b in layout.buildings:
@@ -129,6 +182,7 @@ def spur_served_buildings(layout: Layout) -> list[int]:
 class OptimizeResult:
     layout: Layout
     moves_applied: int
+    moves_evaluated: int = 0   # candidate moves scored (route/score calls); the work metric
 
 
 def _candidate_moves(layout: Layout):
@@ -163,6 +217,22 @@ def _apply(layout: Layout, move) -> Layout | None:
     return move_building(layout, move[1], move[2], move[3])
 
 
+def _apply_free(
+    layout: Layout, free: set[tuple[int, int]], move
+) -> tuple[Layout, set[tuple[int, int]]] | None:
+    """Incremental _apply: returns (cand, cand_free) or None, maintaining the free
+    set by an O(footprint) delta. `free` must equal free_cells(layout)."""
+    if move[0] == "swap":
+        a, b = _find(layout, move[1]), _find(layout, move[2])
+        if a is None or b is None:
+            return None
+        return _swap_with_free(layout, a, b, free)
+    target = _find(layout, move[1])
+    if target is None:
+        return None
+    return _move_with_free(layout, target, move[2], move[3], free)
+
+
 def optimize(
     layout: Layout, budget_seconds: float = 30.0, max_iters: int = 1_000_000
 ) -> OptimizeResult:
@@ -170,8 +240,10 @@ def optimize(
     from foeopt.validate import is_valid
 
     state = layout  # input is assumed valid (as produced by build_layout); never-worse guarantee is relative to it
+    state_free = free_cells(state)  # maintained incrementally; == free_cells(state)
     best = len(state.roads)  # best road count so far
     moves_applied = 0
+    moves_evaluated = 0
     deadline = time.monotonic() + budget_seconds
     iters = 0
 
@@ -181,17 +253,20 @@ def optimize(
         for move in _candidate_moves(state):
             if time.monotonic() >= deadline:
                 break
-            cand = _apply(state, move)
-            if cand is None:
+            applied = _apply_free(state, state_free, move)
+            if applied is None:
                 continue
+            cand, cand_free = applied
+            moves_evaluated += 1  # one candidate scored (a route() call below)
             try:
-                roads = route(cand)
+                roads = route(cand, free=cand_free)
             except RouteError:
                 continue
             if len(roads) < best:
                 candidate = Layout(cand.region, cand.buildings, cand.townhall, roads)
                 if is_valid(candidate):
                     state = candidate
+                    state_free = cand_free
                     best = len(roads)
                     moves_applied += 1
                     improved = True
@@ -199,4 +274,5 @@ def optimize(
         if not improved:
             break
 
-    return OptimizeResult(layout=state, moves_applied=moves_applied)
+    return OptimizeResult(layout=state, moves_applied=moves_applied,
+                          moves_evaluated=moves_evaluated)
