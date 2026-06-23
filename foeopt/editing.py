@@ -12,13 +12,21 @@ def apply_edits(loaded: Layout, remove_ids: set[int], add_specs: list[dict]) -> 
     kept = [b for b in loaded.buildings
             if b.entity_id not in remove_ids or b.entity_id == th_id]
 
+    if not isinstance(add_specs, list):
+        raise ValueError("add_specs must be a list of building specs")
     next_id = (max((b.entity_id for b in loaded.buildings), default=0)) + 1
     added: list[Building] = []
     for spec in add_specs:
-        w, l = int(spec["width"]), int(spec["length"])
+        if not isinstance(spec, dict) or "width" not in spec or "length" not in spec:
+            raise ValueError("each added building needs a numeric width and length")
+        try:
+            w, l = int(spec["width"]), int(spec["length"])
+        except (TypeError, ValueError):
+            raise ValueError(f"width and length must be whole numbers, got "
+                             f"{spec.get('width')!r} x {spec.get('length')!r}")
         if w < 1 or l < 1:
             raise ValueError(f"building size must be >= 1x1, got {w}x{l}")
-        needs = bool(spec["needs_road"])
+        needs = bool(spec.get("needs_road", False))
         name = spec.get("name") or f"Custom {w}x{l}"
         added.append(Building(
             entity_id=next_id, cityentity_id="custom", type="custom",
