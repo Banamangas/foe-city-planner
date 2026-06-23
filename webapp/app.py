@@ -56,21 +56,25 @@ def create_app() -> Flask:
         if state["layout"] is None:
             return jsonify(error="load a city first"), 400
         data = request.get_json(force=True, silent=True) or {}
+        # Any malformed user input must yield a structured 400, never a 500 HTML
+        # page: the UI parses the body as JSON, so a 500 would freeze it.
         try:
             edited = apply_edits(state["layout"], set(data.get("remove_ids", [])),
                                  data.get("add_specs", []))
-        except ValueError as exc:
+            mode = data.get("mode", "repack")
+            budget = float(data.get("budget", 30))
+            anneal_budget = float(data.get("anneal_budget", 0)) if data.get("polish") else 0.0
+            if mode == "sweep":
+                seeds = int(data.get("seeds", 8))
+                workers = int(data.get("workers", os.cpu_count() or 1))
+            else:
+                seed = int(data.get("seed", 0))
+        except (ValueError, TypeError) as exc:
             return jsonify(error=str(exc)), 400
-        mode = data.get("mode", "repack")
-        budget = float(data.get("budget", 30))
-        anneal_budget = float(data.get("anneal_budget", 0)) if data.get("polish") else 0.0
         if mode == "sweep":
-            seeds = int(data.get("seeds", 8))
-            workers = int(data.get("workers", os.cpu_count() or 1))
             job_id = jobs.submit(lambda: run_sweep(edited, budget=budget, seeds=seeds,
                                                    workers=workers, anneal_budget=anneal_budget))
         else:
-            seed = int(data.get("seed", 0))
             job_id = jobs.submit(lambda: run_repack(edited, budget=budget, seed=seed,
                                                     anneal_budget=anneal_budget))
         return jsonify(job_id=job_id)
