@@ -83,6 +83,21 @@ def test_same_footprint_swaps_excludes_townhall():
     assert same_footprint_swaps(layout) == []   # townhall not swappable
 
 
+def test_candidate_moves_skips_no_op_swaps():
+    # Two interchangeable road-needing houses + one same-size filler. A house<->house
+    # swap is a strict no-op for the road count (same needs_road + road_level), so the
+    # hill-climber must not propose it; house<->filler swaps change road needs and stay.
+    from foeopt.localsearch import _candidate_moves
+    th = _b(1, 0, 0, 1, 1, th=True)
+    h1 = _rn(2, 2, 0, 1, 1)
+    h2 = _rn(3, 3, 0, 1, 1)
+    filler = _b(4, 4, 0, 1, 1)        # needs_road=False
+    layout = Layout(_region(6, 2), [th, h1, h2, filler], th, {})
+    swaps = {tuple(sorted((m[1], m[2]))) for m in _candidate_moves(layout) if m[0] == "swap"}
+    assert (2, 3) not in swaps        # house<->house: no-op, filtered out
+    assert (2, 4) in swaps and (3, 4) in swaps   # house<->filler: meaningful, kept
+
+
 def test_relocate_candidates_finds_free_spot_by_road():
     # building at (0,0); free cells (1,0),(2,0); road_cells {(2,1)} touches (2,0)
     a = _b(1, 0, 0, 1, 1)
