@@ -191,6 +191,14 @@ def _candidate_moves(layout: Layout):
     spur_ids = set(spur_served_buildings(layout))
 
     swaps = same_footprint_swaps(layout)
+    # A same-footprint swap can only change the road count if the two buildings
+    # ask different things of the network (needs_road or road_level differ);
+    # otherwise they are interchangeable to route() and the swap is a strict no-op
+    # the hill-climber can only evaluate and reject. Dropping those (~72% of swap
+    # candidates on the bundled city) leaves the result identical — the first
+    # *improving* move is unchanged — while letting a pass actually complete.
+    road_key = {b.entity_id: (b.needs_road, b.road_level) for b in layout.buildings}
+    swaps = [(a, b) for a, b in swaps if road_key[a] != road_key[b]]
     relocs = relocate_candidates(layout, road_cells)
 
     # 1) swaps touching a spur-served building
