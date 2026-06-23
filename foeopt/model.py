@@ -1,6 +1,33 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
+
+
+# Footprint geometry is a pure function of (x, y, width, length). The search
+# routes thousands of candidate layouts that differ by a single building, so the
+# same footprints are queried over and over; memoizing the cell/border sets turns
+# those repeats into O(1) lookups. Keyed by the raw ints (not the Footprint) so
+# the cache is shared across equal footprints regardless of identity. Cached
+# frozensets are built by the exact same construction as the originals, so
+# membership and iteration order are byte-for-byte identical (a golden-corpus
+# oracle over route() guards this — see tests/test_router.py).
+@lru_cache(maxsize=1 << 17)
+def _footprint_cells(x: int, y: int, width: int, length: int) -> frozenset[tuple[int, int]]:
+    return frozenset(
+        (x + dx, y + dy) for dx in range(width) for dy in range(length)
+    )
+
+
+@lru_cache(maxsize=1 << 17)
+def _footprint_border(x: int, y: int, width: int, length: int) -> frozenset[tuple[int, int]]:
+    own = _footprint_cells(x, y, width, length)
+    border: set[tuple[int, int]] = set()
+    for (cx, cy) in own:
+        for nx, ny in ((cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)):
+            if (nx, ny) not in own:
+                border.add((nx, ny))
+    return frozenset(border)
 
 
 @dataclass(frozen=True)
@@ -10,21 +37,11 @@ class Footprint:
     width: int
     length: int
 
-    def cells(self) -> set[tuple[int, int]]:
-        return {
-            (self.x + dx, self.y + dy)
-            for dx in range(self.width)
-            for dy in range(self.length)
-        }
+    def cells(self) -> frozenset[tuple[int, int]]:
+        return _footprint_cells(self.x, self.y, self.width, self.length)
 
-    def border_cells(self) -> set[tuple[int, int]]:
-        own = self.cells()
-        border: set[tuple[int, int]] = set()
-        for (cx, cy) in own:
-            for nx, ny in ((cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)):
-                if (nx, ny) not in own:
-                    border.add((nx, ny))
-        return border
+    def border_cells(self) -> frozenset[tuple[int, int]]:
+        return _footprint_border(self.x, self.y, self.width, self.length)
 
 
 @dataclass

@@ -5,14 +5,24 @@ import random
 import time
 
 from foeopt.model import Building, Layout
-from foeopt.localsearch import OptimizeResult, free_cells, move_building, swap_buildings
+from foeopt.localsearch import (
+    OptimizeResult,
+    _move_with_free,
+    _swap_with_free,
+    free_cells,
+)
 
 _T_FLOOR = 1e-9
 _COOLING = 0.9995
 _WARMUP_SAMPLES = 12
 
 
-def random_move(layout: Layout, rng: random.Random) -> Layout | None:
+def _random_move_free(
+    layout: Layout, rng: random.Random, free: set[tuple[int, int]]
+) -> tuple[Layout, set[tuple[int, int]]] | None:
+    """One random move, returning (cand, cand_free) using the maintained `free`
+    set. Draws from `rng` in the exact same sequence as random_move(), so the SA
+    trajectory is identical whether or not the free set is supplied."""
     movable = [b for b in layout.buildings if not b.is_townhall]
     if not movable:
         return None
@@ -25,14 +35,19 @@ def random_move(layout: Layout, rng: random.Random) -> Layout | None:
         if groups:
             group = rng.choice(groups)
             a, b = rng.sample(group, 2)
-            return swap_buildings(layout, a.entity_id, b.entity_id)
+            return _swap_with_free(layout, a, b, free)
 
-    free = sorted(free_cells(layout))
-    if not free:
+    ordered = sorted(free)
+    if not ordered:
         return None
     b = rng.choice(movable)
-    x, y = rng.choice(free)
-    return move_building(layout, b.entity_id, x, y)
+    x, y = rng.choice(ordered)
+    return _move_with_free(layout, b, x, y, free)
+
+
+def random_move(layout: Layout, rng: random.Random) -> Layout | None:
+    res = _random_move_free(layout, rng, free_cells(layout))
+    return res[0] if res is not None else None
 
 
 def anneal(
@@ -58,6 +73,7 @@ def anneal(
     best = layout
     best_roads = len(layout.roads)
     moves_applied = 0
+    moves_evaluated = 0   # candidate moves scored in the main loop (route() calls)
 
     # Route the input placement to seed the SA's current cost (also captures the
     # roads-only "Phase 1" win when the input network is not minimal).
@@ -71,15 +87,21 @@ def anneal(
     except RouteError:
         state, cur = layout, len(layout.roads)
 
+    # Free-cell set of the current state, maintained incrementally: _random_move_free
+    # returns each candidate's free set by an O(footprint) delta, and route() reuses
+    # it instead of rebuilding occupancy from all buildings.
+    state_free = free_cells(state)
+
     # Initial temperature: mean of positive |Δroads| over a few sampled routed
     # moves (small integer deltas); fallback 1.0.
     deltas: list[int] = []
     for _ in range(_WARMUP_SAMPLES):
-        cand = random_move(state, rng)
-        if cand is None:
+        moved = _random_move_free(state, rng, state_free)
+        if moved is None:
             continue
+        cand, cand_free = moved
         try:
-            d = abs(len(route(cand)) - cur)
+            d = abs(len(route(cand, free=cand_free)) - cur)
         except RouteError:
             continue
         if d > 0:
@@ -89,12 +111,14 @@ def anneal(
     for _ in range(max_iters):
         if time.monotonic() >= deadline:
             break
-        cand = random_move(state, rng)
-        if cand is None:
+        moved = _random_move_free(state, rng, state_free)
+        if moved is None:
             temperature = max(temperature * _COOLING, _T_FLOOR)
             continue
+        cand, cand_free = moved
+        moves_evaluated += 1  # one candidate scored (the route() call below)
         try:
-            roads = route(cand)
+            roads = route(cand, free=cand_free)
         except RouteError:
             temperature = max(temperature * _COOLING, _T_FLOOR)
             continue
@@ -102,9 +126,11 @@ def anneal(
         if delta < 0 or rng.random() < math.exp(-delta / max(temperature, _T_FLOOR)):
             state = Layout(cand.region, cand.buildings, cand.townhall, roads)
             cur = len(roads)
+            state_free = cand_free   # accepted: the candidate's free set is now current
             if is_valid(state) and cur < best_roads:
                 best, best_roads = state, cur
                 moves_applied += 1
         temperature = max(temperature * _COOLING, _T_FLOOR)
 
-    return OptimizeResult(layout=best, moves_applied=moves_applied)
+    return OptimizeResult(layout=best, moves_applied=moves_applied,
+                          moves_evaluated=moves_evaluated)
