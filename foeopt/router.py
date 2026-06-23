@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from collections import deque
+from functools import lru_cache
 
-from foeopt.model import Building, Layout
+from foeopt.model import Building, Layout, _footprint_border
 
 _ORTHO = ((1, 0), (-1, 0), (0, 1), (0, -1))
 
@@ -15,8 +16,21 @@ def free_cells(layout: Layout) -> set[tuple[int, int]]:
     return set(layout.region.cells) - layout.occupied_cells()
 
 
-def _manhattan(a: tuple[int, int], b: tuple[int, int]) -> int:
-    return abs(a[0] - b[0]) + abs(a[1] - b[1])
+@lru_cache(maxsize=1 << 17)
+def _consumer_th_distance(
+    fx: int, fy: int, fw: int, fl: int, thx: int, thy: int
+) -> int:
+    """Min Manhattan distance from a consumer's border to the Townhall anchor.
+
+    This is the consumer sort key in route(); it depends only on the consumer
+    footprint and the Townhall anchor, both of which are stable across the search
+    (the Townhall never moves and a single-building move changes one consumer), so
+    memoizing collapses it to an O(1) lookup on repeats. Pure function => the sort
+    order is unchanged (verified by the route() golden-corpus oracle)."""
+    return min(
+        (abs(cx - thx) + abs(cy - thy) for (cx, cy) in _footprint_border(fx, fy, fw, fl)),
+        default=0,
+    )
 
 
 def _bfs_path(
@@ -115,11 +129,20 @@ def _articulation_points(
     return art
 
 
-def route(layout: Layout) -> dict[tuple[int, int], int]:
+def route(
+    layout: Layout, *, free: set[tuple[int, int]] | None = None
+) -> dict[tuple[int, int], int]:
+    """Greedy SPH Steiner road tree for `layout`, pruned to the minimal set.
+
+    `free` is an optional precomputed set of free (unoccupied, in-region) cells. It
+    MUST equal free_cells(layout); callers that mutate one building at a time can
+    maintain it by an O(footprint) delta instead of paying the O(all-buildings)
+    rebuild here. route() treats it read-only, so the same output is produced as
+    when free is None (asserted by the incremental-scoring oracle in tests)."""
     if layout.townhall is None:
         raise RouteError("layout has no townhall")
 
-    candidates = free_cells(layout)
+    candidates = free_cells(layout) if free is None else free
     th_roots = layout.townhall.footprint.border_cells() & candidates
     if not th_roots:
         raise RouteError("townhall has no free adjacent cell to root the network")
@@ -129,12 +152,11 @@ def route(layout: Layout) -> dict[tuple[int, int], int]:
     tree: set[tuple[int, int]] = set(th_roots)
     levels: dict[tuple[int, int], int] = {cell: 1 for cell in th_roots}
 
+    thx, thy = layout.townhall.footprint.x, layout.townhall.footprint.y
     consumers = sorted(
         layout.road_needing(),
-        key=lambda b: min(
-            (_manhattan(c, (layout.townhall.footprint.x, layout.townhall.footprint.y))
-             for c in b.footprint.border_cells()),
-            default=0,
+        key=lambda b: _consumer_th_distance(
+            b.footprint.x, b.footprint.y, b.footprint.width, b.footprint.length, thx, thy
         ),
     )
 
