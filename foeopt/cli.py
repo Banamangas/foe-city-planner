@@ -5,8 +5,10 @@ import json
 from pathlib import Path
 
 from foeopt.loader import load_layout
+from foeopt.model import Layout
 from foeopt.router import route, RouteError
 from foeopt.report import stats, road_diff, road_estimate
+from foeopt.quality import format_quality
 from foeopt.viz import render_html, render_comparison
 from foeopt.packer import repack
 from foeopt.localsearch import optimize
@@ -34,6 +36,7 @@ def _cmd_roads(args) -> int:
     print("Road optimization (buildings fixed):")
     for k, v in s.items():
         print(f"  {k}: {v}")
+    print(f"  {format_quality(Layout(layout.region, layout.buildings, layout.townhall, optimized))}")
     html = render_html(layout, optimized_roads=optimized)
     Path(args.out).write_text(html, encoding="utf-8")
     print(f"Wrote map to {args.out}")
@@ -59,6 +62,7 @@ def _cmd_layout(args) -> int:
     print(f"  current roads: {s['current_roads']} | optimized roads: {s['optimized_roads']}"
           f" | tiles_saved: {s['tiles_saved']}")
     print(f"  estimated optimal roads (target): {road_estimate(current)}")
+    print(f"  {format_quality(res.layout)}")
     Path(args.out).write_text(render_comparison(current, res.layout), encoding="utf-8")
     print(f"Wrote before/after map to {args.out}")
     if res.unplaced:
@@ -89,6 +93,7 @@ def _cmd_improve(args) -> int:
     print(f"  current roads: {s['current_roads']} | optimized roads: {s['optimized_roads']}"
           f" | tiles_saved: {s['tiles_saved']} | moves: {res.moves_applied}"
           f" | evaluated: {res.moves_evaluated}")
+    print(f"  {format_quality(res.layout)}")
     Path(args.out).write_text(render_comparison(current, res.layout), encoding="utf-8")
     print(f"Wrote before/after map to {args.out}")
     return 0
