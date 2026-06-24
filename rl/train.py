@@ -37,6 +37,10 @@ def main(argv=None):
                    help="anneal: relaxed prior strength at high success (keeps exploration)")
     p.add_argument("--potential-shaping", action="store_true",
                    help="add potential-based reward shaping (road_estimate delta per placement)")
+    p.add_argument("--ref-city", default=None,
+                   help="real city (e.g. darkzig.json) to synthesize darkzig-like training "
+                        "cities from for the final curriculum stage (held out for eval)")
+    p.add_argument("--ref-helper", default=None)
     args = p.parse_args(argv)
 
     eval_layout = None
@@ -44,13 +48,18 @@ def main(argv=None):
         from foeopt.loader import load_layout
         eval_layout = load_layout(args.eval_city, args.eval_helper)
 
+    ref_layout = None
+    if args.ref_city:
+        from foeopt.loader import load_layout
+        ref_layout = load_layout(args.ref_city, args.ref_helper)
+
     train(stage=args.stage, updates=args.updates, episodes_per_update=args.episodes,
           lr=args.lr, device=args.device, seed=args.seed, ckpt=args.ckpt,
           placement_reward=args.placement_reward, hidden=args.hidden,
           eval_layout=eval_layout, resume=args.resume, auto=args.auto,
           prior_strength_start=args.prior_strength_start,
           prior_strength_floor=args.prior_strength_floor,
-          potential_shaping=args.potential_shaping)
+          potential_shaping=args.potential_shaping, ref_layout=ref_layout)
 
 
 if __name__ == "__main__":
