@@ -35,6 +35,8 @@ def main(argv=None):
                    help="anneal: prior strength at low success (1.0=strict road-adjacency)")
     p.add_argument("--prior-strength-floor", type=float, default=0.2,
                    help="anneal: relaxed prior strength at high success (keeps exploration)")
+    p.add_argument("--potential-shaping", action="store_true",
+                   help="add potential-based reward shaping (road_estimate delta per placement)")
     args = p.parse_args(argv)
 
     eval_layout = None
@@ -47,7 +49,8 @@ def main(argv=None):
           placement_reward=args.placement_reward, hidden=args.hidden,
           eval_layout=eval_layout, resume=args.resume, auto=args.auto,
           prior_strength_start=args.prior_strength_start,
-          prior_strength_floor=args.prior_strength_floor)
+          prior_strength_floor=args.prior_strength_floor,
+          potential_shaping=args.potential_shaping)
 
 
 if __name__ == "__main__":

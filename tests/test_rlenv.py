@@ -146,3 +146,63 @@ def test_valid_actions_prior_empty_after_nothing_placed_is_frontier():
     env = _env(_region_grid(9, 9), [th, _b(10, 2, 2)])
     env.reset()
     assert env.valid_actions(prior=True)
+
+
+def test_invalid_penalty_scales_with_unplaced():
+    # 4 buildings to place after TH. Fail on the FIRST placement -> 4 unplaced.
+    th = _b(1, 1, 1, needs=False, th=True)
+    env = _env(_region_grid(3, 1), [th, _b(10, 1, 1), _b(11, 1, 1),
+                                    _b(12, 1, 1), _b(13, 1, 1)])
+    env.reset()
+    res = env.step((0, 0))                       # overlaps TH -> invalid, 4 left
+    assert res.info["error"] == "invalid_placement"
+    assert res.reward == -100.0 * (4 / 4)
+
+
+def test_invalid_penalty_scales_down_when_most_placed():
+    # Place 3 of 4 successfully on a roomy grid, then force an invalid step.
+    th = _b(1, 1, 1, needs=False, th=True)
+    env = _env(_region_grid(8, 1), [th, _b(10, 1, 1), _b(11, 1, 1),
+                                    _b(12, 1, 1), _b(13, 1, 1)])
+    env.reset()
+    env.step((2, 0)); env.step((3, 0)); env.step((4, 0))   # 3 placed, 1 left
+    res = env.step((0, 0))                       # overlaps TH -> invalid, 1 unplaced
+    assert res.reward == -100.0 * (1 / 4)
+
+
+def test_unroutable_penalty_is_flat():
+    th = _b(1, 1, 1, needs=False, th=True)
+    env = _env(_region_grid(2, 1), [th, _b(10, 1, 1)])   # no room for a road
+    env.reset()
+    res = env.step((1, 0))
+    assert res.reward == -100.0
+
+
+def test_potential_shaping_rewards_road_needing_placement():
+    th = _b(1, 2, 2, needs=False, th=True)
+    cons = _b(10, 4, 4, needs=True)              # road-needing; road_estimate rises 2
+    filler = _b(11, 2, 2, needs=False)           # not road-needing; estimate unchanged
+    tail = _b(12, 2, 2, needs=True)              # last so filler's step is non-terminal
+    env = PlacementEnv(Layout(_region_grid(20, 20), [th, cons, filler, tail], th),
+                       placement_reward=0.0, potential_shaping=True)
+    env.reset()
+    # order is largest-area first: cons(16), then filler(4) and tail(4) by entity_id.
+    # place the consumer first -> shaping bonus = road_estimate delta = min(4,4)//2 = 2
+    r_cons = env.step(env.valid_actions()[0])
+    assert not r_cons.done
+    assert r_cons.reward == 2.0
+    # place the filler next -> not road-needing, road_estimate unchanged -> reward 0.0
+    r_filler = env.step(env.valid_actions()[0])
+    assert not r_filler.done
+    assert r_filler.reward == 0.0
+
+
+def test_potential_shaping_off_by_default():
+    th = _b(1, 2, 2, needs=False, th=True)
+    cons = _b(10, 4, 4, needs=True)
+    tail = _b(11, 2, 2, needs=True)              # so the first placement is non-terminal
+    env = PlacementEnv(Layout(_region_grid(20, 20), [th, cons, tail], th),
+                       placement_reward=0.0)
+    env.reset()
+    # shaping off, not terminal -> plain placement_reward (0.0)
+    assert env.step(env.valid_actions()[0]).reward == 0.0
