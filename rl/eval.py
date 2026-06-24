@@ -30,7 +30,7 @@ def main(argv=None):
     policy.load_state_dict(ck["state_dict"])
     policy.eval()
 
-    roads, status = evaluate(policy, layout, device=args.device, greedy=not args.sample)
+    roads, status, _ = evaluate(policy, layout, device=args.device, greedy=not args.sample)
     print(f"city={args.city} roads={roads} status={status} "
           f"target(Sigma/2)={road_estimate(layout)}")
 
