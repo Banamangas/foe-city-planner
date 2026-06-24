@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 from foeopt.model import Building, Footprint, Layout
 from foeopt.report import road_estimate
 from foeopt.router import RouteError, route
-from foeopt.validate import is_valid
+from foeopt.validate import is_valid, unsatisfied
 
 # Sequential-placement MDP for FoE layout optimization — the foundation for an
 # amortized ML/RL solver (the chip-floorplanning formulation). Pure-stdlib: the
@@ -46,7 +46,7 @@ class PlacementEnv:
     INVALID_PENALTY = -100.0
 
     def __init__(self, layout: Layout, *, order: list[Building] | None = None,
-                 placement_reward: float = 0.0):
+                 placement_reward: float = 0.0, potential_shaping: bool = False):
         if layout.townhall is None:
             raise ValueError("PlacementEnv requires a Townhall")
         self.region = layout.region
@@ -56,12 +56,14 @@ class PlacementEnv:
         # rollouts almost always end "unroutable" (a flat -100 gives no gradient);
         # rewarding partial progress lets a policy climb. See docs RL design note.
         self.placement_reward = placement_reward
+        self.potential_shaping = potential_shaping
         movable = [b for b in layout.buildings if not b.is_townhall]
         # default order: largest-area first (hardest to place), then entity_id for
         # determinism. The order is fixed per episode; the agent only picks where.
         self._order = order if order is not None else sorted(
             movable, key=lambda b: (-(b.footprint.width * b.footprint.length), b.entity_id)
         )
+        self._n_road_needing = len([b for b in self._order if b.needs_road])
         self.target = road_estimate(layout)
         self.reset()
 
@@ -69,6 +71,7 @@ class PlacementEnv:
         self._placed: list[Building] = [self.townhall]
         self._occ: set[tuple[int, int]] = set(self.townhall.footprint.cells())
         self._ptr = 0
+        self._potential = self._partial_road_estimate()
         return self._obs()
 
     @property
@@ -121,23 +124,35 @@ class PlacementEnv:
         fp = Footprint(action[0], action[1], w, l)
         cells = fp.cells()
         if not cells <= (self.region.cells - self._occ):
-            return StepResult(self._obs(), self.INVALID_PENALTY, True, {"error": "invalid_placement"})
+            unplaced = len(self._order) - self._ptr
+            total = len(self._order) or 1
+            return StepResult(self._obs(), self.INVALID_PENALTY * (unplaced / total),
+                              True, {"error": "invalid_placement"})
         self._placed.append(replace(b, footprint=fp))
         self._occ |= cells
         self._ptr += 1
         if not self.done:
-            return StepResult(self._obs(), self.placement_reward, False, {})
-        # all placed → the router scores the layout
+            reward = self.placement_reward
+            if self.potential_shaping:
+                new_pot = self._partial_road_estimate()
+                reward += (new_pot - self._potential)
+                self._potential = new_pot
+            return StepResult(self._obs(), reward, False, {})
+        # all placed -> the router scores the layout
         layout = Layout(self.region, self._placed, self.townhall, {})
         try:
             roads = route(layout)
         except RouteError:
-            return StepResult(self._obs(), self.INVALID_PENALTY, True, {"error": "unroutable"})
+            return StepResult(self._obs(), self.INVALID_PENALTY, True,
+                              {"error": "unroutable"})
         layout.roads = roads
         if not is_valid(layout):
-            return StepResult(self._obs(), self.INVALID_PENALTY, True, {"error": "unsatisfied"})
+            n_bad = len(unsatisfied(layout))
+            frac = (n_bad / self._n_road_needing) if self._n_road_needing else 1.0
+            return StepResult(self._obs(), self.INVALID_PENALTY * frac, True,
+                              {"error": "unsatisfied"})
         nroads = len(roads)
-        reward = float(self.target - nroads)   # >0 when below the Σ/2 estimate
+        reward = float(self.target - nroads)
         return StepResult(self._obs(), reward, True,
                           {"roads": nroads, "target": self.target, "layout": layout})
 
@@ -150,3 +165,9 @@ class PlacementEnv:
             current_needs_road=bool(b.needs_road) if b else False,
             remaining=len(self._order) - self._ptr,
         )
+
+    def _partial_road_estimate(self) -> int:
+        """road_estimate of the layout formed by the Townhall + buildings placed so far.
+        Rises as road-needing buildings are placed -- the potential for shaping."""
+        partial = Layout(self.region, self._placed, self.townhall, {})
+        return road_estimate(partial)
