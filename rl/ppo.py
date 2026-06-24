@@ -133,7 +133,7 @@ def train(*, stage=0, updates=200, episodes_per_update=16, lr=3e-4, device="cpu"
           seed=0, ckpt="rl_ckpt.pt", placement_reward=0.1, hidden=64,
           eval_layout=None, resume=None, auto=False, advance_success=0.9,
           advance_patience=20, prior_strength_start=0.95, prior_strength_floor=0.2,
-          log=print):
+          potential_shaping=False, log=print):
     rng = random.Random(seed)
     torch.manual_seed(seed)
     policy = PlacementPolicy(hidden=hidden).to(device)
@@ -153,7 +153,8 @@ def train(*, stage=0, updates=200, episodes_per_update=16, lr=3e-4, device="cpu"
             for _ in range(episodes_per_update):
                 city = curriculum.make_city(stg, rng)
                 target = road_estimate(city)
-                env = PlacementEnv(city, placement_reward=placement_reward)
+                env = PlacementEnv(city, placement_reward=placement_reward,
+                                   potential_shaping=potential_shaping)
                 trans, info = collect_episode(
                     env, policy, W, H, device,
                     prior_strength=prior_strength_for_success(
