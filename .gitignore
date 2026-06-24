@@ -5,6 +5,8 @@ venv/
 *.egg-info/
 .pytest_cache/
 output/
+*.pt
+
 
 # Personal game-data dumps
 DarkZig-*.txt
