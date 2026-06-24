@@ -11,10 +11,21 @@ and **structurally smoke-tested on CPU** (one PPO update + eval run cleanly). Th
 have **not been trained to convergence** — that needs a GPU and hours-to-days.
 Design rationale: `docs/superpowers/specs/2026-06-23-rl-placement-design.md`.
 
-## 1. Install (one-time, on your machine)
+## 1. Install (one-time)
 
+**CPU (portable, for tests/smoke):**
 ```bash
-uv sync --extra rl          # adds torch + numpy; the foeopt core stays pure-stdlib
+uv sync --extra rl          # adds torch (CPU) + numpy; the foeopt core stays pure-stdlib
+```
+
+**AMD GPU (ROCm — for real training):** the uv per-extra index approach does not work
+for torch (one lockfile can't hold both a PyPI and a ROCm-sourced torch for the same
+package name), so the GPU training env is a separate venv. Verified on RX 9070 XT
+(gfx1201) with ROCm 7.2 + torch 2.10.0+rocm7.0:
+```bash
+scripts/setup-rocm-venv.sh        # creates ~/.venv/foe-rl-rocm with the ROCm torch wheel
+# then train with that venv's python, from the repo root:
+~/.venv/foe-rl-rocm/bin/python -m rl.train --device cuda ...
 ```
 
 ## 2. Smoke test (verify it runs — ~1 min on CPU)
@@ -33,7 +44,7 @@ Auto-curriculum from easy (roomy 10×10) to hard (dense 26×26), advancing each
 stage when mastered. Point `--eval-city` at your real city to track the real goal:
 
 ```bash
-uv run python -m rl.train --auto --device cuda \
+~/.venv/foe-rl-rocm/bin/python -m rl.train --auto --device cuda \
     --updates 3000 --episodes 64 \
     --eval-city darkzig.json --ckpt rl_ckpt.pt
 ```
@@ -50,7 +61,7 @@ updates) are the real signal — that's a greedy rollout on darkzig.
 ## 4. Evaluate a checkpoint on a real city
 
 ```bash
-uv run python -m rl.eval --ckpt rl_ckpt.pt --city darkzig.json
+~/.venv/foe-rl-rocm/bin/python -m rl.eval --ckpt rl_ckpt.pt --city darkzig.json
 # -> city=darkzig.json roads=NNN status=ok target(Sigma/2)=114
 ```
 
