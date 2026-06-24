@@ -5,6 +5,11 @@ description = "Forge of Empires city layout optimizer"
 requires-python = ">=3.12"
 dependencies = ["flask>=3"]
 
+[project.optional-dependencies]
+# Optional: the ML/RL training stack (rl/). The core + the foeopt.rlenv
+# environment stay pure-stdlib; install with `uv sync --extra rl` to train.
+rl = ["torch>=2", "numpy>=1.24"]
+
 [dependency-groups]
 dev = ["pytest>=8"]
 
