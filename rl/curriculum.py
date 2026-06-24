@@ -32,3 +32,27 @@ def make_city(stage: int, rng: random.Random) -> Layout:
             eid += 1
     region = Region(frozenset((x, y) for x in range(side) for y in range(side)))
     return Layout(region, blds, th, {})
+
+
+def make_real_like_city(rng: random.Random, reference: Layout, *, fill: float = 0.9) -> Layout:
+    """A darkzig-like training city: the reference's irregular region + Townhall
+    (same position/size), with buildings sampled from the reference's (w,l,needs_road)
+    mix to ~`fill` of the region area. Non-TH buildings sit at (0,0); the env
+    repositions them during placement. The reference itself (e.g. darkzig.json) is
+    held out for eval — only these synthesized variants are trained on."""
+    region = reference.region
+    th = reference.townhall
+    th_area = th.footprint.width * th.footprint.length
+    pool = [(b.footprint.width, b.footprint.length, b.needs_road)
+            for b in reference.buildings if not b.is_townhall]
+    target_area = int(fill * len(region.cells)) - th_area
+    blds = [th]
+    area, eid = 0, 1000
+    while area < target_area and pool:
+        w, l, needs = rng.choice(pool)
+        blds.append(Building(eid, f"c{eid}", "g", Footprint(0, 0, w, l),
+                             needs_road=needs, road_level=1, is_townhall=False,
+                             set_id=None, chain_id=None, name=f"b{eid}"))
+        area += w * l
+        eid += 1
+    return Layout(region, blds, th, {})
