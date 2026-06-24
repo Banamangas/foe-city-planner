@@ -44,7 +44,7 @@ Auto-curriculum from easy (roomy 10×10) to hard (dense 26×26), advancing each
 stage when mastered. Point `--eval-city` at your real city to track the real goal:
 
 ```bash
-uv run python -m rl.train --auto --device cuda \
+~/.venv/foe-rl-rocm/bin/python -m rl.train --auto --device cuda \
     --updates 3000 --episodes 64 \
     --eval-city darkzig.json --ckpt rl_ckpt.pt
 ```
@@ -61,7 +61,7 @@ updates) are the real signal — that's a greedy rollout on darkzig.
 ## 4. Evaluate a checkpoint on a real city
 
 ```bash
-uv run python -m rl.eval --ckpt rl_ckpt.pt --city darkzig.json
+~/.venv/foe-rl-rocm/bin/python -m rl.eval --ckpt rl_ckpt.pt --city darkzig.json
 # -> city=darkzig.json roads=NNN status=ok target(Sigma/2)=114
 ```
 

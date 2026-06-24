@@ -21,7 +21,7 @@ def _verdict(roads, status, *, floor):
         return "stuck"
     if roads <= floor:
         return "beats_floor"
-    return "competitive"      # above the floor but placed+routed — push further
+    return "competitive"
 
 
 def run_gate(ckpt: str, city_path: str, *, device: str = "cpu",

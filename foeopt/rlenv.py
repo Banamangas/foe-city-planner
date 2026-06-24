@@ -209,7 +209,7 @@ class PlacementEnv:
                 reward += (new_pot - self._potential)
                 self._potential = new_pot
             return StepResult(self._obs(), reward, False, {})
-        # all placed -> the router scores the layout
+        # all placed → the router scores the layout
         layout = Layout(self.region, self._placed, self.townhall, {})
         try:
             roads = route(layout)
@@ -223,7 +223,7 @@ class PlacementEnv:
             return StepResult(self._obs(), self.INVALID_PENALTY * frac, True,
                               {"error": "unsatisfied"})
         nroads = len(roads)
-        reward = float(self.target - nroads)
+        reward = float(self.target - nroads)   # >0 when below the Σ/2 estimate
         return StepResult(self._obs(), reward, True,
                           {"roads": nroads, "target": self.target, "layout": layout})
 
