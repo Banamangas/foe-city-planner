@@ -93,3 +93,56 @@ def test_deterministic_same_actions_same_rewards():
         e.reset()
         return [e.step(e.valid_actions()[0]).reward for _ in range(2)]
     assert run() == run()
+
+
+def _region_grid(w, h):
+    from foeopt.model import Region
+    return Region(frozenset((x, y) for x in range(w) for y in range(h)))
+
+
+def test_valid_actions_prior_is_subset_of_full():
+    th = _b(1, 2, 2, needs=False, th=True)
+    env = _env(_region_grid(10, 10), [th, _b(10, 3, 2), _b(11, 2, 2)])
+    env.reset()
+    full = set(env.valid_actions())
+    prior = set(env.valid_actions(prior=True))
+    assert prior <= full
+    assert prior, "with the TH placed, the frontier is non-empty"
+
+
+def test_valid_actions_prior_anchors_border_occupancy():
+    th = _b(1, 2, 2, needs=False, th=True)          # TH occupies (0,0),(1,0),(0,1),(1,1)
+    env = _env(_region_grid(10, 10), [th, _b(10, 2, 2)])
+    env.reset()
+    prior = env.valid_actions(prior=True)
+    # every prior anchor's footprint must be orthogonally adjacent to the TH
+    from foeopt.model import Footprint
+    th_cells = th.footprint.cells()
+    for (x, y) in prior:
+        fp = Footprint(x, y, 2, 2)
+        assert fp.border_cells() & th_cells, f"anchor {(x,y)} not adjacent to TH"
+
+
+def test_valid_actions_prior_can_be_empty_when_full_is_not():
+    # A 2-wide left arm holds the corner TH; a 7-wide right arm holds the only
+    # fits for a 3x3; a 1-cell bridge connects them. The 3x3 can't fit in the
+    # left arm or the bridge, so every legal anchor is in the right arm, none
+    # adjacent to the TH -> prior empty, full non-empty.
+    from foeopt.model import Region
+    left = {(x, y) for x in (0, 1) for y in range(10)}
+    bridge = {(2, 0)}
+    right = {(x, y) for x in range(3, 10) for y in range(10)}
+    region = Region(frozenset(left | bridge | right))
+    th = _b(1, 2, 2, needs=False, th=True)
+    env = _env(region, [th, _b(10, 3, 3)])
+    env.reset()
+    assert env.valid_actions(), "full set must be non-empty (3x3 fits in the right arm)"
+    assert env.valid_actions(prior=True) == [], "no 3x3 placement borders the TH across the bridge"
+
+
+def test_valid_actions_prior_empty_after_nothing_placed_is_frontier():
+    # sanity: prior is non-empty right after reset because the TH is occupied
+    th = _b(1, 3, 3, needs=False, th=True)
+    env = _env(_region_grid(9, 9), [th, _b(10, 2, 2)])
+    env.reset()
+    assert env.valid_actions(prior=True)
