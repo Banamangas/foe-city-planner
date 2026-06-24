@@ -31,6 +31,10 @@ def main(argv=None):
     p.add_argument("--resume", default=None, help="checkpoint to warm-start from")
     p.add_argument("--auto", action="store_true",
                    help="auto-advance the curriculum (stage..last) as each is mastered")
+    p.add_argument("--prior-strength-start", type=float, default=0.95,
+                   help="anneal: prior strength at low success (1.0=strict road-adjacency)")
+    p.add_argument("--prior-strength-floor", type=float, default=0.2,
+                   help="anneal: relaxed prior strength at high success (keeps exploration)")
     args = p.parse_args(argv)
 
     eval_layout = None
@@ -41,7 +45,9 @@ def main(argv=None):
     train(stage=args.stage, updates=args.updates, episodes_per_update=args.episodes,
           lr=args.lr, device=args.device, seed=args.seed, ckpt=args.ckpt,
           placement_reward=args.placement_reward, hidden=args.hidden,
-          eval_layout=eval_layout, resume=args.resume, auto=args.auto)
+          eval_layout=eval_layout, resume=args.resume, auto=args.auto,
+          prior_strength_start=args.prior_strength_start,
+          prior_strength_floor=args.prior_strength_floor)
 
 
 if __name__ == "__main__":
