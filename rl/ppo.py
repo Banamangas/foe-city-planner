@@ -113,20 +113,22 @@ def ppo_update(policy, opt, batch, *, clip=0.2, epochs=4, vf=0.5, ent=0.01, devi
 
 @torch.no_grad()
 def evaluate(policy, layout, device="cpu", greedy=True):
-    """Roll out the policy on a fixed layout; return (roads or None, status)."""
+    """Roll out the policy on a fixed layout; return (roads or None, status, layout or None)."""
     W, H = grid_bounds(layout.region.cells)
     env = PlacementEnv(layout)
     obs = env.reset()
     while not env.done:
         mask = action_mask(env, W, H).to(device)
         if not bool(mask.any()):
-            return None, "stuck"
+            return None, "stuck", None
         logits, _ = policy(encode_obs(obs, W, H).unsqueeze(0).to(device))
         dist = masked_dist(logits, mask.unsqueeze(0))
         idx = int(dist.probs.argmax(-1).item() if greedy else dist.sample().item())
         res = env.step(index_to_action(idx, W))
         obs = res.obs
-    return res.info.get("roads"), res.info.get("error", "ok")
+    if res.info.get("roads") is not None:
+        return res.info["roads"], res.info.get("error", "ok"), res.info.get("layout")
+    return None, res.info.get("error", "ok"), None
 
 
 def train(*, stage=0, updates=200, episodes_per_update=16, lr=3e-4, device="cpu",
@@ -176,7 +178,7 @@ def train(*, stage=0, updates=200, episodes_per_update=16, lr=3e-4, device="cpu"
                 f"(target ~{target}) | {stats}")
             torch.save({"state_dict": policy.state_dict(), "hidden": hidden, "stage": stg}, ckpt)
             if eval_layout is not None and upd % 10 == 0:
-                r, st = evaluate(policy, eval_layout, device)
+                r, st, _ = evaluate(policy, eval_layout, device)
                 log(f"     eval: roads={r} ({st})")
             if auto:
                 mastered = mastered + 1 if succ >= advance_success else 0
