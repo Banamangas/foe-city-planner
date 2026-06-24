@@ -57,8 +57,7 @@ def _dfs(region_cells, occ, placed, layout, order, ptr, best, deadline):
         cells = Footprint(x, y, w, l).cells()
         if not cells <= free:
             continue
-        from foeopt.model import Building as _B
-        placed2 = placed + [_B(b.entity_id, b.cityentity_id, b.type,
+        placed2 = placed + [Building(b.entity_id, b.cityentity_id, b.type,
                                Footprint(x, y, w, l), b.needs_road, b.road_level,
                                b.is_townhall, b.set_id, b.chain_id, b.name)]
         _dfs(region_cells, occ | cells, placed2, layout, order, ptr + 1, best, deadline)
