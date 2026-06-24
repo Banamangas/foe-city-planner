@@ -17,16 +17,16 @@ from rl.encode import action_mask, encode_obs, grid_bounds, index_to_action
 from rl.policy import PlacementPolicy, masked_dist
 
 
-def prior_strength_for_success(success_rate: float, *, strict_below: float = 0.5,
-                               floor: float = 0.2) -> float:
-    """Anneal the action-prior strength from strict (1.0) while the policy is
+def prior_strength_for_success(success_rate: float, *, start: float = 1.0,
+                               strict_below: float = 0.5, floor: float = 0.2) -> float:
+    """Anneal the action-prior strength from strict (``start``) while the policy is
     failing toward ``floor`` as success -> 1.0. Strict below ``strict_below``;
     linear relaxation above it. Keeps ``floor`` exploration off-prior so the
     policy can escape the grow-tree prior (which re-caps at ~158)."""
     if success_rate <= strict_below:
-        return 1.0
+        return start
     t = (success_rate - strict_below) / (1.0 - strict_below)   # 0..1
-    return max(floor, 1.0 - t * (1.0 - floor))
+    return max(floor, start - t * (start - floor))
 
 
 def select_action_mask(full: torch.Tensor, prior: torch.Tensor,
@@ -162,7 +162,8 @@ def train(*, stage=0, updates=200, episodes_per_update=16, lr=3e-4, device="cpu"
                 trans, info = collect_episode(
                     env, policy, W, H, device,
                     prior_strength=prior_strength_for_success(
-                        succ_prev, floor=prior_strength_floor),
+                        succ_prev, start=prior_strength_start,
+                        floor=prior_strength_floor),
                     rng=rng)
                 if not trans:
                     continue

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import random
 
-from foeopt.model import Building, Footprint, Layout, Region
+from foeopt.model import Footprint, Layout
 from foeopt.rlenv import PlacementEnv
 
 
