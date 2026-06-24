@@ -9,5 +9,4 @@ output/
 # Personal game-data dumps
 DarkZig-*.txt
 city.txt
-darkzig.json
 *.json.bak
