@@ -79,17 +79,38 @@ class PlacementEnv:
     def done(self) -> bool:
         return self._ptr >= len(self._order)
 
-    def valid_actions(self) -> list[tuple[int, int]]:
-        """All anchor positions where the current building fits without overlap."""
+    def valid_actions(self, prior: bool = False) -> list[tuple[int, int]]:
+        """All anchor positions where the current building fits without overlap.
+
+        With ``prior=True``, restrict to anchors whose footprint is orthogonally
+        adjacent to already-placed occupancy (the Townhall + placed buildings).
+        This bakes in the grow-tree's contiguity prior — the layout grows as a
+        connected cluster rooted at the Townhall, which is what makes it routable
+        — and shrinks the action space ~100x. May return [] when no legal anchor
+        is adjacent (callers fall back to the full set). Output is sorted for
+        determinism.
+        """
         b = self.current
         if b is None:
             return []
         w, l = b.footprint.width, b.footprint.length
         free = self.region.cells - self._occ
+        frontier = None
+        if prior:
+            frontier = {
+                c for c in free
+                for n in ((c[0] - 1, c[1]), (c[0] + 1, c[1]),
+                          (c[0], c[1] - 1), (c[0], c[1] + 1))
+                if n in self._occ
+            }
         out = []
         for (x, y) in free:
-            if all((x + dx, y + dy) in free for dx in range(w) for dy in range(l)):
-                out.append((x, y))
+            if not all((x + dx, y + dy) in free for dx in range(w) for dy in range(l)):
+                continue
+            if prior and not any((x + dx, y + dy) in frontier
+                                 for dx in range(w) for dy in range(l)):
+                continue
+            out.append((x, y))
         return sorted(out)
 
     def step(self, action: tuple[int, int]) -> StepResult:
