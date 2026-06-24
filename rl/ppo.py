@@ -17,17 +17,48 @@ from rl.encode import action_mask, encode_obs, grid_bounds, index_to_action
 from rl.policy import PlacementPolicy, masked_dist
 
 
-def collect_episode(env, policy, W, H, device):
-    """Run one episode under the current policy. Returns (transitions, info)."""
+def prior_strength_for_success(success_rate: float, *, strict_below: float = 0.5,
+                               floor: float = 0.2) -> float:
+    """Anneal the action-prior strength from strict (1.0) while the policy is
+    failing toward ``floor`` as success -> 1.0. Strict below ``strict_below``;
+    linear relaxation above it. Keeps ``floor`` exploration off-prior so the
+    policy can escape the grow-tree prior (which re-caps at ~158)."""
+    if success_rate <= strict_below:
+        return 1.0
+    t = (success_rate - strict_below) / (1.0 - strict_below)   # 0..1
+    return max(floor, 1.0 - t * (1.0 - floor))
+
+
+def select_action_mask(full: torch.Tensor, prior: torch.Tensor,
+                       prior_strength: float, rng: random.Random) -> torch.Tensor:
+    """Pick the per-step action mask: the prior mask with prob ``prior_strength``,
+    else the full mask. Falls back to full when the prior mask is empty (never
+    get stuck on a step where no anchor is road-adjacent)."""
+    if prior_strength <= 0.0 or not bool(prior.any()):
+        return full
+    if prior_strength >= 1.0:
+        return prior
+    return prior if rng.random() < prior_strength else full
+
+
+def collect_episode(env, policy, W, H, device, prior_strength=1.0, rng=None):
+    """Run one episode under the current policy. ``prior_strength`` anneals the
+    action prior (1.0 = strict road-adjacency, 0.0 = full free grid). Returns
+    (transitions, info). The mask actually used is stored per transition so PPO
+    importance ratios stay consistent."""
+    if rng is None:
+        rng = random.Random()
     obs = env.reset()
     trans, info = [], {"roads": None, "status": "incomplete"}
     while not env.done:
-        mask = action_mask(env, W, H).to(device)
-        if not bool(mask.any()):                 # stuck: nothing fits
+        full = action_mask(env, W, H, prior=False).to(device)
+        if not bool(full.any()):                 # stuck: nothing fits at all
             if trans:
                 trans[-1]["reward"] += env.INVALID_PENALTY
             info["status"] = "stuck"
             return trans, info
+        prior = action_mask(env, W, H, prior=True).to(device)
+        mask = select_action_mask(full, prior, prior_strength, rng).to(device)
         x = encode_obs(obs, W, H).unsqueeze(0).to(device)
         with torch.no_grad():
             logits, value = policy(x)
@@ -101,7 +132,8 @@ def evaluate(policy, layout, device="cpu", greedy=True):
 def train(*, stage=0, updates=200, episodes_per_update=16, lr=3e-4, device="cpu",
           seed=0, ckpt="rl_ckpt.pt", placement_reward=0.1, hidden=64,
           eval_layout=None, resume=None, auto=False, advance_success=0.9,
-          advance_patience=20, log=print):
+          advance_patience=20, prior_strength_start=0.95, prior_strength_floor=0.2,
+          log=print):
     rng = random.Random(seed)
     torch.manual_seed(seed)
     policy = PlacementPolicy(hidden=hidden).to(device)
@@ -115,21 +147,27 @@ def train(*, stage=0, updates=200, episodes_per_update=16, lr=3e-4, device="cpu"
         side = curriculum.STAGES[min(stg, last)][0]
         W = H = side
         mastered = 0
+        succ_prev = 0.0
         for upd in range(updates):
             batch, roads, successes, target = [], [], 0, None
             for _ in range(episodes_per_update):
                 city = curriculum.make_city(stg, rng)
                 target = road_estimate(city)
                 env = PlacementEnv(city, placement_reward=placement_reward)
-                trans, info = collect_episode(env, policy, W, H, device)
+                trans, info = collect_episode(
+                    env, policy, W, H, device,
+                    prior_strength=prior_strength_for_success(
+                        succ_prev, floor=prior_strength_floor),
+                    rng=rng)
                 if not trans:
                     continue
                 gae(trans)
                 batch.extend(trans)
                 if info.get("roads") is not None:
                     roads.append(info["roads"]); successes += 1
-            stats = ppo_update(policy, opt, batch, device=device) if batch else {}
             succ = successes / episodes_per_update
+            succ_prev = succ
+            stats = ppo_update(policy, opt, batch, device=device) if batch else {}
             mean_roads = round(sum(roads) / len(roads), 1) if roads else None
             log(f"stage {stg} upd {upd:4d} | success {succ:5.0%} | mean_roads {mean_roads} "
                 f"(target ~{target}) | {stats}")

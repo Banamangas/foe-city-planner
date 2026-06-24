@@ -32,10 +32,13 @@ def encode_obs(obs: Obs, W: int, H: int) -> torch.Tensor:
     return torch.from_numpy(g)
 
 
-def action_mask(env: PlacementEnv, W: int, H: int) -> torch.Tensor:
-    """Boolean [H*W]: True where the current building may anchor."""
+def action_mask(env: PlacementEnv, W: int, H: int, *, prior: bool = False) -> torch.Tensor:
+    """Boolean [H*W]: True where the current building may anchor.
+
+    With ``prior=True``, only road-adjacency-restricted anchors (the soft action
+    prior) are True; may be all-False when no legal anchor is adjacent."""
     m = np.zeros(H * W, dtype=bool)
-    for (x, y) in env.valid_actions():
+    for (x, y) in env.valid_actions(prior=prior):
         m[y * W + x] = True
     return torch.from_numpy(m)
 
