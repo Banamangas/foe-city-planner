@@ -95,3 +95,53 @@ def test_quality_handtuned_city_is_clean(city_data, helper_data):
     q = quality_report(routed)
     assert q["filler_road_adjacent"] == 0     # rule 1: no filler touches a road
     assert q["underused_roads"] == 0          # rule 2: every road serves >=2 buildings
+
+
+# --- Road sharing metrics (Task 2) -----------------------------------------
+
+from foeopt.quality import road_cell_load, sharing_histogram, road_contribution
+
+
+def _sharing_layout():
+    # TH(0,0); road (1,0),(1,1); consumers A(2,0), B(2,1), C(0,1) all 1x1.
+    # (1,0) touches only A (TH is not road-needing) -> load 1.
+    # (1,1) touches B and C -> load 2.
+    th = _b(1, 0, 0, th=True)
+    a = _b(10, 2, 0, needs=True)
+    b = _b(11, 2, 1, needs=True)
+    c = _b(12, 0, 1, needs=True)
+    return Layout(_region(4, 3), [th, a, b, c], th, {(1, 0): 1, (1, 1): 1})
+
+
+def test_road_cell_load_counts_adjacent_consumers():
+    load = road_cell_load(_sharing_layout())
+    assert load == {(1, 0): 1, (1, 1): 2}
+
+
+def test_sharing_histogram_buckets_by_load():
+    assert sharing_histogram(_sharing_layout()) == {1: 1, 2: 1}
+
+
+def test_road_contribution_splits_shared_cells():
+    contrib = road_contribution(_sharing_layout())
+    assert contrib[10] == 1.0            # A owns (1,0)
+    assert contrib[11] == 0.5            # B shares (1,1)
+    assert contrib[12] == 0.5            # C shares (1,1)
+    assert sum(contrib.values()) == 2.0  # == number of load>=1 road cells
+
+
+def test_format_quality_includes_sharing():
+    line = format_quality(_sharing_layout())
+    assert "road sharing avg 1.50" in line
+    assert "overhead cells 0" in line
+
+
+def test_bundled_city_sharing_regression(repo_root):
+    from foeopt.loader import load_layout
+    lay = load_layout(str(repo_root / "city-user-data.json"),
+                      str(repo_root / "city-user-data-foe-helper.json"))
+    load = road_cell_load(lay)
+    hist = sharing_histogram(lay)
+    assert len(load) == 142
+    assert round(sum(load.values()) / len(load), 2) == 2.02   # measured
+    assert hist[2] == 137 and hist[3] == 4                    # measured
