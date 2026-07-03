@@ -35,6 +35,17 @@ def solve_composition(items, *, k_max, len_max, stack_max, area_budget,
                       stubs=False, time_limit=120.0):
     """items: list of (entity_id, w, l) road-needing buildings.
     Returns a result dict (see report keys)."""
+    if not items:
+        return {
+            "status": "NO_CONSUMERS",
+            "model_optimum": 0,
+            "proven_bound": 0,
+            "gap": 0,
+            "trunk_pessimistic": 0,
+            "optimistic_total": 0,
+            "stub_cells": 0,
+            "lanes": [],
+        }
     m = cp_model.CpModel()
     n = len(items)
     depths = sorted({d for (_, w, l) in items for d in (w, l)})
@@ -114,7 +125,16 @@ def solve_composition(items, *, k_max, len_max, stack_max, area_budget,
     solver.parameters.max_time_in_seconds = time_limit
     status = solver.Solve(m)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        return {"status": solver.StatusName(status)}
+        return {
+            "status": solver.StatusName(status),
+            "model_optimum": None,
+            "proven_bound": None,
+            "gap": None,
+            "trunk_pessimistic": None,
+            "optimistic_total": None,
+            "stub_cells": None,
+            "lanes": [],
+        }
     lanes = []
     for k in range(k_max):
         if not solver.Value(used[k]):
@@ -132,8 +152,8 @@ def solve_composition(items, *, k_max, len_max, stack_max, area_budget,
     return {
         "status": solver.StatusName(status),
         "model_optimum": solver.Value(total),
-        "proven_bound": int(solver.BestObjectiveBound()),
-        "gap": solver.Value(total) - int(solver.BestObjectiveBound()),
+        "proven_bound": int(round(solver.BestObjectiveBound())),
+        "gap": solver.Value(total) - int(round(solver.BestObjectiveBound())),
         "trunk_pessimistic": solver.Value(trunk_pess),
         "optimistic_total": lane_total + n_used + solver.Value(stub_cells),
         "stub_cells": solver.Value(stub_cells),
