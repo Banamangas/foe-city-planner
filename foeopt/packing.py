@@ -34,10 +34,10 @@ class Grid:
         self._unavail.update(cells)
 
 
-def first_fit(grid: Grid, w: int, l: int) -> tuple[int, int] | None:
+def first_fit(grid: Grid, w: int, l: int, ok=None) -> tuple[int, int] | None:
     for y in range(grid.height):
         for x in range(grid.width):
-            if grid.fits(x, y, w, l):
+            if grid.fits(x, y, w, l) and (ok is None or ok(x, y)):
                 return (x, y)
     return None
 
@@ -53,10 +53,11 @@ def _border_cells(x: int, y: int, w: int, l: int) -> set[tuple[int, int]]:
 
 
 def first_fit_adjacent(
-    grid: Grid, w: int, l: int, targets: set[tuple[int, int]]
+    grid: Grid, w: int, l: int, targets: set[tuple[int, int]], ok=None
 ) -> tuple[int, int] | None:
     for y in range(grid.height):
         for x in range(grid.width):
-            if grid.fits(x, y, w, l) and (_border_cells(x, y, w, l) & targets):
+            if (grid.fits(x, y, w, l) and (_border_cells(x, y, w, l) & targets)
+                    and (ok is None or ok(x, y))):
                 return (x, y)
     return None
