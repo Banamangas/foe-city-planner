@@ -48,16 +48,24 @@ proven floor for *local* methods on darkzig; target Σ/2 = 114.
 The 114 number may be a phantom; chasing it uninstrumented violates our own
 measure-first lessons.
 
-- [ ] Compute honest lower bounds for darkzig roads: (a) adjacency-capacity bound
+- [x] Compute honest lower bounds for darkzig roads: (a) adjacency-capacity bound
       (each connected road cell serves ≤3 consumers + must chain to TH), (b) LP
       relaxation of the placement+routing ILP on the real grid (bound only — no
       integral solve needed), (c) per-corridor counting on the free-cell geometry.
-- [ ] Measure the user's 142-road city: per-building road-cell "contribution"
+      (Shipped: (a) only, `foeopt/bounds.py::bound_adjacency` — 21 on darkzig, 28
+      on the user city. (b)/(c) intentionally descoped: (a) is the max/usable
+      bound and airtight; adding weaker bounds under it would not move the band.)
+- [x] Measure the user's 142-road city: per-building road-cell "contribution"
       histogram + buildings-per-road-cell histogram (extend `foeopt/quality.py`).
       This characterizes *how* an expert beats Σ/2 (stubs? junctions? partial-side?).
+      (Measured: hist {1:1, 2:137, 3:4}, avg 2.02, 0 overhead cells — 96.5% of
+      road cells at the double-row ideal, essentially no connectivity waste.)
 - [ ] Deliverable: a target band for darkzig (e.g. "optimum plausibly 118–135")
       and a benchmark suite definition: darkzig (gate) + `make_real_like_city`
       seeds at fill 0.5/0.7/0.9 + the user's city for improve-mode regression.
+      **BLOCKED (2026-07-03):** calibration on the user city is INFEASIBLE under
+      the A1 model's own region-area guard — no target band could be produced.
+      See `tasks/lessons.md` and `.superpowers/sdd/task-5-report.md`.
 
 ## Track A — Lane/stub decomposition optimizer (the main bet)
 
@@ -141,4 +149,53 @@ objective is re-anchored to the proven bound, not abandoned on vibes).
 
 ## Review
 
-_(fill in as tracks complete)_
+### Track 0 / A1 — BLOCKED at calibration (2026-07-03)
+
+Built per plan: `foeopt/quality.py` sharing metrics, `foeopt/bounds.py`
+(adjacency bound only — b/c descoped, see checklist above),
+`scripts/exp_lane_composition.py` (throwaway CP-SAT lane/stub composer,
+`--selftest` PASS: oracle=1 ≤ family=6).
+
+Calibration (§3.4) could not be completed. Running the composer on the user's
+82-consumer inventory with the spec's own region-area-fit guard
+(`total ≤ region_free_cells = 145`) returns **INFEASIBLE** — confirmed not a
+`--stack-max`/`--lanes` sizing artifact (re-run with `--lanes 20 --stack-max
+300` still INFEASIBLE; the binding constraint is the area guard, which isn't
+CLI-adjustable). So `model_optimum(user city)` does not exist and
+`f = 142 / model_optimum` cannot be computed — a harder failure than "outside
+the [0.75, 1.33] sanity band," so per the escalation rule the darkzig number
+was **not** used to compute a verdict.
+
+Root cause (diagnosed against the T2 sharing histogram): the user's real
+layout is nearly all double-loaded lane (137/142 cells at load 2, only 5
+"overhead"/junction cells total, avg load 2.02) — i.e. real trunk overhead is
+tiny. The model's pessimistic-trunk formula (`Σ over lanes of depthA+1+depthB`,
+crediting zero cross-lane trunk sharing) cannot reproduce that: relaxing the
+area guard to see the model's own unconstrained answer, its best-found
+solution after 300s needs `trunk_pessimistic=41` (vs the real ~5) and
+`lane cells≈164` (vs the real double-loaded 137, from the rigid
+uniform-depth-per-lane-side constraint) — total 205, not even proven optimal
+(bound 166). Both numbers are big overcounts on a city with only 3 free cells
+of slack (4224 region − 4079 buildings − 142 real roads), so the family model
+blows the budget before any feasible point exists.
+
+**Darkzig numbers were computed (Step 1 ran all three commands per the brief)
+but are NOT a verdict:** `comp-darkzig.json` model_optimum=160 (proven_bound
+124, gap 36); `comp-darkzig-stubs.json` model_optimum=61 (proven_bound 41,
+gap 20 — degenerate, stub cap lets the solver open many minimal lanes purely
+to unlock stub slots; matches the design doc's own warning that the stub
+scenario is a sensitivity check, not a base-model number). `report_bounds`:
+darkzig max=21, user-city max=28.
+
+**Gate decision: none — BLOCKED, calibration itself failed** (this is not the
+"C* between thresholds" case; it is escalated separately per the brief's
+sanity-range rule, generalized to "model_optimum doesn't exist"). Not a
+go/kill on Track A itself — the A1 solver and its
+`--selftest` restriction-property check are sound; the pessimistic-trunk cost
+term is the specific defect (its own reported total on the user city is
+already ~1.4–1.6× the real 142, before the area guard even fires). Two
+unblocking options for the user: (1) fix the trunk formula to credit
+cross-lane sharing and re-calibrate, or (2) accept the adjacency-bound-only
+target band (`[21, C*]` unknown) and route to Track B/D on the existing
+158-road plateau without a calibrated Track-A ceiling. Full numbers, the two
+CLI probes, and the diagnostic run are in `.superpowers/sdd/task-5-report.md`.
