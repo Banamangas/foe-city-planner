@@ -117,3 +117,62 @@ observation, routability-preserving action masking, DAgger), not the knobs.
 it must include the routability mask (foeopt/reach.py, 2026-07-02 spec) and
 road-visible observations, and it competes against the Track-A structured
 optimizer, not against random rollouts.
+
+## Road-target calibration + A1 composition verdict (2026-07-03)
+
+**BLOCKED — the A1 pessimistic-trunk family model is INFEASIBLE on the
+calibration input, so the calibration factor `f` cannot be computed and no
+gate verdict was written.** `scripts/exp_lane_composition.py
+city-user-data.json city-user-data-foe-helper.json --time-limit 300` (the
+brief's Step-1 command, 82 road-needing consumers, real expert answer 142)
+returns `status: INFEASIBLE`, `model_optimum: null`. Confirmed this is not a
+sizing-knob artifact: re-run with `--lanes 20 --stack-max 300` is still
+INFEASIBLE. The binding constraint is the model's own region-area-fit guard
+(`total ≤ region_free_cells`), which on the user's city is `145` (4224 region
+− 4079 building area; the real 142-road answer leaves only 3 cells of slack)
+and is not adjustable from the CLI. Per the calibration spec's own stop rule
+(§3.4: "if the model can't get within ~25% of 142... stop and redesign before
+reading any darkzig number") and the escalation contract for this task, the
+darkzig numbers were **not** used to compute `C*` and no go/kill verdict was
+written — this is a harder failure than "`f` outside [0.75, 1.33]": there is
+no `f` to be outside anything.
+
+**Root cause, diagnosed against the T2 sharing histogram
+(`sharing_histogram`, measured 2026-06/pinned in `tests/test_quality.py`):**
+the user's real layout is essentially all double-loaded lane — hist
+`{1:1, 2:137, 3:4}`, avg load 2.02, **0 overhead cells** — i.e. the real
+network spends only ~5 of 142 cells on anything but a perfect double row.
+The A1 pessimistic-trunk formula (`Σ over used lanes of (depthA + 1 +
+depthB)`) charges every lane a fully exclusive trunk allocation and credits
+*zero* cross-lane trunk sharing. Relaxing the area guard to see the model's
+own unconstrained answer for the same 82-item inventory (diagnostic only, not
+an official Step-1 run): best-found after 300s is `total=205`
+(`proven_bound=166`, `gap=39`, not solved to optimality) with
+`trunk_pessimistic=41` (vs the real ~5 overhead cells — an ~8x overcount) and
+lane cells ≈164 (vs the real double-loaded portion of 137, a further ~20%
+overcount from the rigid uniform-depth-per-lane-side constraint). Both errors
+compound on a city with only 3 cells of slack, so the family model can't find
+*any* feasible point even though the real solution fits with room to spare.
+
+**Recorded for reference, not used in any gate math:**
+`comp-darkzig.json` (300s): `model_optimum=160`, `proven_bound=124`, `gap=36`,
+`trunk_pessimistic=32`, `optimistic_total=132`, `stub_cells=0`.
+`comp-darkzig-stubs.json` (300s, `--stubs`): `model_optimum=61`,
+`proven_bound=41`, `gap=20`, `stub_cells=18` — degenerate: the stub-slot cap
+(`stub_cells <= 2*used_lanes`) rewards opening many minimal single-item lanes
+purely to unlock stub capacity, matching the design doc's own warning that the
+stub scenario is a sensitivity check, not a base-model number. `report_bounds`
+(`foeopt/bounds.py`, adjacency bound only): darkzig max=21, user city max=28
+(both well below their known-achievable 158/142, i.e. the bound itself is
+sound — the composition model's trunk term is the specific defect, not the
+bounds).
+
+**Rule:** before trusting any A1 number, fix the trunk-cost term to credit
+cross-lane sharing (e.g. shared boundary between adjacent stacked lanes, or an
+"optimistic-trunk-minus-sharing" formula actually derived from the geometry
+rather than guessed) and re-run calibration on the user's city first — a
+composition model whose own best score on the *known-142* input isn't even
+region-feasible cannot be trusted to rank a `C*` on darkzig. Do not read or
+act on the darkzig `model_optimum`/`C*` numbers above until calibration
+passes; they are recorded here only so the next attempt doesn't have to
+re-run the 300s solves.
