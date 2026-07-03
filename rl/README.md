@@ -6,9 +6,13 @@ goal is to beat the **~158-road plateau** local methods hit on darkzig, toward t
 Σ(short-side)/2 ≈ **114** target — and, once trained, to produce good layouts for
 *any* city instantly.
 
-**Status:** the environment (`foeopt/rlenv.py`) and this training stack are built
-and **structurally smoke-tested on CPU** (one PPO update + eval run cleanly). They
-have **not been trained to convergence** — that needs a GPU and hours-to-days.
+**Status: ARCHIVED (2026-07-02).** The M4 gate failed per its own fail-fast rule:
+0% episode success at darkzig-like 0.9 fill, greedy darkzig eval always
+stuck/unroutable, and the imitation warm-start rescue (`rl/imitate.py`, BC acc
+45.8%) collapsed to 6–12% success under RL fine-tuning. See the 2026-07-02
+entry in `tasks/lessons.md`. The env, tests, and this stack remain usable; no
+further GPU training is planned. The road objective moved to the classical
+Track-A/B/C1 plan (`tasks/todo.md`).
 Design rationale: `docs/superpowers/specs/2026-06-23-rl-placement-design.md`.
 
 ## 1. Install (one-time)

@@ -98,3 +98,22 @@ Built a deterministic LNS+CP-SAT (ruin-and-recreate: free a window of buildings,
 - **Naive random windows:** 169→164 — only **2 of 7756 windows accepted**. The repack start is already a good local optimum; almost no small window yields a global road reduction.
 - **Targeted (windows around under-used roads / spurs, via `quality.py`) + lateral-move acceptance:** 169→162 (3 improving, 2762 lateral), then `+anneal` → **157**. So the full LNS+CP-SAT+anneal pipeline reaches **157 vs the existing repack+anneal polish's 158** — a **1-road (0.6%) gain** for a heavy ortools dependency + ~180 s. The LNS barely moves (169→162); the anneal does most of the work.
 **Verdict: NOT productionized** (no repo code; scratchpad only). Root cause is the recurring one — global coupling + CP-SAT's ~11×11 window ceiling means local re-optimization can only make small local fixes, which the Task-A-accelerated anneal already does more cheaply. **~158 is the practical floor for local methods on darkzig.** Reaching the Σ/2=114 target needs a *global* method (an amortized ML/RL solver — the chip-floorplanning playbook), not more local search. Measure-before-build paid off: a 1-road win does not justify the dependency.
+
+## RL placement (M2-M4) archived: the gate failed by its own rule (2026-07-02)
+**Evidence (training logs, ROCm GPU):** curriculum stages learn, but at moderate
+fill the policy places 80-86% of episodes with mean_roads ~3x target; at
+darkzig-like fill 0.7-0.9 success is 0% everywhere (training_bridge.log,
+training_m4.log); every greedy darkzig eval ends stuck/unroutable. The designated
+rescue lever - imitation warm-start from repack experts (rl/imitate.py, BC top-1
+acc 45.8%) - collapsed to 6-12% success under PPO fine-tuning (training_bc_rl.log),
+likely catastrophic forgetting. Per the design's fail-fast rule (spec 2026-06-23
+section 9.4), that exhausts the track.
+**Root cause (same wall as attempts 1-7):** the policy never observes road
+structure during an episode (roads are computed only at the terminal step), so at
+90% fill it cannot learn to leave road channels; the -100 trap returns as soon as
+the fill rises. Fixing that means changing the formulation (roads in the
+observation, routability-preserving action masking, DAgger), not the knobs.
+**Rule:** don't resume RL training on this formulation. If RL is ever revisited,
+it must include the routability mask (foeopt/reach.py, 2026-07-02 spec) and
+road-visible observations, and it competes against the Track-A structured
+optimizer, not against random rollouts.

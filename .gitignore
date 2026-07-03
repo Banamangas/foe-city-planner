@@ -12,3 +12,4 @@ output/
 DarkZig-*.txt
 city.txt
 *.json.bak
+*.log

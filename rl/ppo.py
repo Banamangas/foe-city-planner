@@ -135,7 +135,7 @@ def train(*, stage=0, updates=200, episodes_per_update=16, lr=3e-4, device="cpu"
           seed=0, ckpt="rl_ckpt.pt", placement_reward=0.1, hidden=64,
           eval_layout=None, resume=None, auto=False, advance_success=0.9,
           advance_patience=20, prior_strength_start=0.95, prior_strength_floor=0.2,
-          potential_shaping=False, ref_layout=None, log=print):
+          potential_shaping=False, ref_layout=None, fill=0.9, log=print):
     rng = random.Random(seed)
     torch.manual_seed(seed)
     policy = PlacementPolicy(hidden=hidden).to(device)
@@ -152,7 +152,7 @@ def train(*, stage=0, updates=200, episodes_per_update=16, lr=3e-4, device="cpu"
             batch, roads, successes, target = [], [], 0, None
             for _ in range(episodes_per_update):
                 if ref_layout is not None and stg >= last:
-                    city = curriculum.make_real_like_city(rng, ref_layout)
+                    city = curriculum.make_real_like_city(rng, ref_layout, fill=fill)
                 else:
                     city = curriculum.make_city(stg, rng)
                 W, H = grid_bounds(city.region.cells)
