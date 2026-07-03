@@ -41,6 +41,8 @@ def main(argv=None):
                    help="real city (e.g. darkzig.json) to synthesize darkzig-like training "
                         "cities from for the final curriculum stage (held out for eval)")
     p.add_argument("--ref-helper", default=None)
+    p.add_argument("--fill", type=float, default=0.9,
+                   help="fill ratio for ref-city synthesis (0.3-0.9; lower=easier bridging stage)")
     args = p.parse_args(argv)
 
     eval_layout = None
@@ -59,7 +61,7 @@ def main(argv=None):
           eval_layout=eval_layout, resume=args.resume, auto=args.auto,
           prior_strength_start=args.prior_strength_start,
           prior_strength_floor=args.prior_strength_floor,
-          potential_shaping=args.potential_shaping, ref_layout=ref_layout)
+          potential_shaping=args.potential_shaping, ref_layout=ref_layout, fill=args.fill)
 
 
 if __name__ == "__main__":
