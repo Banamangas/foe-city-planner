@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from foeopt.model import Building, Footprint, Layout
+from foeopt.reach import ReachChecker
 from foeopt.report import road_estimate
 from foeopt.router import RouteError, route
 from foeopt.validate import is_valid, unsatisfied
@@ -81,6 +82,7 @@ class PlacementEnv:
         self._placed: list[Building] = [self.townhall]
         self._occ: set[tuple[int, int]] = set(self.townhall.footprint.cells())
         self._ptr = 0
+        self._reach: ReachChecker | None = None
         self._potential = self._partial_road_estimate()
         if self._cache_valid_actions:
             self._populate_valid_cache()
@@ -94,7 +96,7 @@ class PlacementEnv:
     def done(self) -> bool:
         return self._ptr >= len(self._order)
 
-    def valid_actions(self, prior: bool = False) -> list[tuple[int, int]]:
+    def valid_actions(self, prior: bool = False, safe: bool = False) -> list[tuple[int, int]]:
         """All anchor positions where the current building fits without overlap.
 
         With ``prior=True``, restrict to anchors whose footprint is orthogonally
@@ -104,23 +106,50 @@ class PlacementEnv:
         — and shrinks the action space ~100x. May return [] when no legal anchor
         is adjacent (callers fall back to the full set). Output is sorted for
         determinism.
+
+        With ``safe=True``, further restrict to anchors whose placement is_safe
+        per ReachChecker: free space stays connected to the Townhall, and no
+        placed road-needing building (nor the candidate itself, if it needs a
+        road) loses its last free border cell. Default False leaves every
+        existing behavior byte-identical.
         """
         b = self.current
         if b is None:
             return []
         w, l = b.footprint.width, b.footprint.length
         if not self._cache_valid_actions:
-            return self._valid_actions_uncached(w, l, prior)
-        # Cached path: read the per-(w, l) full anchor set + delta-maintained
-        # frontier; produce bit-identical output to _valid_actions_uncached.
-        full = self._valid_cache[(w, l)]
-        if not prior:
-            return list(full)
-        frontier = self._frontier
-        out = [a for a in full
-               if any((a[0] + dx, a[1] + dy) in frontier
-                      for dx in range(w) for dy in range(l))]
-        return sorted(out)
+            out = self._valid_actions_uncached(w, l, prior)
+        else:
+            # Cached path: read the per-(w, l) full anchor set + delta-maintained
+            # frontier; produce bit-identical output to _valid_actions_uncached.
+            full = self._valid_cache[(w, l)]
+            if not prior:
+                out = list(full)
+            else:
+                frontier = self._frontier
+                out = sorted(a for a in full
+                             if any((a[0] + dx, a[1] + dy) in frontier
+                                    for dx in range(w) for dy in range(l)))
+        return self._filter_safe(out, w, l) if safe else out
+
+    def _filter_safe(self, anchors: list[tuple[int, int]], w: int, l: int) -> list[tuple[int, int]]:
+        """Keep anchors whose placement preserves routability: free space stays
+        connected to the Townhall and no placed consumer (nor the candidate, if
+        it needs a road) loses its last free border cell. Exact via ReachChecker."""
+        if self._reach is None:
+            guarded = tuple(b.footprint.border_cells()
+                            for b in self._placed if b.needs_road)
+            free = self.region.cells - self._occ
+            self._reach = ReachChecker(free, set(self.townhall.footprint.cells()),
+                                       guarded=guarded)
+        b = self.current
+        out = []
+        for (x, y) in anchors:
+            fp = Footprint(x, y, w, l).cells()
+            extra = (Footprint(x, y, w, l).border_cells(),) if b.needs_road else ()
+            if self._reach.is_safe(fp, extra_guarded=extra):
+                out.append((x, y))
+        return out
 
     def _valid_actions_uncached(self, w: int, l: int, prior: bool) -> list[tuple[int, int]]:
         free = self.region.cells - self._occ
@@ -200,6 +229,7 @@ class PlacementEnv:
         self._placed.append(replace(b, footprint=fp))
         self._occ |= cells
         self._ptr += 1
+        self._reach = None
         if self._cache_valid_actions:
             self._delta_update_cache(cells)
         if not self.done:
