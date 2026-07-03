@@ -44,3 +44,62 @@ def placement_is_safe(free: set[Cell] | frozenset[Cell],
     if _reachable(remaining, sources) != remaining:
         return False
     return all(g & remaining for g in guarded)
+
+
+class ReachChecker:
+    """Per-step accelerator: build once for a (free, sources, guarded) state,
+    query many candidate footprints. Exact — every answer equals
+    placement_is_safe (randomized-equivalence-tested)."""
+
+    def __init__(self, free, sources, guarded: Iterable[frozenset[Cell]] = ()):
+        self.free = frozenset(free)
+        self.sources = sources
+        self.guarded = tuple(frozenset(g) for g in guarded)
+        self.reachable = _reachable(self.free, sources)
+        self._all_reachable = self.reachable == self.free
+        self._seeds = frozenset(
+            c for c in self.free
+            if c in sources
+            or any((c[0] + dx, c[1] + dy) in sources for dx, dy in _ORTHO))
+
+    def is_safe(self, footprint_cells,
+                extra_guarded: Iterable[frozenset[Cell]] = ()) -> bool:
+        fp = frozenset(footprint_cells)
+        guards = self.guarded + tuple(frozenset(g) for g in extra_guarded)
+        if not all(any(c in self.free and c not in fp for c in g)
+                   for g in guards):
+            return False
+        if self._all_reachable and not (fp & self._seeds) \
+                and self._ring_in_one_band(fp):
+            return True
+        return placement_is_safe(self.free, fp, self.sources, guards)
+
+    def _ring_in_one_band(self, fp: frozenset[Cell]) -> bool:
+        """Fast sufficient check: the ring (free orthogonal neighbours of the
+        footprint) lies in one orthogonally-connected component of the free
+        band (Chebyshev distance <= 1, so corner cells join the arcs). Then any
+        path through the footprint can detour through the band. Empty ring =
+        the footprint consumed a whole pocket exactly — nothing to disconnect."""
+        ring: set[Cell] = set()
+        band: set[Cell] = set()
+        for (x, y) in fp:
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    c = (x + dx, y + dy)
+                    if c in self.free and c not in fp:
+                        band.add(c)
+                        if abs(dx) + abs(dy) == 1:
+                            ring.add(c)
+        if not ring:
+            return True
+        start = next(iter(ring))
+        seen = {start}
+        stack = [start]
+        while stack:
+            cx, cy = stack.pop()
+            for dx, dy in _ORTHO:
+                n = (cx + dx, cy + dy)
+                if n in band and n not in seen:
+                    seen.add(n)
+                    stack.append(n)
+        return ring <= seen
