@@ -46,3 +46,20 @@ def test_first_fit_adjacent_none_when_unreachable():
     # block (2,0) so nothing can touch (3,0)
     g.occupy(2, 0, 1, 1)
     assert first_fit_adjacent(g, 1, 1, targets={(3, 0)}) is None
+
+
+def test_first_fit_respects_ok_filter():
+    from foeopt.packing import Grid, first_fit
+    grid = Grid(4, 4, set())
+    p_all = first_fit(grid, 2, 2)
+    p_filtered = first_fit(grid, 2, 2, ok=lambda x, y: (x, y) != p_all)
+    assert p_filtered is not None and p_filtered != p_all
+
+
+def test_first_fit_adjacent_respects_ok_filter():
+    from foeopt.packing import Grid, first_fit_adjacent
+    grid = Grid(6, 2, set())
+    road = {(2, 0)}
+    p_all = first_fit_adjacent(grid, 1, 1, road)
+    p2 = first_fit_adjacent(grid, 1, 1, road, ok=lambda x, y: (x, y) != p_all)
+    assert p2 is not None and p2 != p_all
