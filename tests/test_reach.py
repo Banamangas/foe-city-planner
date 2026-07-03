@@ -56,3 +56,42 @@ def test_guarded_border_must_keep_a_free_cell():
                                  sources={(-1, 0)}, guarded=(guard,))
     assert placement_is_safe(free, _rect(6, 0, 1, 1),
                              sources={(-1, 0)}, guarded=(guard,))
+
+
+from foeopt.reach import ReachChecker
+
+
+def test_checker_matches_oracle_on_hand_cases():
+    free = {(x, y) for x in range(8) for y in range(2)}
+    chk = ReachChecker(free, sources={(-1, 0)})
+    assert chk.is_safe(_rect(5, 0, 1, 1)) == \
+        placement_is_safe(free, _rect(5, 0, 1, 1), {(-1, 0)})
+    assert not chk.is_safe(_rect(3, 0, 2, 2))     # 2x2 severs the 2-wide corridor
+
+
+def test_checker_rejects_covering_the_only_seed():
+    # the ONLY source-adjacent free cell is (0,0); covering it must be unsafe
+    # even though the ring around (0,0) is locally one arc
+    free = {(x, 0) for x in range(5)}
+    chk = ReachChecker(free, sources={(-1, 0)})
+    assert not chk.is_safe(_rect(0, 0, 1, 1))
+
+
+def test_checker_oracle_equivalence_randomized():
+    rng = random.Random(0)
+    for trial in range(30):
+        w, h = rng.randint(6, 12), rng.randint(6, 12)
+        free = {(x, y) for x in range(w) for y in range(h)}
+        for _ in range(rng.randint(0, 6)):        # random occupied blobs
+            bx, by = rng.randrange(w), rng.randrange(h)
+            free -= _rect(bx, by, rng.randint(1, 3), rng.randint(1, 3))
+        sources = {(0, 0)}
+        guard = (frozenset({(w - 1, h - 1), (w - 2, h - 1)}),)
+        chk = ReachChecker(free, sources, guarded=guard)
+        for _ in range(40):
+            fx, fy = rng.randrange(w), rng.randrange(h)
+            fp = frozenset(_rect(fx, fy, rng.randint(1, 3), rng.randint(1, 3)) & free)
+            if not fp:
+                continue
+            assert chk.is_safe(fp) == placement_is_safe(free, fp, sources, guard), \
+                f"trial {trial}: mismatch on fp={sorted(fp)}"
