@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 
 from foeopt.model import Building, Footprint, Layout, Region
 from foeopt.packing import Grid, first_fit, first_fit_adjacent
+from foeopt.reach import ReachChecker
 from foeopt.router import RouteError, route
 
 _ORTHO = ((1, 0), (-1, 0), (0, 1), (0, -1))
@@ -66,7 +67,8 @@ def _road_frontier_cell(grid: Grid, road: set, region) -> tuple[int, int] | None
     return best
 
 
-def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
+def build_candidate(layout: Layout, config: PackConfig, *,
+                    safe_placements: bool = False) -> PackResult:
     region = layout.region.cells
     w, h = bbox(layout.region)
     blocked = {(x, y) for x in range(w) for y in range(h)} - region
@@ -89,6 +91,21 @@ def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
     grid.occupy(pos[0], pos[1], tw, tl)
     placed[townhall.entity_id] = pos
     th_border = Footprint(pos[0], pos[1], tw, tl).border_cells()
+    th_cells = set(Footprint(pos[0], pos[1], tw, tl).cells())
+    bocc: set[tuple[int, int]] = set(th_cells)
+    guarded: list[frozenset[tuple[int, int]]] = [th_border]
+
+    def _safe_ok(b: Building):
+        if not safe_placements:
+            return None
+        checker = ReachChecker(region - bocc, road | th_cells, guarded=guarded)
+        bw, bl = b.footprint.width, b.footprint.length
+
+        def ok(x: int, y: int) -> bool:
+            fp = Footprint(x, y, bw, bl)
+            extra = (fp.border_cells(),) if b.needs_road else ()
+            return checker.is_safe(fp.cells(), extra_guarded=extra)
+        return ok
 
     # 2. Seed the road network with a free Townhall-border cell.
     road: set[tuple[int, int]] = set()
@@ -113,10 +130,13 @@ def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
                 break
             road.add(cell)
             grid.reserve([cell])
-        p = first_fit_adjacent(grid, bw, bl, road)
+        p = first_fit_adjacent(grid, bw, bl, road, ok=_safe_ok(b))
         if p is not None:
             grid.occupy(p[0], p[1], bw, bl)
             placed[b.entity_id] = p
+            bocc |= Footprint(p[0], p[1], bw, bl).cells()
+            if b.needs_road:
+                guarded.append(Footprint(p[0], p[1], bw, bl).border_cells())
             remaining.pop(0)
             # Advance target so road extends past the newly placed building.
             road_target = len(road) + max(bw, bl)
@@ -131,12 +151,13 @@ def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
     # 4. Fillers: densest first, anywhere free.
     for b in sorted(fillers, key=lambda b: (-area(b), rng.random())):
         bw, bl = b.footprint.width, b.footprint.length
-        p = first_fit(grid, bw, bl)
+        p = first_fit(grid, bw, bl, ok=_safe_ok(b))
         if p is None:
             unplaced.append(b)
             continue
         grid.occupy(p[0], p[1], bw, bl)
         placed[b.entity_id] = p
+        bocc |= Footprint(p[0], p[1], bw, bl).cells()
 
     # 5. Build candidate + route for the minimal road set.
     new_buildings: list[Building] = []
@@ -192,7 +213,8 @@ def build_candidate(layout: Layout, config: PackConfig) -> PackResult:
 
 
 def repack(layout: Layout, *, thorough: bool = False,
-           budget_seconds: float | None = None, seed: int = 0) -> PackResult:
+           budget_seconds: float | None = None, seed: int = 0,
+           safe_placements: bool = False) -> PackResult:
     """Budgeted randomized multi-start: try many randomized packings, keep the
     best by (fewest unplaced, then fewest roads). Deterministic given `seed` and
     the number of trials completed. Runs until the time budget so it minimizes
@@ -207,7 +229,7 @@ def repack(layout: Layout, *, thorough: bool = False,
     deadline = time.monotonic() + budget_seconds
     while True:
         cfg = PackConfig(master.choice(anchors), master.randrange(2 ** 32))
-        res = build_candidate(layout, cfg)
+        res = build_candidate(layout, cfg, safe_placements=safe_placements)
         trials += 1
         key = (len(res.unplaced), len(res.layout.roads))
         if best_key is None or key < best_key:

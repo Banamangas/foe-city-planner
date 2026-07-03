@@ -36,6 +36,21 @@ def _full_region(w, h):
     return Region(frozenset((x, y) for x in range(w) for y in range(h)))
 
 
+def _sparse_layout():
+    # 14x14 all-cells region: 2x2 Townhall, 4 road-needing consumers
+    # (2x2/3x2 mix), 3 fillers. Sparse enough that both the unmasked and
+    # safe-placements packers place everything.
+    th = _b(1, 0, 0, 2, 2, th=True)
+    cons = [
+        _b(10, 0, 0, 2, 2, needs=True),
+        _b(11, 0, 0, 2, 2, needs=True),
+        _b(12, 0, 0, 3, 2, needs=True),
+        _b(13, 0, 0, 3, 2, needs=True),
+    ]
+    fill = [_b(20 + i, 0, 0, 1, 1, needs=False) for i in range(3)]
+    return Layout(_full_region(14, 14), [th, *cons, *fill], th)
+
+
 def test_build_candidate_grows_tree_in_sparse_city():
     from foeopt.packer import build_candidate, PackConfig
     from foeopt.validate import is_valid
@@ -219,3 +234,22 @@ def test_gapfill_skips_road_needing_buildings():
     res = build_candidate(layout, PackConfig("bl", 0))
     assert 2 in {b.entity_id for b in res.unplaced}        # road-needing stays unplaced
     assert 2 not in {b.entity_id for b in res.layout.buildings}
+
+
+def test_safe_placements_off_is_byte_identical():
+    from foeopt.packer import PackConfig, build_candidate
+    layout = _sparse_layout()          # reuse this file's existing fixture helper
+    a = build_candidate(layout, PackConfig("bl", 7))
+    b = build_candidate(layout, PackConfig("bl", 7), safe_placements=False)
+    assert {x.entity_id: x.footprint for x in a.layout.buildings} == \
+           {x.entity_id: x.footprint for x in b.layout.buildings}
+    assert a.layout.roads == b.layout.roads
+
+
+def test_safe_placements_produces_valid_routed_layout():
+    from foeopt.packer import PackConfig, build_candidate
+    from foeopt.validate import is_valid
+    layout = _sparse_layout()
+    res = build_candidate(layout, PackConfig("bl", 7), safe_placements=True)
+    assert res.unplaced == []
+    assert is_valid(res.layout)

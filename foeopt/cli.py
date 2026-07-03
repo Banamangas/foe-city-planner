@@ -53,7 +53,8 @@ def _cmd_layout(args) -> int:
         res = polish(current, repack_budget=rbudget, anneal_budget=args.anneal_budget, seed=args.seed)
         print(f"  polished roads: {res.base_roads} -> {len(res.layout.roads)}")
     else:
-        res = repack(current, budget_seconds=rbudget, seed=args.seed)
+        res = repack(current, budget_seconds=rbudget, seed=args.seed,
+                     safe_placements=args.safe_placements)
     s = stats(current, res.layout.roads)
     print("Full re-pack (Phase 2):")
     print(f"  buildings: {len(current.buildings)} | placed: "
@@ -130,6 +131,9 @@ def build_parser() -> argparse.ArgumentParser:
                           help="refine the re-pack with annealing (lower roads)")
     p_layout.add_argument("--anneal-budget", type=float, default=120.0,
                           help="seconds for the anneal phase when --polish (default 120)")
+    p_layout.add_argument("--safe-placements", action="store_true",
+                          help="mask placements that wall off free space or seal a "
+                               "consumer (experimental; A/B-gated, off by default)")
     p_layout.set_defaults(func=_cmd_layout)
 
     p_improve = sub.add_parser("improve", help="lower roads via local-search building moves")
