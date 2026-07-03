@@ -68,6 +68,38 @@ def underused_roads(layout: Layout) -> list[tuple[int, int]]:
     return sorted(bad)
 
 
+def road_cell_load(layout: Layout) -> dict[tuple[int, int], int]:
+    """Per road cell: how many road-needing buildings it is orthogonally
+    adjacent to. Load 2 is the double-row ideal; 3 happens at junctions/stubs;
+    0 is pure connectivity overhead. The Townhall and fillers don't count."""
+    load = {c: 0 for c in layout.roads}
+    for b in layout.road_needing():
+        for c in b.footprint.border_cells():
+            if c in load:
+                load[c] += 1
+    return load
+
+
+def sharing_histogram(layout: Layout) -> dict[int, int]:
+    """Road-cell count by load — the shape of road sharing in one dict."""
+    hist: dict[int, int] = {}
+    for v in road_cell_load(layout).values():
+        hist[v] = hist.get(v, 0) + 1
+    return hist
+
+
+def road_contribution(layout: Layout) -> dict[int, float]:
+    """Per consumer: sum over its adjacent road cells of 1/load. Splits each
+    shared cell's cost among the buildings it serves; the total equals the
+    number of load>=1 road cells, so roads_total - total = overhead cells."""
+    load = road_cell_load(layout)
+    return {
+        b.entity_id: sum(1.0 / load[c] for c in b.footprint.border_cells()
+                         if load.get(c, 0) > 0)
+        for b in layout.road_needing()
+    }
+
+
 def quality_report(layout: Layout) -> dict[str, int]:
     """Counts of Rule 1 / Rule 2 violations for a placed, routed layout."""
     fillers = filler_road_adjacencies(layout)
@@ -84,8 +116,16 @@ def quality_report(layout: Layout) -> dict[str, int]:
 def format_quality(layout: Layout) -> str:
     """One-line human summary for the CLI."""
     q = quality_report(layout)
-    return (
+    line = (
         f"placement quality: fillers touching a road {q['filler_road_adjacent']}"
         f"/{q['fillers_total']} (rule 1) | "
         f"under-used roads {q['underused_roads']}/{q['roads_total']} (rule 2)"
     )
+    load = road_cell_load(layout)
+    if load:
+        hist = sharing_histogram(layout)
+        avg = sum(load.values()) / len(load)
+        buckets = " ".join(f"{k}:{hist[k]}" for k in sorted(hist, reverse=True))
+        line += (f" | road sharing avg {avg:.2f} ({buckets})"
+                 f" | overhead cells {hist.get(0, 0)}")
+    return line
