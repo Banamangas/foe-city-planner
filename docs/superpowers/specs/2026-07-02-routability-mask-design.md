@@ -28,12 +28,17 @@ is ever revived (the RL track is archived as of this review).
 
 ```python
 def placement_is_safe(free: set[Cell], footprint_cells: frozenset[Cell],
-                      sources: set[Cell]) -> bool
+                      sources: set[Cell], guarded: Iterable[frozenset[Cell]] = ()) -> bool
 ```
 
-True **iff** after removing `footprint_cells` from `free`, every remaining
+True **iff** after removing `footprint_cells` from `free`: (1) every remaining
 orthogonally-connected free component contains at least one cell of (or
-orthogonally adjacent to) `sources`.
+orthogonally adjacent to) `sources`, AND (2) every cell-set in `guarded` — the
+border cells of already-placed road-needing buildings and the Townhall — still
+intersects the remaining free set. Condition (2) closes the sealing hole:
+free-space connectivity alone cannot stop later placements from occupying every
+border cell of a placed consumer; given (1), one surviving free border cell is
+automatically a *reachable* one, which is exactly what route() needs.
 
 - In the packer, `sources` = the current road tree (or, before any road exists,
   the free cells bordering the Townhall).
