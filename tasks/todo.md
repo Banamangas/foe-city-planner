@@ -193,7 +193,7 @@ sanity-range rule, generalized to "model_optimum doesn't exist"). Not a
 go/kill on Track A itself — the A1 solver and its
 `--selftest` restriction-property check are sound; the pessimistic-trunk cost
 term is the specific defect (its own reported total on the user city is
-already ~1.4–1.6× the real 142, before the area guard even fires). Two
+already ~1.17–1.44× the real 142 (proven bound 166, best-found incumbent 205), before the area guard even fires). Two
 unblocking options for the user: (1) fix the trunk formula to credit
 cross-lane sharing and re-calibrate, or (2) accept the adjacency-bound-only
 target band (`[21, C*]` unknown) and route to Track B/D on the existing
