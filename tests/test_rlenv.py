@@ -206,3 +206,43 @@ def test_potential_shaping_off_by_default():
     env.reset()
     # shaping off, not terminal -> plain placement_reward (0.0)
     assert env.step(env.valid_actions()[0]).reward == 0.0
+
+
+def test_valid_actions_safe_is_subset_of_full():
+    th = _b(1, 2, 2, needs=False, th=True)
+    env = _env(_region_grid(10, 10), [th, _b(10, 3, 2), _b(11, 2, 2)])
+    env.reset()
+    assert set(env.valid_actions(safe=True)) <= set(env.valid_actions())
+    assert env.valid_actions(safe=True)
+
+
+def test_safe_mask_forbids_walling_off_a_pocket():
+    # 1-wide corridor region: TH at the left, a 1x1 anywhere strictly inside
+    # the corridor would strand the right side -> only end placements are safe
+    from foeopt.model import Region
+    region = Region(frozenset((x, 0) for x in range(8)))
+    th = _b(1, 1, 1, needs=False, th=True)
+    env = _env(region, [th, _b(10, 1, 1), _b(11, 1, 1)])
+    env.reset()
+    safe = env.valid_actions(safe=True)
+    assert (7, 0) in safe                # corridor end: nothing stranded
+    assert (4, 0) not in safe            # mid-corridor: strands (5..7, 0)
+
+
+def test_safe_rollouts_never_end_unroutable():
+    import random as _random
+    rng = _random.Random(0)
+    for seed in range(10):
+        th = _b(1, 2, 2, needs=False, th=True)
+        bs = [_b(10 + i, rng.choice([2, 3]), rng.choice([2, 3]),
+                 needs=rng.random() < 0.7) for i in range(8)]
+        env = _env(_region_grid(10, 10), [th, *bs])
+        env.reset()
+        res = None
+        while not env.done:
+            acts = env.valid_actions(safe=True)
+            if not acts:
+                break                      # stuck is allowed; unroutable is not
+            res = env.step(rng.choice(acts))
+        if res is not None and res.done:
+            assert res.info.get("error") != "unroutable"
