@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 
 from foeopt.bounds import bound_adjacency, report_bounds
