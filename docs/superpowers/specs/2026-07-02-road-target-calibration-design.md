@@ -164,3 +164,61 @@ Let C* = calibrated family-optimum with pessimistic trunk.
   LNS (Track B) — later specs, gated on §5.
 - Making OR-Tools a repo dependency.
 - Any RL training.
+
+## v2 model (2026-07-05): embedded trunk + end overhangs
+
+v1 was falsified on the user city: `scripts/exp_lane_composition.py` returned
+`status: INFEASIBLE` under its own area guard, with a relaxed (unconstrained)
+run proving a bound of 166 — above the area budget of 145, itself above the
+real expert answer of 142. See the 2026-07-03 `tasks/lessons.md` entry for the
+full diagnosis. Two root causes were identified there:
+
+1. The pessimistic trunk term `Σ over used lanes of (depthA + 1 + depthB)`
+   charges every lane a fully exclusive trunk allocation, crediting zero
+   cross-lane sharing. The real city's sharing histogram (`{1:1, 2:137, 3:4}`,
+   avg load 2.02) has **zero load-0 overhead cells** — every connector cell is
+   embedded inside a double-loaded lane, not a separate trunk structure. The
+   pessimistic term overcounts this connectivity overhead by ~8×.
+2. Full-frontage lane loading (every building's whole extent counted against
+   its lane side) overcounts real cell usage by ~20%: the real city's measured
+   Σ cell-loads is 287 against a Σ min-sides of 314, because buildings
+   overhang the ends of a lane run — an end building needs only ≥ 1 adjacent
+   road cell, not a full-width allocation.
+
+**v2 changes:**
+
+- **(a) Trunk term dropped.** Connectors are modeled as embedded in lanes,
+  matching the measured zero-overhead-cell reality. An optional
+  `--connectors` sensitivity flag charges `n_used_lanes − 1` extra cells (a
+  minimal "each additional lane needs one more junction cell to reach it"
+  approximation), off by default.
+- **(b) Per-lane-side end overhangs.** Up to 2 buildings per lane side (the
+  two ends of the row) may be marked as "end" placements: an end building
+  contributes 1 frontage cell to the side load instead of its full extent,
+  modeling the overhang the real layout exploits.
+- **(c) Depth classes and stack-max dropped.** Both existed only to feed the
+  now-removed trunk term; v2 has no notion of per-side depth class or a
+  cross-lane stacking budget.
+
+**Status: v2 is a RELAXATION of v1, not a restriction of the real problem.**
+Its optimum is an *optimistic* estimator (every v1-feasible solution maps to a
+v2 solution of ≤ cost, since v2 permits everything v1 permits plus overhangs
+and cheaper connectivity) — so, unlike v1, v2's model-optimum is not
+guaranteed to sit above the true joint optimum. The calibration factor
+`f = 142 / model_optimum(user city)` exists precisely to correct for this
+optimism; it is expected to land below 1. Consequently the self-test
+invariant changes from "family ≥ oracle" to two relaxation/capacity
+invariants instead:
+
+- `v2_optimum ≤ v1_optimum` — provable, since every v1 solution (a full-load
+  assignment with a pessimistic trunk) maps to a valid v2 solution (the same
+  assignment, zero ends used, trunk dropped) of no greater cost.
+- `v2_optimum ≥ ⌈n_items / 3⌉` — the adjacency-capacity bound from §1/§3.2
+  still holds: no road cell, however placed, serves more than 3 consumers,
+  even when every consumer is served by a stub.
+
+Calibration criterion is otherwise unchanged from §5/§3.4: `f` must land in
+`[0.75, 1.33]`; darkzig `C* = f × darkzig v2 optimum`; gate thresholds
+unchanged (`~130` go / `~150` kill / between → user decides). This is a
+**one-iteration, time-boxed retry**: if v2 also fails calibration, Track A is
+killed per the pre-committed stop rule — no v3.
