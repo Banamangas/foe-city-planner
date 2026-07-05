@@ -265,8 +265,8 @@ per the plan's Task 5 / spec §5 gates: 8 seeds, 120s budget/run, darkzig +
   trials/run.
 
 **Gate 1 (unplaced strictly no worse everywhere, better in the tails)
-— FAILS.** darkzig: 0/0/0 → 0/5.1/10, worse on every statistic including the
-max (the tail the mask exists to fix). fill 0.5/0.7: tied (both all-0), no
+— FAILS.** darkzig: 0/0/0 → 0/5.1/10, worse on mean and max (min tied at 0)
+(the tail the mask exists to fix). fill 0.5/0.7: tied (both all-0), no
 violation but no improvement either. fill 0.9: 0/0.6/4 → 11/12.6/15, a
 catastrophic tail regression — precisely the high-fill regime the mask
 targeted, and the one place a routability guarantee should have paid off.
@@ -275,7 +275,7 @@ targeted, and the one place a routability guarantee should have paid off.
 < ~30%) — FAILS on both clauses, every scenario.** Throughput: darkzig
 205→55 (−73.2%), fill 0.5 242→67 (−72.3%), fill 0.7 266→76 (−71.4%), fill 0.9
 132→44 (−66.7%) — a 3-4x drop in trials/run everywhere, 2-2.4x past the ~30%
-budget. Road counts: fill 0.5 mean 115.25→116.125 and fill 0.7 mean
+budget. Road counts: fill 0.5 mean 115.25→116.0 and fill 0.7 mean
 153.25→156.25, both slightly worse (not better, as required); darkzig's "on"
 side has only 1 of 8 seeds even reaching 0-unplaced, so its 184-road point
 is not a distribution to compare, just evidence the mask rarely gets there
