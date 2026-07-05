@@ -346,7 +346,11 @@ def repack(layout: Layout, *, thorough: bool = False,
     `th_style="stub"` (default-off; flag-gated per tasks/lessons.md -- proxy
     tweaks bolted onto the greedy have historically hurt the measured
     0-unplaced road count, so this is judged by A/B only). When False the
-    portfolio is byte-identical to today's."""
+    portfolio is byte-identical to today's.
+
+    `safe_placements`: when True, masks placements that wall off free space or
+    seal a consumer, reducing road-wasting dead-ends (experimental, default off;
+    A/B-measured worse under equal wall-clock per tasks/lessons.md; kept opt-in)."""
     if budget_seconds is None:
         budget_seconds = 120.0 if thorough else 30.0
     master = random.Random(seed)
