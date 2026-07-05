@@ -292,3 +292,23 @@ infrastructure: pre-registered prerequisite for any RL revisit, and a
 candidate one-shot validity check inside future Track-B destroy-repair
 moves. Full numbers: `tasks/lessons.md` 2026-07-05 entry,
 `.superpowers/sdd/p2-task-5b-report.md`.
+
+### TH-stub constructor template A/B — gates fail, stays opt-in (2026-07-06)
+
+User-requested experiment outside the original track list: a constructive
+seed template (`th_stub_template` flag, commits 2bbb4a6/82af61e) replicating
+the user's expert offset-TH + two-flank-stub pattern (each stub road cell
+serving 3 buildings). A/B'd 8 seeds x 120s on darkzig + real-like
+fill 0.5/0.7/0.9 (`scripts/exp_th_ab.py`, `output/th-ab.txt`). Both
+harness gates (0-unplaced roads not worse, ideally better; unplaced no
+worse) fail: darkzig mean roads worsens 164.6 to 169.9 despite ~45% more
+trials, fill-0.9 collapses from 6/8 seeds reaching 0-unplaced to 1/8, and
+fill 0.5/0.7 are essentially a wash. Root cause: the flag halves the
+corner-style trial share (coin-flip start style per trial) at exactly the
+budget where corner-style carries the result, and an earlier 10s/2-seed
+smoke run had shown the opposite ranking - the template wins fast but the
+120s multi-start loop lets the corner constructor overtake it. Verdict:
+`th_stub_template` stays default-off/opt-in; another instance of the
+standing "expert heuristics bolted onto the greedy constructor lose an
+equal-wall-clock A/B" pattern. Full numbers: `tasks/lessons.md`
+2026-07-06 entry, `.superpowers/sdd/tht-task-c-report.md`.
