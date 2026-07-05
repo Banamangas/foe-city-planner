@@ -65,18 +65,30 @@ def _stub_fit(
     y for "tl"/"tr" (TH lands at large y, interior-facing row is the bottom).
     Pair = (x - 1, row) and (x + tw, row). If the primary row's pair is
     unavailable, the opposite row's pair is tried before moving on.
+
+    Acceptance requires more than the flank cells themselves being free: each
+    flank cell's 3 non-TH orthogonal neighbors must also be in-region and
+    free, so every stub starts with all 3 of its serviceable sides open. A
+    boundary-flush position would leave one stub in a 1-wide corridor whose
+    single open side the greedy grow-tree then dead-ends.
     """
     xs = range(grid.width) if anchor in ("bl", "tl") else range(grid.width - 1, -1, -1)
     ys = range(grid.height) if anchor in ("bl", "br") else range(grid.height - 1, -1, -1)
+
+    def flank_ok(cx: int, cy: int, th_dx: int) -> bool:
+        # The TH abuts the flank at (cx + th_dx, cy); the flank cell itself
+        # and its 3 other orthogonal neighbors must be in-region and free.
+        checks = ((cx, cy), (cx - th_dx, cy), (cx, cy - 1), (cx, cy + 1))
+        return all(c in region and grid.is_available(c) for c in checks)
+
     for y in ys:
         for x in xs:
             if not grid.fits(x, y, tw, tl):
                 continue
             rows = (y + tl - 1, y) if anchor in ("bl", "br") else (y, y + tl - 1)
             for row in rows:
-                pair = ((x - 1, row), (x + tw, row))
-                if all(c in region and grid.is_available(c) for c in pair):
-                    return (x, y), pair
+                if flank_ok(x - 1, row, 1) and flank_ok(x + tw, row, -1):
+                    return (x, y), ((x - 1, row), (x + tw, row))
     return None
 
 

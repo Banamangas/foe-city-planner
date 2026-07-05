@@ -259,18 +259,15 @@ def test_safe_placements_produces_valid_routed_layout():
 
 
 def _pinwheel_fixture():
-    # 16x16 open region. Townhall 2x4 (taller than the 2x2 consumers so the
-    # stub's "above" pinwheel direction has enough vertical clearance to fit a
-    # full consumer even when the TH hugs the anchor-facing edge -- see the
-    # THT-A report for why a square 2x2 TH cannot produce a load-3 stub in a
-    # from-scratch, fully-open packing). Four 2x2 road-needing consumers: the
-    # "far" stub (away from the region's true corner) has room for all 3 of
-    # its pinwheel sides, the "near" stub (pinned to the true x=0 corner, a
-    # 1-wide corridor) only has room for 1 -- 6 consumers would overfill this
-    # and dead-end the road tree entirely (see report); 4 is the fixture's
-    # actual from-scratch capacity. Two 2x2 fillers.
+    # 16x16 open region. Townhall 2x4 rather than the brief's square 2x2
+    # sketch: with the TH flush against the anchor-facing boundary (y=0 for
+    # "bl"), the stub row is y + tl - 1, so a 2x2 consumer on the stub's
+    # boundary-side pinwheel direction needs tl > 2 of vertical clearance --
+    # a 2x2 TH caps every stub at load 2 in a from-scratch, fully-open
+    # packing (see the THT-A report). Six 2x2 road-needing consumers (up to
+    # 3 per stub) and two 2x2 fillers, per the brief.
     th = _b(1, 0, 0, 2, 4, th=True)
-    cons = [_b(10 + i, 0, 0, 2, 2, needs=True) for i in range(4)]
+    cons = [_b(10 + i, 0, 0, 2, 2, needs=True) for i in range(6)]
     fill = [_b(20 + i, 0, 0, 2, 2, needs=False) for i in range(2)]
     return Layout(_full_region(16, 16), [th, *cons, *fill], th)
 
