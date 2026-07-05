@@ -241,3 +241,79 @@ road target" bet is closed. Per the plan's own ordering (`todo.md`: "Order &
 why this can reach the objective"), remaining live paths are Track B
 (structured LNS on the existing 158-road plateau) and Track D
 (productionize the winner) — Track A is out of the loop for both.
+
+## Safe-placements mask A/B (2026-07-05)
+
+Task C1's routability-preserving action mask (`foeopt/reach.py`
+`placement_is_safe`/`ReachChecker`, flag-gated `safe_placements` in
+`repack`/`build_candidate`, `--safe-placements` CLI flag) was A/B-measured
+per the plan's Task 5 / spec §5 gates: 8 seeds, 120s budget/run, darkzig +
+`make_real_like_city` at fill 0.5/0.7/0.9 (`scripts/exp_safe_ab.py`, output
+`output/safe-ab.txt`):
+
+- darkzig: off unplaced 0/0.0/0 (all 8 seeds), roads `[159,160,162,162,167,
+  168,169,170]`, 205 trials/run. On unplaced 0/5.1/10 (only 1/8 seeds
+  reach 0), roads `[184]` (n=1), 55 trials/run.
+- fill 0.5: off unplaced all-0, roads `[115,115,115,115,115,115,116,116]`,
+  242 trials/run. On unplaced all-0, roads `[115,115,115,116,116,116,116,
+  119]`, 67 trials/run.
+- fill 0.7: off unplaced all-0, roads `[152,152,152,152,154,154,154,156]`,
+  266 trials/run. On unplaced all-0, roads `[152,154,154,156,156,158,159,
+  161]`, 76 trials/run.
+- fill 0.9: off unplaced 0/0.6/4 (6/8 seeds at 0), roads `[180,188,192,193,
+  198,211]`, 132 trials/run. On unplaced 11/12.6/15, roads NONE at 0, 44
+  trials/run.
+
+**Gate 1 (unplaced strictly no worse everywhere, better in the tails)
+— FAILS.** darkzig: 0/0/0 → 0/5.1/10, worse on every statistic including the
+max (the tail the mask exists to fix). fill 0.5/0.7: tied (both all-0), no
+violation but no improvement either. fill 0.9: 0/0.6/4 → 11/12.6/15, a
+catastrophic tail regression — precisely the high-fill regime the mask
+targeted, and the one place a routability guarantee should have paid off.
+
+**Gate 2 (0-unplaced road distribution not worse AND throughput regression
+< ~30%) — FAILS on both clauses, every scenario.** Throughput: darkzig
+205→55 (−73.2%), fill 0.5 242→67 (−72.3%), fill 0.7 266→76 (−71.4%), fill 0.9
+132→44 (−66.7%) — a 3-4x drop in trials/run everywhere, 2-2.4x past the ~30%
+budget. Road counts: fill 0.5 mean 115.25→116.125 and fill 0.7 mean
+153.25→156.25, both slightly worse (not better, as required); darkzig's "on"
+side has only 1 of 8 seeds even reaching 0-unplaced, so its 184-road point
+is not a distribution to compare, just evidence the mask rarely gets there
+at all; fill 0.9's "on" side never reaches 0-unplaced. Both gates fail
+decisively — no borderline call needed.
+
+**Verdict: do NOT flip the default.** `safe_placements`/`--safe-placements`
+stays an opt-in experimental flag (default off, byte-identical to
+pre-mask behavior when unused).
+
+**Mechanistic interpretation.** The project's placement failures were never
+routing failures — `route()` already doesn't fail for grow-tree candidates
+(the packer's own RouteError path says "should not happen"); unplaced
+buildings are a packing/co-design problem, not a connectivity one (100% of
+unplaced are consumers — a structural floor, 2026-06-23 attempt #5 entry
+above). Guaranteed routability was a fix for a failure mode this project
+doesn't have. Applied as a per-anchor search mask, it makes packing strictly
+*harder*: it forbids exactly the tight endgame placements dense layouts
+need — sealing the last pocket, filling a guarded border cell down to its
+last free neighbor — which is normal, necessary behavior in a
+tightly-packed grow-tree, not a bug the mask should suppress. It also cuts
+trial count 3-4x, starving the multi-start restart loop the packer actually
+relies on to escape local optima. Both effects point the same direction:
+worse tails, fewer trials, at equal wall-clock.
+
+**Rule for future search-mask work:** never guard a search with a
+per-candidate exactness check when the observed failure mode is a packing
+limit, not a validity violation — the check's overhead buys correctness the
+search didn't need, and its cost (search-space narrowing, throughput) comes
+out of the budget that was actually solving the problem. Measure any such
+mask at *equal wall-clock*, trials-normalized, before considering it for a
+default — an A/B that only equalizes seed count and budget-per-run (not
+trials reached) will hide a throughput collapse like this one.
+
+`foeopt/reach.py` stays in the repo as verified infrastructure, not dead
+code: it is the pre-registered prerequisite for any RL revisit (RL M2-M4
+archived-track entry, 2026-07-02, on `unroutable` evals) and a candidate
+one-shot validity check inside future Track-B destroy-repair moves (checked
+once per repair, not searched per-anchor) — the exactness that hurt as a
+per-anchor filter is exactly what a single pre-commit check wants. Full
+numbers and gate arithmetic: `.superpowers/sdd/p2-task-5b-report.md`.
