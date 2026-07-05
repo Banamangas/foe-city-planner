@@ -122,11 +122,22 @@ Change the *move set*, not the search:
 Per its own M4 fail-fast rule the RL bet is at the fold point. If continued at
 all, change the *problem formulation*, not the knobs:
 
-- [ ] **C1 — Routability-preserving action mask:** mask placements that disconnect
+- [x] **C1 — Routability-preserving action mask:** mask placements that disconnect
       free-space components from the TH frontier (articulation check). Eliminates
       `unroutable` by construction ⇒ dense fills become learnable, and the same
       mask drops into the classical packer to attack stranded consumers (O1) —
       **build C1 regardless; it serves Tracks A/B too.**
+      **DONE (2026-07-05), opt-in only:** `foeopt/reach.py` (exact predicate +
+      `ReachChecker` fast path, oracle-equivalence tested) built and wired into
+      `first_fit`/`first_fit_adjacent`, `repack`/`build_candidate`
+      (`safe_placements=`), `PlacementEnv.valid_actions(safe=)`, and
+      `--safe-placements` CLI. A/B-measured per spec §5 (8 seeds × 120s,
+      darkzig + real-like 0.5/0.7/0.9): **both flip-the-default gates fail** —
+      unplaced distribution strictly worse in the tails (darkzig 0/0/0→0/5.1/10,
+      fill 0.9 0/0.6/4→11/12.6/15, 0/8 seeds reach 0-unplaced) and throughput
+      drops 67-73% everywhere (well past the ~30% budget). Kept as opt-in
+      only, zero cost when off. See `tasks/lessons.md` 2026-07-05 entry and
+      `.superpowers/sdd/p2-task-5b-report.md`.
 - [ ] C2 — Make roads observable: incremental partial-`route()` potential + a road
       channel in `rl/encode.py` (today the policy never sees road structure until
       the terminal step — it cannot learn to leave channels at 90% fill).
@@ -246,3 +257,38 @@ on the existing 158-road darkzig plateau — cheap, parallel, was always the
 productionizable fallback if Track A died at its gate) and Track D
 (productionize whichever path wins). Full numbers, commands, and arithmetic:
 `tasks/lessons.md` 2026-07-05 entry and `.superpowers/sdd/v2-task-b-report.md`.
+
+### Track C1 — routability mask built and A/B-measured; stays opt-in (2026-07-05)
+
+`foeopt/reach.py` (exact `placement_is_safe` oracle + `ReachChecker`
+accelerator, per-anchor filter in `first_fit`/`first_fit_adjacent`,
+`safe_placements=` on `repack`/`build_candidate`, `safe=` on
+`PlacementEnv.valid_actions`, `--safe-placements` CLI flag) is complete and
+tested. The A/B harness (`scripts/exp_safe_ab.py`, 8 seeds × 120s budget,
+darkzig + real-like fill 0.5/0.7/0.9, `output/safe-ab.txt`) shows **both
+spec §5 flip-the-default gates fail**:
+
+- Gate 1 (unplaced no worse anywhere, better in tails): darkzig 0/0/0 →
+  0/5.1/10 (only 1/8 seeds reach 0-unplaced); fill 0.9 0/0.6/4 → 11/12.6/15
+  (0/8 seeds reach 0-unplaced) — worse in exactly the tails the mask targeted.
+  fill 0.5/0.7 tie (both all-0), no gain.
+- Gate 2 (0-unplaced roads not worse AND throughput regression < ~30%):
+  throughput drops 66.7-73.2% in every scenario (darkzig 205→55, fill 0.5
+  242→67, fill 0.7 266→76, fill 0.9 132→44) — 2-2.4x past budget; road
+  counts at fill 0.5/0.7 are also slightly worse, not better.
+
+**Verdict: do not flip the default.** `safe_placements` stays opt-in
+(default off, zero cost/byte-identical when unused). Mechanistically, the
+project's unplaced failures were never routing failures (`route()` already
+doesn't fail for grow-tree candidates; unplaced are a packing/co-design
+problem — 100% consumers, a structural floor per the 2026-06-23 attempt #5
+entry) — so a guaranteed-routability mask solves a problem repack doesn't
+have, while forbidding the tight endgame placements dense packing needs and
+starving the multi-start loop of trials. Rule: never guard a search with a
+per-candidate exactness check when the failure mode is packing, not
+validity — measure any such mask at equal wall-clock (trials-normalized)
+before considering a default flip. `foeopt/reach.py` stays as verified
+infrastructure: pre-registered prerequisite for any RL revisit, and a
+candidate one-shot validity check inside future Track-B destroy-repair
+moves. Full numbers: `tasks/lessons.md` 2026-07-05 entry,
+`.superpowers/sdd/p2-task-5b-report.md`.
