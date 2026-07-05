@@ -58,3 +58,20 @@ def test_current_real_layout_is_valid(city_data, helper_data):
     from foeopt.build import build_layout
     layout = build_layout(city_data, helper_data)
     assert is_valid(layout), [b.name for b in unsatisfied(layout)][:5]
+
+
+def test_isolated_th_stub_road_is_valid():
+    # TH-stub load-bearing regression (THT-A): a single road cell whose only
+    # connection to the network is via Townhall-border adjacency (no other
+    # road cell neighbors it) must still validate. TH 2x2 at (1,1); the stub
+    # road cell (3,1) borders TH cell (2,1) directly; a 2x2 consumer at (4,0)
+    # has (3,1) on its border. Roads = exactly {(3,1): 1}.
+    th = Building(1, "TH", "main_building", Footprint(1, 1, 2, 2),
+                 needs_road=True, road_level=1, is_townhall=True,
+                 set_id=None, chain_id=None, name="Townhall")
+    consumer = Building(2, "C", "generic_building", Footprint(4, 0, 2, 2),
+                        needs_road=True, road_level=1, is_townhall=False,
+                        set_id=None, chain_id=None, name="Consumer")
+    region = Region(frozenset((x, y) for x in range(6) for y in range(6)))
+    layout = Layout(region, [th, consumer], th, roads={(3, 1): 1})
+    assert is_valid(layout)

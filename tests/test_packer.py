@@ -253,3 +253,86 @@ def test_safe_placements_produces_valid_routed_layout():
     res = build_candidate(layout, PackConfig("bl", 7), safe_placements=True)
     assert res.unplaced == []
     assert is_valid(res.layout)
+
+
+# --- THT-A: Townhall corner-stub constructor template (flag-gated) ---------
+
+
+def _pinwheel_fixture():
+    # 16x16 open region. Townhall 2x4 (taller than the 2x2 consumers so the
+    # stub's "above" pinwheel direction has enough vertical clearance to fit a
+    # full consumer even when the TH hugs the anchor-facing edge -- see the
+    # THT-A report for why a square 2x2 TH cannot produce a load-3 stub in a
+    # from-scratch, fully-open packing). Four 2x2 road-needing consumers: the
+    # "far" stub (away from the region's true corner) has room for all 3 of
+    # its pinwheel sides, the "near" stub (pinned to the true x=0 corner, a
+    # 1-wide corridor) only has room for 1 -- 6 consumers would overfill this
+    # and dead-end the road tree entirely (see report); 4 is the fixture's
+    # actual from-scratch capacity. Two 2x2 fillers.
+    th = _b(1, 0, 0, 2, 4, th=True)
+    cons = [_b(10 + i, 0, 0, 2, 2, needs=True) for i in range(4)]
+    fill = [_b(20 + i, 0, 0, 2, 2, needs=False) for i in range(2)]
+    return Layout(_full_region(16, 16), [th, *cons, *fill], th)
+
+
+_ORTHO_TEST = ((1, 0), (-1, 0), (0, 1), (0, -1))
+
+
+def test_stub_style_builds_pinwheel():
+    from foeopt.packer import build_candidate, PackConfig
+    from foeopt.quality import road_cell_load
+    layout = _pinwheel_fixture()
+    res = build_candidate(layout, PackConfig("bl", 3, th_style="stub"))
+    assert res.unplaced == []
+    th = res.layout.townhall
+    th_cells = th.footprint.cells()
+    load = road_cell_load(res.layout)
+    stub_loads = {
+        c: n for c, n in load.items()
+        if n == 3 and any(
+            (c[0] + dx, c[1] + dy) in th_cells for dx, dy in _ORTHO_TEST
+        )
+    }
+    assert stub_loads, f"expected a load-3 TH-adjacent stub, got loads {load}"
+
+
+def test_stub_style_falls_back_when_region_too_tight():
+    from foeopt.packer import build_candidate, PackConfig
+    # Region exactly TH-sized (2x2) plus a 1-wide corridor: no room anywhere
+    # for a flank pair. Zero consumers -> the stub scan must fail and the
+    # trial falls back to _corner_fit without error.
+    region = Region(frozenset({(0, 0), (1, 0), (0, 1), (1, 1), (2, 0)}))
+    th = _b(1, 0, 0, 2, 2, th=True)
+    layout = Layout(region, [th], th)
+    res = build_candidate(layout, PackConfig("bl", 0, th_style="stub"))
+    assert res.unplaced == []
+    assert len(res.layout.buildings) == 1
+
+
+def test_th_style_corner_is_byte_identical_to_default():
+    from foeopt.packer import build_candidate, PackConfig
+    layout = _sparse_layout()
+    a = build_candidate(layout, PackConfig("bl", 7))
+    b = build_candidate(layout, PackConfig("bl", 7, th_style="corner"))
+    assert {x.entity_id: x.footprint for x in a.layout.buildings} == \
+           {x.entity_id: x.footprint for x in b.layout.buildings}
+    assert a.layout.roads == b.layout.roads
+
+
+def test_repack_flag_off_byte_identical():
+    from foeopt.packer import repack
+    layout = _sparse_layout()
+    a = repack(layout, budget_seconds=2, seed=5)
+    b = repack(layout, budget_seconds=2, seed=5, th_stub_template=False)
+    assert {x.entity_id: x.footprint for x in a.layout.buildings} == \
+           {x.entity_id: x.footprint for x in b.layout.buildings}
+    assert a.layout.roads == b.layout.roads
+
+
+def test_repack_flag_on_valid():
+    from foeopt.packer import repack
+    from foeopt.validate import is_valid
+    layout = _pinwheel_fixture()
+    res = repack(layout, budget_seconds=2, seed=5, th_stub_template=True)
+    assert res.unplaced == []
+    assert is_valid(res.layout)
