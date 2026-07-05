@@ -47,9 +47,17 @@ def _cmd_roads(args) -> int:
 
 
 def _cmd_layout(args) -> int:
+    import sys
     current = load_layout(args.city, args.helper)
     rbudget = _resolve_budget(args.budget, args.thorough)
     if args.polish:
+        flags_ignored = []
+        if args.safe_placements:
+            flags_ignored.append("--safe-placements")
+        if args.th_stub_template:
+            flags_ignored.append("--th-stub-template")
+        if flags_ignored:
+            print(f"warning: {'/'.join(flags_ignored)} ignored with --polish", file=sys.stderr)
         res = polish(current, repack_budget=rbudget, anneal_budget=args.anneal_budget, seed=args.seed)
         print(f"  polished roads: {res.base_roads} -> {len(res.layout.roads)}")
     else:
@@ -134,11 +142,12 @@ def build_parser() -> argparse.ArgumentParser:
                           help="seconds for the anneal phase when --polish (default 120)")
     p_layout.add_argument("--safe-placements", action="store_true",
                           help="mask placements that wall off free space or seal a "
-                               "consumer (experimental; A/B-gated, off by default)")
+                               "consumer (experimental; A/B-gated, off by default; "
+                               "repack mode only; ignored with --polish)")
     p_layout.add_argument("--th-stub-template", action="store_true",
                           help="explore an offset-Townhall + corner-stub constructor "
                                "template alongside plain corner-fit (experimental; "
-                               "A/B-gated, off by default)")
+                               "A/B-gated, off by default; repack mode only; ignored with --polish)")
     p_layout.set_defaults(func=_cmd_layout)
 
     p_improve = sub.add_parser("improve", help="lower roads via local-search building moves")
