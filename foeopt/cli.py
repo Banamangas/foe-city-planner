@@ -54,7 +54,8 @@ def _cmd_layout(args) -> int:
         print(f"  polished roads: {res.base_roads} -> {len(res.layout.roads)}")
     else:
         res = repack(current, budget_seconds=rbudget, seed=args.seed,
-                     safe_placements=args.safe_placements)
+                     safe_placements=args.safe_placements,
+                     th_stub_template=args.th_stub_template)
     s = stats(current, res.layout.roads)
     print("Full re-pack (Phase 2):")
     print(f"  buildings: {len(current.buildings)} | placed: "
@@ -134,6 +135,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_layout.add_argument("--safe-placements", action="store_true",
                           help="mask placements that wall off free space or seal a "
                                "consumer (experimental; A/B-gated, off by default)")
+    p_layout.add_argument("--th-stub-template", action="store_true",
+                          help="explore an offset-Townhall + corner-stub constructor "
+                               "template alongside plain corner-fit (experimental; "
+                               "A/B-gated, off by default)")
     p_layout.set_defaults(func=_cmd_layout)
 
     p_improve = sub.add_parser("improve", help="lower roads via local-search building moves")
