@@ -121,6 +121,27 @@ HTML via the existing `foeopt.viz.render_comparison(base_layout, final.layout)` 
   real-like unplaced distributions must not get worse. Verdict recorded in `tasks/lessons.md` +
   `tasks/todo.md` whatever the outcome.
 
+## 8b. TH-offset probe (diagnostic, independent of the LNS gate)
+
+Motivation: the constructor is corner-seeking in every default trial (`_corner_fit`), the anneal never
+moves the TH, and the expert city's TH sits 7 cells in from the boundary — no current strategy can
+produce that. The TH-stub A/B tested offset+pinwheel together; this probe isolates the offset alone.
+
+- `PackConfig.th_style` gains `"offset"`: same corner-outward scan as `_corner_fit`, but positions
+  whose along-edge distance from the anchor corner is < `d` are skipped, with `d` drawn per trial
+  from `{2, 4, 6, 8}` (trial rng). No road seeding change, no pre-pack — placement only.
+- `repack` gains `th_styles: tuple[str, ...] = ("corner",)`; when it has >1 entry the trial rng
+  chooses per trial. The existing `th_stub_template=True` becomes sugar for adding `"stub"` — its
+  current semantics (and flag-off byte-identity) are preserved exactly. No new CLI flag (probe is
+  harness-only; YAGNI).
+- `scripts/exp_th_offset_ab.py` (on `_ab_common`): arm A = corner-only (status quo), arm B =
+  **offset-only** (every trial `th_style="offset"`), equal wall-clock, ≥8 seeds, darkzig + real-like
+  0.7/0.9. Pure-style arms deliberately avoid the portfolio-dilution confound the TH-stub A/B
+  suffered — the question is "is an offset TH better per trial?", not "does mixing styles help?".
+- **Diagnostic, no flip gate:** verdict recorded in `tasks/lessons.md` either way. This probe informs
+  the LARGER question — flagged for later investigation, out of scope here — of whether constructor
+  TH placement is part of the 158 plateau.
+
 ## 9. Testing
 
 1. Corridor finder: hand layout with a known under-used run → exact run found; junction exclusion.
@@ -129,8 +150,12 @@ HTML via the existing `foeopt.viz.render_comparison(base_layout, final.layout)` 
    template provably converts → roads strictly decrease.
 4. Invariants: never-worse, unplaced preserved, fixed-seed determinism (golden run).
 5. CLI smoke: `--lns` produces the HTML file; file contains both layouts' road counts.
+6. TH-offset style: `th_style="offset"` places the TH ≥ d cells from the anchor corner on a hand
+   fixture; `th_styles=("corner",)` and `th_stub_template` back-compat byte-identity (RNG stream
+   included) both pinned.
 
 ## 10. Out of scope
 
 Row-shift and stub-promotion moves; polish/webapp default changes; TH relocation moves; RL; any
-OR-Tools dependency; flipping any existing experimental flag.
+OR-Tools dependency; flipping any existing experimental flag. The broader TH-placement investigation
+(beyond the §8b probe) is deferred — flagged for a later track, informed by the probe's verdict.
