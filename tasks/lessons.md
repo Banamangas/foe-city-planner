@@ -317,3 +317,70 @@ one-shot validity check inside future Track-B destroy-repair moves (checked
 once per repair, not searched per-anchor) — the exactness that hurt as a
 per-anchor filter is exactly what a single pre-commit check wants. Full
 numbers and gate arithmetic: `.superpowers/sdd/p2-task-5b-report.md`.
+
+## TH-stub constructor template A/B (2026-07-06)
+
+The TH-stub template (commits 2bbb4a6/82af61e, flag `th_stub_template`,
+default off) replicates the user's expert pattern — offset Townhall + two
+flank road cells, each serving 3 buildings — as a constructive seed
+alternative to the packer's corner-style start. A/B'd per the harness
+docstring gates (`scripts/exp_th_ab.py`, 8 seeds, 120 s budget/run, darkzig +
+`make_real_like_city` fill 0.5/0.7/0.9, `output/th-ab.txt`):
+
+- darkzig: off unplaced all-0, roads `[159,160,162,162,167,168,169,170]`
+  (mean **164.6**, recomputed from the list), 207 trials/run. On unplaced
+  all-0, roads `[160,162,165,167,169,174,179,183]` (mean **169.9**,
+  recomputed), 301 trials/run — worse mean despite ~45% more trials.
+- fill 0.5: off and on roads identical, `[115,115,115,115,115,115,116,116]`
+  both arms; trials 248 (off) vs 325 (on).
+- fill 0.7: off roads `[152,152,152,152,154,154,154,156]` (mean **153.25**),
+  269 trials/run. On roads `[151,152,152,153,154,154,156,158]` (mean
+  **153.75**), 334 trials/run — near-neutral, min 151 (on) vs 152 (off),
+  mean 0.5 worse on.
+- fill 0.9: off unplaced 0/0.6/4 (6/8 seeds reach 0), roads
+  `[180,188,192,193,198,211]`, 134 trials/run. On unplaced 0/5.5/13 (only
+  1/8 seeds reach 0), roads `[188]` (n=1), 169 trials/run — a severe tail
+  regression in exactly the regime a good structural template should help
+  most.
+
+**Gate evaluation (harness docstring: 0-unplaced road distribution not
+worse — ideally better — AND unplaced distribution no worse) — FAILS.**
+darkzig and fill-0.9 both show the on-arm road/unplaced distribution
+strictly worse despite more trials; fill 0.5 ties; fill 0.7 is a wash
+(one seed better, mean fractionally worse). No scenario shows a clean
+improvement, and the two scenarios that matter most (darkzig gate city,
+fill-0.9 high-fill tail) are the ones that regress hardest.
+
+**Verdict: gates FAIL — do not flip the default.** `th_stub_template`
+stays opt-in (default off, byte-identical to pre-template behavior when
+unused).
+
+**Three observations for the record:**
+1. **Portfolio dilution.** With the flag on, each trial coin-flips
+   corner-style vs stub-style start, so roughly half the corner-style
+   trials that used to run are lost to stub-style trials instead. On
+   darkzig and fill-0.9 the corner style is what carries the result at
+   120 s budget, and halving its sample is a pure loss that the stub
+   trials don't repay in the same wall-clock. Also note the flag changes
+   the master RNG draw sequence, so the two arms are different random
+   samples end-to-end, not "off plus extra stub trials" — part of why
+   the on-arm trial *counts* differ from the off-arm too.
+2. **Fast-start, not asymptotic.** An earlier 10 s/2-seed smoke run showed
+   the opposite ranking (on: 162-167 roads vs off: 199-217 on darkzig,
+   with a higher trial rate at that budget) — the pre-packed pinwheel
+   template reaches a good layout in very few trials, but the 120 s
+   multi-start loop gives the corner-style constructor enough restarts to
+   overtake it. Worth flagging as a possible salvage (NOT pursued now, per
+   the measure-first/no-relitigating discipline): use the stub style only
+   as a first-trials seed, or restrict it to low-budget contexts; or
+   redesign the A/B so stub trials are added on top of the corner-style
+   budget rather than splitting it.
+3. **Consistent with the standing lesson.** This is another instance of
+   "expert heuristics bolted onto the greedy constructor don't survive an
+   equal-wall-clock A/B" (cf. short-side-facing, B1 pairing, structured
+   lanes, multi-trunk — all lost previously). The offset-TH template saves
+   ~4 cells locally when it fires, but it costs boundary-packing space at
+   high fill and the multi-start variance swamps the local gain. The
+   flag-gated, measure-first discipline worked exactly as designed here:
+   zero cost to the default path, a clean negative result recorded instead
+   of a merged regression.
