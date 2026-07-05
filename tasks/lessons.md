@@ -176,3 +176,68 @@ region-feasible cannot be trusted to rank a `C*` on darkzig. Do not read or
 act on the darkzig `model_optimum`/`C*` numbers above until calibration
 passes; they are recorded here only so the next attempt doesn't have to
 re-run the 300s solves.
+
+## v2 calibration + A1 gate verdict (2026-07-05)
+
+**Verdict: KILL Track A.** This was the pre-committed one-iteration,
+time-boxed retry (spec `docs/superpowers/specs/2026-07-02-road-target-calibration-design.md`
+v2 section: "if v2 also fails calibration, Track A is killed per the
+pre-committed stop rule — no v3"). v2 fixed v1's INFEASIBLE failure
+(2026-07-03 entry above: v1 blew its own area guard, 145 budget vs 166 bound)
+by dropping the pessimistic trunk term and adding end-overhangs, and it *does*
+now solve — but the resulting `f` is decisively outside the sanity band, in
+the opposite direction from v1's failure.
+
+**Runs** (all `nice -n 19 uv run --with ortools python
+scripts/exp_lane_composition.py ... --model v2 --time-limit 300`):
+- User city (`city-user-data.json` + `city-user-data-foe-helper.json`, 82
+  road-needing consumers): `status=FEASIBLE`, `model_optimum=84`,
+  `proven_bound=13`, `gap=71`. → `output/comp-user-v2.json`.
+- darkzig (63 consumers): `status=FEASIBLE`, `model_optimum=39`,
+  `proven_bound=0`, `gap=39`. → `output/comp-darkzig-v2.json`.
+- darkzig `--connectors` sensitivity (charges `n_used_lanes−1`): `model_optimum=50`
+  (delta **+11** over the no-connectors run, consistent with the reported 12
+  used lanes), `trunk_pessimistic=11`, `proven_bound=0`, `gap=50`. →
+  `output/comp-darkzig-v2-conn.json`.
+
+**f = 142 / 84 = 1.69** — outside the sanity band `[0.75, 1.33]` (above the
+upper edge). **No re-run at `--time-limit 900`:** the gap (71) does not
+straddle the band edge. `model_optimum=84` is a CP-SAT feasible incumbent for
+a *minimization* problem, i.e. a valid upper bound on the true model optimum
+— more solve time can only find an equal-or-lower optimum, which can only
+*increase* `f` further (already 1.69 > 1.33), never bring it back down into
+band. So the failure is decisive, not an artifact of an unconverged solve;
+extra compute cannot rescue it. (Self-test sanity: `v2_optimum ≤ v1_optimum`
+holds on darkzig, 39 ≤ 160; `v2_optimum ≥ ⌈n/3⌉` holds both cities, 84≥28 and
+39≥21 — the model itself is internally consistent, it's just badly miscalibrated
+against the real 142.)
+
+Because `f` is outside the band, **`C*` was not computed** (per spec §"Calibration
+criterion" and the brief's step 2 — a band failure is a kill on its own, no
+gate arithmetic needed). For the record only (not used in any verdict): darkzig
+local-method floor is 158; darkzig Σ/2 estimate 114 (not a bound); adjacency
+bounds darkzig 21 / user city 28; v1 quarantined numbers darkzig 160
+pessimistic / `optimistic_total` 132.
+
+**Root cause (opposite direction from v1):** v1 was too pessimistic (INFEASIBLE,
+overcounted trunk ~8× and lane frontage ~20%, couldn't even reach 142's slack).
+v2 over-corrected: dropping the trunk term entirely and allowing 2 free-overhang
+buildings per lane side lets the model claim connectivity is nearly free, so its
+82-consumer user-city optimum (84) sits *below* even a generous read of the real
+network's productive cells — the model is now too optimistic to anchor a
+calibration factor anywhere near 1. Both v1 and v2 sit on either side of the
+real 142 by roughly the same kind of error (trunk/connectivity accounting),
+just with the sign flipped.
+
+**Pre-committed-stop-rule context:** this was explicitly scoped in the spec
+as "a one-iteration, time-boxed retry" for Track A's go/no-go gate — not an
+open-ended tuning loop. Per that rule, Track A (the composition-solver-driven
+global optimizer for O2, "A1 → A2/A3") is now **killed**; there is no v3.
+Track A's supporting artifacts (`foeopt/quality.py` sharing metrics,
+`foeopt/bounds.py` adjacency bound, `scripts/exp_lane_composition.py` itself)
+are sound and stay in the repo as reference/diagnostic tooling — only the
+"build a global lane/stub composition optimizer and use its output as the
+road target" bet is closed. Per the plan's own ordering (`todo.md`: "Order &
+why this can reach the objective"), remaining live paths are Track B
+(structured LNS on the existing 158-road plateau) and Track D
+(productionize the winner) — Track A is out of the loop for both.
