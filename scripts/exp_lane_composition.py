@@ -1,12 +1,23 @@
-"""THROWAWAY EXPERIMENT (2026-07-02 calibration spec, Task A1).
+"""THROWAWAY EXPERIMENT (2026-07-02 calibration spec, Task A1; v2 added
+2026-07-05 as a time-boxed retry after v1 was falsified — see lessons.md and
+the spec's "v2 model" section).
 
-Optimal road cost within the expert layout family: buildings are assigned to
-double-loaded straight lanes (uniform depth per side, orientation free), lanes
-stack along a perpendicular trunk, optional dead-end stubs at lane ends serve
-up to 3 buildings each. Costs: lane = max(side loads); trunk pessimistic =
+`solve_composition` (v1, default): buildings are assigned to double-loaded
+straight lanes (uniform depth per side, orientation free), lanes stack along a
+perpendicular trunk, optional dead-end stubs at lane ends serve up to 3
+buildings each. Costs: lane = max(side loads); trunk pessimistic =
 sum(depthA + 1 + depthB) over used lanes; stub = 1 cell each. The model is a
 RESTRICTION of the real problem, so family-optimum >= true optimum wherever
 both are computable (checked by --selftest against rl.oracle).
+
+`solve_composition_v2` (`--model v2`): v1's pessimistic trunk was falsified on
+the user's city (INFEASIBLE under its own area guard). v2 drops the trunk
+term (connectors are embedded in lanes; optional `--connectors` sensitivity
+charges n_used_lanes-1) and lets up to 2 buildings per lane side overhang the
+lane end (1 frontage cell instead of full extent). v2 is a RELAXATION of v1
+(v2_optimum <= v1_optimum, checked by --selftest), not a restriction of the
+real problem — its optimum is optimistic and must be calibrated against a
+known-answer city before trusting it on darkzig.
 
 Run (never a repo dep):
   uv run --with ortools python scripts/exp_lane_composition.py --selftest
@@ -14,6 +25,8 @@ Run (never a repo dep):
       city-user-data.json city-user-data-foe-helper.json -o output/comp-user.json
   uv run --with ortools python scripts/exp_lane_composition.py darkzig.json \
       -o output/comp-darkzig.json
+  uv run --with ortools python scripts/exp_lane_composition.py --model v2 \
+      city-user-data.json city-user-data-foe-helper.json -o output/comp-user-v2.json
 """
 from __future__ import annotations
 
@@ -45,6 +58,7 @@ def solve_composition(items, *, k_max, len_max, stack_max, area_budget,
             "optimistic_total": 0,
             "stub_cells": 0,
             "lanes": [],
+            "model": "v1",
         }
     m = cp_model.CpModel()
     n = len(items)
@@ -134,6 +148,7 @@ def solve_composition(items, *, k_max, len_max, stack_max, area_budget,
             "optimistic_total": None,
             "stub_cells": None,
             "lanes": [],
+            "model": "v1",
         }
     lanes = []
     for k in range(k_max):
@@ -158,12 +173,155 @@ def solve_composition(items, *, k_max, len_max, stack_max, area_budget,
         "optimistic_total": lane_total + n_used + solver.Value(stub_cells),
         "stub_cells": solver.Value(stub_cells),
         "lanes": lanes,
+        "model": "v1",
+    }
+
+
+def solve_composition_v2(items, *, k_max, len_max, area_budget, stubs=False,
+                         connectors=False, time_limit=120.0):
+    """v2 model (2026-07-05): embedded trunk + end overhangs. A RELAXATION of
+    v1 — connectors are embedded in lanes (no separate trunk term; an
+    optional `--connectors` sensitivity charges n_used_lanes-1), and up to 2
+    buildings per lane side may "overhang" the lane end, contributing only 1
+    frontage cell instead of their full extent. Depth classes and stack-max
+    are dropped (they only fed the removed trunk term). See the v2 spec
+    section for the falsification that motivated this model.
+    items: list of (entity_id, w, l) road-needing buildings.
+    Returns a result dict (see report keys)."""
+    if not items:
+        return {
+            "status": "NO_CONSUMERS",
+            "model_optimum": 0,
+            "proven_bound": 0,
+            "gap": 0,
+            "trunk_pessimistic": 0,
+            "optimistic_total": 0,
+            "stub_cells": 0,
+            "lanes": [],
+            "model": "v2",
+        }
+    m = cp_model.CpModel()
+    n = len(items)
+
+    x = {}                       # x[i,k,s,o]=1: item i on lane k side s orient o
+    stub_y = {}                  # stub_y[i]=1: item i served by a stub
+    for i, (_, w, l) in enumerate(items):
+        opts = []
+        for k in range(k_max):
+            for s in (0, 1):
+                for o in (0, 1):
+                    v = m.NewBoolVar(f"x_{i}_{k}_{s}_{o}")
+                    x[i, k, s, o] = v
+                    opts.append(v)
+        if stubs:
+            stub_y[i] = m.NewBoolVar(f"stub_{i}")
+            opts.append(stub_y[i])
+        m.AddExactlyOne(opts)
+
+    end = {}                     # end[i,k,s,o]=1: item i is an end-overhang there
+    for i, (_, w, l) in enumerate(items):
+        for k in range(k_max):
+            for s in (0, 1):
+                for o in (0, 1):
+                    e = m.NewBoolVar(f"end_{i}_{k}_{s}_{o}")
+                    end[i, k, s, o] = e
+                    m.AddImplication(e, x[i, k, s, o])
+    for k in range(k_max):
+        for s in (0, 1):
+            m.Add(sum(end[i, k, s, o] for i in range(n) for o in (0, 1)) <= 2)
+
+    lane_len, used = [], []
+    for k in range(k_max):
+        loads = []
+        for s in (0, 1):
+            load = m.NewIntVar(0, len_max, f"L_{k}_{s}")
+            full = sum(
+                x[i, k, s, 0] * w + x[i, k, s, 1] * l
+                for i, (_, w, l) in enumerate(items))
+            discount = sum(
+                end[i, k, s, 0] * (w - 1) + end[i, k, s, 1] * (l - 1)
+                for i, (_, w, l) in enumerate(items))
+            m.Add(load == full - discount)
+            loads.append(load)
+        ll = m.NewIntVar(0, len_max, f"len_{k}")
+        m.AddMaxEquality(ll, loads)
+        lane_len.append(ll)
+        u = m.NewBoolVar(f"u_{k}")
+        m.Add(ll >= 1).OnlyEnforceIf(u)
+        m.Add(ll == 0).OnlyEnforceIf(u.Not())
+        used.append(u)
+    for k in range(k_max - 1):                    # symmetry breaking
+        m.Add(lane_len[k] >= lane_len[k + 1])
+
+    stub_cells = m.NewIntVar(0, n, "stub_cells")
+    if stubs:
+        m.Add(3 * stub_cells >= sum(stub_y.values()))
+        m.Add(stub_cells <= 2 * sum(used))        # <=1 stub per lane end
+    else:
+        m.Add(stub_cells == 0)
+
+    conn = m.NewIntVar(0, k_max, "conn")
+    if connectors:
+        su_minus_1 = m.NewIntVar(-1, k_max, "su_minus_1")
+        m.Add(su_minus_1 == sum(used) - 1)
+        zero = m.NewConstant(0)
+        m.AddMaxEquality(conn, [su_minus_1, zero])
+    else:
+        m.Add(conn == 0)
+
+    total = m.NewIntVar(0, 100000, "total")
+    m.Add(total == sum(lane_len) + stub_cells + conn)
+    m.Add(total <= area_budget)                   # buildings + roads fit region
+    m.Minimize(total)
+
+    solver = cp_model.CpSolver()
+    solver.parameters.num_search_workers = 1
+    solver.parameters.random_seed = 0
+    solver.parameters.max_time_in_seconds = time_limit
+    status = solver.Solve(m)
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return {
+            "status": solver.StatusName(status),
+            "model_optimum": None,
+            "proven_bound": None,
+            "gap": None,
+            "trunk_pessimistic": None,
+            "optimistic_total": None,
+            "stub_cells": None,
+            "lanes": [],
+            "model": "v2",
+        }
+    lanes = []
+    for k in range(k_max):
+        if not solver.Value(used[k]):
+            continue
+        members = [[], []]
+        for i, (eid, w, l) in enumerate(items):
+            for s in (0, 1):
+                if solver.Value(x[i, k, s, 0]) or solver.Value(x[i, k, s, 1]):
+                    members[s].append(eid)
+        lanes.append({"len": solver.Value(lane_len[k]),
+                      "side_a": members[0], "side_b": members[1]})
+    return {
+        "status": solver.StatusName(status),
+        "model_optimum": solver.Value(total),
+        "proven_bound": int(round(solver.BestObjectiveBound())),
+        "gap": solver.Value(total) - int(round(solver.BestObjectiveBound())),
+        "trunk_pessimistic": solver.Value(conn),
+        "optimistic_total": solver.Value(total),
+        "stub_cells": solver.Value(stub_cells),
+        "lanes": lanes,
+        "model": "v2",
     }
 
 
 def _selftest():
-    """Family-optimum must be >= the true joint optimum (the family is a
-    restriction). Tiny instance sized for rl.oracle's exhaustive search."""
+    """v1 family-optimum must be >= the true joint optimum (v1 is a
+    restriction). v2 is a RELAXATION of v1: v2_optimum <= v1_optimum
+    (every v1 solution maps to a v2 solution of no greater cost), and
+    v2_optimum >= ceil(n_items/3) (adjacency capacity: no road cell serves
+    more than 3 consumers, even as a stub). Tiny instance sized for
+    rl.oracle's exhaustive search."""
     from rl.oracle import optimal_roads
     th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
                   False, 1, True, None, None, "TH")
@@ -176,11 +334,19 @@ def _selftest():
     opt = optimal_roads(layout, budget_s=60.0)
     items = [(b.entity_id, b.footprint.width, b.footprint.length)
              for b in layout.road_needing()]
-    res = solve_composition(items, k_max=2, len_max=6, stack_max=6,
-                            area_budget=36, time_limit=30.0)
-    ok = (opt is not None and res.get("model_optimum") is not None
-          and res["model_optimum"] >= opt)
-    print(f"selftest: oracle={opt} family={res.get('model_optimum')} "
+    res_v1 = solve_composition(items, k_max=2, len_max=6, stack_max=6,
+                               area_budget=36, time_limit=30.0)
+    res_v2 = solve_composition_v2(items, k_max=2, len_max=6,
+                                  area_budget=36, time_limit=30.0)
+    v1_opt = res_v1.get("model_optimum")
+    v2_opt = res_v2.get("model_optimum")
+    n = len(items)
+    adjacency_floor = -(-n // 3)                  # ceil(n/3), stdlib-only
+    ok_v1 = (opt is not None and v1_opt is not None and v1_opt >= opt)
+    ok_v2 = (v2_opt is not None and v1_opt is not None
+             and v2_opt <= v1_opt and v2_opt >= adjacency_floor)
+    ok = ok_v1 and ok_v2
+    print(f"selftest: oracle={opt} v1={v1_opt} v2={v2_opt} "
           f"{'PASS' if ok else 'FAIL'}")
     return 0 if ok else 1
 
@@ -195,6 +361,12 @@ def main(argv=None):
                         "dim - real layouts stack lanes in more than one column; "
                         "a single-stack cap can spuriously report INFEASIBLE)")
     p.add_argument("--stubs", action="store_true")
+    p.add_argument("--model", choices=("v1", "v2"), default="v1",
+                   help="composition model to run (default v1; v2 is the "
+                        "2026-07-05 relaxation, see spec)")
+    p.add_argument("--connectors", action="store_true",
+                   help="v2 only: charge n_used_lanes-1 extra cells for "
+                        "cross-lane connectivity (sensitivity scenario)")
     p.add_argument("--time-limit", type=float, default=120.0)
     p.add_argument("--selftest", action="store_true")
     p.add_argument("-o", "--out", default=None)
@@ -209,11 +381,25 @@ def main(argv=None):
     w, h = bbox(layout.region)
     building_area = sum(b.footprint.width * b.footprint.length
                         for b in layout.buildings)
-    res = solve_composition(
-        items, k_max=args.lanes, len_max=max(w, h) - 1,
-        stack_max=args.stack_max or 2 * max(w, h),
-        area_budget=len(layout.region.cells) - building_area,
-        stubs=args.stubs, time_limit=args.time_limit)
+    area_budget = len(layout.region.cells) - building_area
+    if args.model == "v2":
+        if args.stack_max is not None:
+            print("note: --stack-max is v1-only, ignored for --model v2",
+                  file=sys.stderr)
+        res = solve_composition_v2(
+            items, k_max=args.lanes, len_max=max(w, h) - 1,
+            area_budget=area_budget,
+            stubs=args.stubs, connectors=args.connectors,
+            time_limit=args.time_limit)
+    else:
+        if args.connectors:
+            print("note: --connectors is v2-only, ignored for --model v1",
+                  file=sys.stderr)
+        res = solve_composition(
+            items, k_max=args.lanes, len_max=max(w, h) - 1,
+            stack_max=args.stack_max or 2 * max(w, h),
+            area_budget=area_budget,
+            stubs=args.stubs, time_limit=args.time_limit)
     res.update({"city": args.city, "n_consumers": len(items)})
     out = json.dumps(res, indent=2)
     if args.out:
