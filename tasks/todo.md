@@ -60,14 +60,18 @@ measure-first lessons.
       This characterizes *how* an expert beats Σ/2 (stubs? junctions? partial-side?).
       (Measured: hist {1:1, 2:137, 3:4}, avg 2.02, 0 overhead cells — 96.5% of
       road cells at the double-row ideal, essentially no connectivity waste.)
-- [ ] Deliverable: a target band for darkzig (e.g. "optimum plausibly 118–135")
+- [x] Deliverable: a target band for darkzig (e.g. "optimum plausibly 118–135")
       and a benchmark suite definition: darkzig (gate) + `make_real_like_city`
       seeds at fill 0.5/0.7/0.9 + the user's city for improve-mode regression.
-      **BLOCKED (2026-07-03):** calibration on the user city is INFEASIBLE under
-      the A1 model's own region-area guard — no target band could be produced.
-      See `tasks/lessons.md` and `.superpowers/sdd/task-5-report.md`.
+      **BLOCKED (2026-07-03) → KILLED (2026-07-05):** v1 was INFEASIBLE under
+      the model's own region-area guard. v2 (embedded trunk + end overhangs)
+      fixed that but produced `f = 142/84 = 1.69`, outside the sanity band
+      `[0.75, 1.33]` on the opposite side. Per the spec's one-iteration
+      time-boxed retry rule, no v3 — no target band was ever produced. See
+      `tasks/lessons.md` (2026-07-03 and 2026-07-05 entries) and
+      `.superpowers/sdd/task-5-report.md` / `v2-task-b-report.md`.
 
-## Track A — Lane/stub decomposition optimizer (the main bet)
+## Track A — Lane/stub decomposition optimizer (the main bet) — KILLED (2026-07-05)
 
 Lessons say beating 158 needs a *fundamentally different global optimizer*. The
 expert layout IS a global decomposition: straight double-loaded lanes + trunk + TH
@@ -75,7 +79,7 @@ stubs. Four constructive lane attempts failed because they were **greedy, rigid
 constructors**. The fix is to optimize the decomposition where it is 1-D and
 combinatorial (tractable), and keep the 2-D geometry trivial:
 
-- [ ] **A1 — Composition solver (go/no-go gate, ~2 days, throwaway):** assign the
+- [x] **A1 — Composition solver (go/no-go gate, ~2 days, throwaway):** assign the
       63 road-needing darkzig buildings to *modules* — double-loaded lane segments
       (cost = max(Σ along-road extents side A, side B)), dead-end stubs (1 road
       cell, up to 3 buildings), junction cells — minimizing total road cells +
@@ -85,11 +89,16 @@ combinatorial (tractable), and keep the 2-D geometry trivial:
       to lane end-caps and stubs instead of "leftover greedy".
       **Gate:** if the *optimal composition* already costs ≥~150 road cells before
       geometry, the whole track dies cheaply. If it's ~115–130, proceed.
-- [ ] **A2 — Geometric embedding:** pack lane rectangles (length × (depthA + 1 +
+      **RESULT (2026-07-05): KILL.** v2 calibration gave `f = 1.69`, outside the
+      sanity band `[0.75, 1.33]` (v1 failed the other way: INFEASIBLE/too
+      pessimistic; v2 over-corrected to too optimistic). Pre-committed
+      one-iteration retry rule fires — no v3, A2/A3 do not proceed. See
+      `tasks/lessons.md` 2026-07-05 entry.
+- [ ] ~~A2 — Geometric embedding~~ (not started — killed at the A1 gate): pack lane rectangles (length × (depthA + 1 +
       depthB)) + a trunk into the irregular region (strip packing against region
       rows; TH near-edge with two road stubs per the user's heuristic memory).
       Fillers backfill remaining space — fillers already place perfectly (lessons).
-- [ ] **A3 — Repair + polish:** `route()` to connect/validate; existing anneal as
+- [ ] ~~A3 — Repair + polish~~ (not started — killed at the A1 gate): `route()` to connect/validate; existing anneal as
       finisher; any stranded tail goes through the current greedy into leftover
       pockets.
 - [ ] **Discipline:** throwaway prototypes; A/B vs 158 only at 0-unplaced across
@@ -199,3 +208,41 @@ cross-lane sharing and re-calibrate, or (2) accept the adjacency-bound-only
 target band (`[21, C*]` unknown) and route to Track B/D on the existing
 158-road plateau without a calibrated Track-A ceiling. Full numbers, the two
 CLI probes, and the diagnostic run are in `.superpowers/sdd/task-5-report.md`.
+
+### Track A — KILLED at the v2 retry (2026-07-05)
+
+Per the spec's own escalation path, option (1) above was taken: `--model v2`
+(embedded trunk + end-overhangs, dropping the pessimistic trunk term and
+crediting up to 2 free-overhang buildings per lane side) was built and its
+`--selftest` passed. It fixed the *feasibility* problem — v2 solves both
+cities — but the calibration factor still fails the sanity band, now from the
+opposite side:
+
+- User city: `status=FEASIBLE`, `model_optimum=84` (`proven_bound=13`, `gap=71`).
+  `f = 142/84 = 1.69`, above the upper sanity edge `1.33`. Decisive, not a
+  convergence artifact: `model_optimum` is a feasible incumbent (valid upper
+  bound on the true model optimum) for a minimization problem, so more solve
+  time can only lower it further and push `f` even higher — never back under
+  1.33. No re-run at 900 s was needed for that reason.
+- darkzig: `model_optimum=39` (`proven_bound=0`, `gap=39`);
+  `--connectors` sensitivity `model_optimum=50` (`+11`, matching
+  `n_used_lanes−1` for the reported 12 lanes).
+- Because `f` is outside the band, **`C*` was not computed** — a band miss is
+  its own verdict per the brief's step 2, independent of the darkzig numbers.
+
+This was the pre-committed **one-iteration, time-boxed retry**
+(`docs/superpowers/specs/2026-07-02-road-target-calibration-design.md`, v2
+section): "if v2 also fails calibration, Track A is killed... no v3." It
+failed, so **Track A (A1/A2/A3 — the global lane/stub composition optimizer
+for O2) is killed.** A1's checklist item above is checked off with this
+result; A2/A3 are marked not-started/killed rather than deleted, for the
+record. `foeopt/quality.py`, `foeopt/bounds.py`, and
+`scripts/exp_lane_composition.py` remain in the repo as sound diagnostic
+tooling (their self-tests pass); only the "use this solver's output as the
+calibrated road target" bet is closed.
+
+**Remaining live paths per the plan's own ordering:** Track B (structured LNS
+on the existing 158-road darkzig plateau — cheap, parallel, was always the
+productionizable fallback if Track A died at its gate) and Track D
+(productionize whichever path wins). Full numbers, commands, and arithmetic:
+`tasks/lessons.md` 2026-07-05 entry and `.superpowers/sdd/v2-task-b-report.md`.
