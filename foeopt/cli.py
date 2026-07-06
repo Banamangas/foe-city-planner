@@ -50,7 +50,33 @@ def _cmd_layout(args) -> int:
     import sys
     current = load_layout(args.city, args.helper)
     rbudget = _resolve_budget(args.budget, args.thorough)
-    if args.polish:
+    if args.lns is not None:
+        from datetime import datetime
+
+        from foeopt.lns import lns_polish
+
+        flags_ignored = []
+        if args.safe_placements:
+            flags_ignored.append("--safe-placements")
+        if args.th_stub_template:
+            flags_ignored.append("--th-stub-template")
+        if flags_ignored:
+            print(f"warning: {'/'.join(flags_ignored)} ignored with --lns", file=sys.stderr)
+        lns_res = lns_polish(current, repack_budget=rbudget,
+                             anneal_budget=args.anneal_budget,
+                             lns_budget=args.lns, seed=args.seed)
+        out_dir = Path("output") / "lns"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        stem = Path(args.city).stem
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        cmp_path = out_dir / f"{stem}-{stamp}.html"
+        cmp_path.write_text(render_comparison(lns_res.base_layout, lns_res.final.layout),
+                            encoding="utf-8")
+        print(f"  polished roads: {lns_res.final.base_roads} -> {len(lns_res.final.layout.roads)}")
+        print(f"lns: {lns_res.accepted}/{lns_res.rounds} corridor rewrites accepted | "
+              f"before/after: {cmp_path}")
+        res = lns_res.final
+    elif args.polish:
         flags_ignored = []
         if args.safe_placements:
             flags_ignored.append("--safe-placements")
@@ -148,6 +174,10 @@ def build_parser() -> argparse.ArgumentParser:
                           help="explore an offset-Townhall + corner-stub constructor "
                                "template alongside plain corner-fit (experimental; "
                                "A/B-gated, off by default; repack mode only; ignored with --polish)")
+    p_layout.add_argument("--lns", type=float, default=None, metavar="SECONDS",
+                          help="corridor destroy-repair budget after polish "
+                               "(implies --polish; writes a before/after HTML "
+                               "under output/lns/; experimental, A/B-gated)")
     p_layout.set_defaults(func=_cmd_layout)
 
     p_improve = sub.add_parser("improve", help="lower roads via local-search building moves")
