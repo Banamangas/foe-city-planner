@@ -429,53 +429,74 @@ def run_search(layout, args) -> dict:
     rng = random.Random(args.seed)
     out_dir = pathlib.Path("output/roads-first")
     out_dir.mkdir(parents=True, exist_ok=True)
-    logf = (out_dir / "probes.jsonl").open("a", encoding="utf-8")
+    with (out_dir / "probes.jsonl").open("a", encoding="utf-8") as logf:
 
-    def log(row):
-        logf.write(json.dumps(row) + "\n")
-        logf.flush()
+        def log(row):
+            logf.write(json.dumps(row) + "\n")
+            logf.flush()
 
-    results: dict[int, tuple[str, int | None]] = {}
+        def timed_out():
+            return time.monotonic() >= args.deadline
 
-    def level(k):
-        if k not in results:
-            print(f"probing k={k} ...", flush=True)
-            results[k] = _probe_level(layout, region, consumers, k, rng, args, log)
-            print(f"  k={k}: {results[k][0]}"
-                  f"{' achieved=' + str(results[k][1]) if results[k][1] else ''}", flush=True)
-        return results[k]
+        results: dict[int, tuple[str, int | None]] = {}
 
-    k = args.k_start
-    st, _ = level(k)
-    if st != "FEASIBLE":                      # spec §8: family-too-weak fallback
-        while st != "FEASIBLE" and k < 168 and time.monotonic() < args.deadline:
-            k += 4
-            st, _ = level(k)
-        if st != "FEASIBLE":
-            return {"verdict": "FAMILY_TOO_WEAK", "results": results}
-    lo_feasible = k
-    while time.monotonic() < args.deadline:   # walk down in steps of 4
-        nxt = lo_feasible - 4
-        if nxt < 1:
-            break
-        st, _ = level(nxt)
-        if st == "FEASIBLE":
-            lo_feasible = nxt
-        else:
-            break
-    # bisect the gap [nxt, lo_feasible)
-    lo, hi = lo_feasible - 4, lo_feasible
-    while hi - lo > 1 and time.monotonic() < args.deadline:
-        mid = (lo + hi) // 2
-        st, _ = level(mid)
-        if st == "FEASIBLE":
-            hi = mid
-        else:
-            lo = mid
-    best = min((r[1] for r in results.values() if r[1] is not None), default=None)
-    unknowns = sum(1 for r in results.values() if r[0] == "INCONCLUSIVE")
-    return {"verdict": "DONE", "first_feasible_k": hi if best is not None else None,
-            "best_achieved": best, "inconclusive_levels": unknowns, "results": results}
+        def level(k):
+            if k not in results:
+                print(f"probing k={k} ...", flush=True)
+                results[k] = _probe_level(layout, region, consumers, k, rng, args, log)
+                print(f"  k={k}: {results[k][0]}"
+                      f"{' achieved=' + str(results[k][1]) if results[k][1] is not None else ''}",
+                      flush=True)
+            return results[k]
+
+        truncated = False                     # any loop cut short by the deadline
+        k = args.k_start
+        st, _ = level(k)
+        if st != "FEASIBLE":                  # spec §8: family-too-weak fallback
+            while st != "FEASIBLE" and k < 168:
+                if timed_out():
+                    truncated = True
+                    break
+                k += 4
+                st, _ = level(k)
+            if st != "FEASIBLE":
+                return {"verdict": "FAMILY_TOO_WEAK", "walk_complete": not truncated,
+                        "deadline_hit": timed_out(), "results": results}
+        lo_feasible = k
+        while True:                           # walk down in steps of 4
+            if timed_out():
+                truncated = True
+                break
+            nxt = lo_feasible - 4
+            if nxt < 1:
+                break
+            st, _ = level(nxt)
+            if st == "FEASIBLE":
+                lo_feasible = nxt
+            else:
+                break
+        # bisect the gap [nxt, lo_feasible)
+        lo, hi = lo_feasible - 4, lo_feasible
+        while hi - lo > 1:
+            if timed_out():
+                truncated = True
+                break
+            mid = (lo + hi) // 2
+            st, _ = level(mid)
+            if st == "FEASIBLE":
+                hi = mid
+            else:
+                lo = mid
+        best = min((r[1] for r in results.values() if r[1] is not None), default=None)
+        unknowns = sum(1 for r in results.values() if r[0] == "INCONCLUSIVE")
+        # `lowest_feasible_k_probed` is exactly that: the lowest level this (possibly
+        # deadline-truncated) walk probed FEASIBLE — not a proven floor. Levels below it
+        # may be unprobed or INCONCLUSIVE; see walk_complete/deadline_hit and `results`.
+        return {"verdict": "DONE",
+                "lowest_feasible_k_probed": hi if best is not None else None,
+                "best_achieved": best, "inconclusive_levels": unknowns,
+                "walk_complete": not truncated, "deadline_hit": timed_out(),
+                "results": results}
 
 
 def main(argv=None):
@@ -520,7 +541,8 @@ def main(argv=None):
     layout = load_layout(args.city)
     res = run_search(layout, args)
     print(json.dumps({k: v for k, v in res.items() if k != "results"}, indent=1))
-    per_level = {k: v[0] + (f" achieved={v[1]}" if v[1] else "") for k, v in sorted(res["results"].items())}
+    per_level = {k: v[0] + (f" achieved={v[1]}" if v[1] is not None else "")
+                 for k, v in sorted(res["results"].items())}
     print("levels:", json.dumps(per_level, indent=1))
     return 0
 
