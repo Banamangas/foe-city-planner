@@ -51,6 +51,23 @@ def _corner_fit(grid: Grid, w: int, l: int, anchor: str) -> tuple[int, int] | No
     return None
 
 
+def _offset_fit(grid: Grid, w: int, l: int, anchor: str, d: int) -> tuple[int, int] | None:
+    """Corner-outward scan like _corner_fit, but skip positions closer than
+    Chebyshev distance d to the anchor corner. Produces expert-style TH spots:
+    offset d along one axis, flush on the other (the first accepted position)."""
+    xs = range(grid.width) if anchor in ("bl", "tl") else range(grid.width - 1, -1, -1)
+    ys = range(grid.height) if anchor in ("bl", "br") else range(grid.height - 1, -1, -1)
+    cx = 0 if anchor in ("bl", "tl") else grid.width - 1
+    cy = 0 if anchor in ("bl", "br") else grid.height - 1
+    for y in ys:
+        for x in xs:
+            if max(abs(x - cx), abs(y - cy)) < d:
+                continue
+            if grid.fits(x, y, w, l):
+                return (x, y)
+    return None
+
+
 def _stub_fit(
     grid: Grid, region, tw: int, tl: int, anchor: str
 ) -> tuple[tuple[int, int], tuple[tuple[int, int], tuple[int, int]]] | None:
@@ -190,6 +207,9 @@ def build_candidate(layout: Layout, config: PackConfig, *,
         found = _stub_fit(grid, region, tw, tl, config.anchor)
         if found is not None:
             pos, stub_pair = found
+    elif config.th_style == "offset":
+        d = rng.choice((2, 4, 6, 8))
+        pos = _offset_fit(grid, tw, tl, config.anchor, d) or _corner_fit(grid, tw, tl, config.anchor)
     if pos is None:
         pos = _corner_fit(grid, tw, tl, config.anchor)
     if pos is None:
@@ -336,17 +356,24 @@ def build_candidate(layout: Layout, config: PackConfig, *,
 def repack(layout: Layout, *, thorough: bool = False,
            budget_seconds: float | None = None, seed: int = 0,
            safe_placements: bool = False,
-           th_stub_template: bool = False) -> PackResult:
+           th_stub_template: bool = False,
+           th_styles: tuple[str, ...] = ("corner",)) -> PackResult:
     """Budgeted randomized multi-start: try many randomized packings, keep the
     best by (fewest unplaced, then fewest roads). Deterministic given `seed` and
     the number of trials completed. Runs until the time budget so it minimizes
     roads among fully-placed layouts (no early-exit on first full placement).
 
-    `th_stub_template`: when True, each trial's `PackConfig` also explores
-    `th_style="stub"` (default-off; flag-gated per tasks/lessons.md -- proxy
-    tweaks bolted onto the greedy have historically hurt the measured
-    0-unplaced road count, so this is judged by A/B only). When False the
-    portfolio is byte-identical to today's.
+    `th_styles`: the portfolio of `PackConfig.th_style` values each trial may
+    draw from (default-off beyond "corner"; flag-gated per tasks/lessons.md --
+    proxy tweaks bolted onto the greedy have historically hurt the measured
+    0-unplaced road count, so new styles are judged by A/B only). With a
+    single style, no rng draw is spent selecting it; with multiple, one is
+    drawn via `master.choice`.
+
+    `th_stub_template`: sugar for adding `"stub"` to `th_styles` (kept for
+    back-compat; `th_stub_template=True` is equivalent to appending `"stub"`
+    to `th_styles`, drawing from the exact same portfolio and rng stream as
+    before this parameter existed).
 
     `safe_placements`: when True, masks placements that wall off free space or
     seal a consumer, reducing road-wasting dead-ends (experimental, default off;
@@ -355,16 +382,18 @@ def repack(layout: Layout, *, thorough: bool = False,
         budget_seconds = 120.0 if thorough else 30.0
     master = random.Random(seed)
     anchors = ("bl", "br", "tl", "tr")
+    styles = tuple(th_styles) + (("stub",) if th_stub_template else ())
     best: PackResult | None = None
     best_key: tuple[int, int] | None = None
     trials = 0
     deadline = time.monotonic() + budget_seconds
     while True:
-        if th_stub_template:
+        if len(styles) == 1:
             cfg = PackConfig(master.choice(anchors), master.randrange(2 ** 32),
-                             th_style=master.choice(("corner", "stub")))
+                             th_style=styles[0])
         else:
-            cfg = PackConfig(master.choice(anchors), master.randrange(2 ** 32))
+            cfg = PackConfig(master.choice(anchors), master.randrange(2 ** 32),
+                             th_style=master.choice(styles))
         res = build_candidate(layout, cfg, safe_placements=safe_placements)
         trials += 1
         key = (len(res.unplaced), len(res.layout.roads))

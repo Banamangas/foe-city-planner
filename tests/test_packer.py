@@ -333,3 +333,34 @@ def test_repack_flag_on_valid():
     res = repack(layout, budget_seconds=2, seed=5, th_stub_template=True)
     assert res.unplaced == []
     assert is_valid(res.layout)
+
+
+def test_offset_style_places_th_away_from_corner():
+    from foeopt.packer import PackConfig, build_candidate
+    layout = _sparse_layout()
+    res = build_candidate(layout, PackConfig("bl", 3, th_style="offset"))
+    th = res.layout.townhall
+    assert th is not None
+    # anchor bl scans from (0, 0); offset requires Chebyshev distance >= d >= 2
+    assert max(th.footprint.x, th.footprint.y) >= 2
+    assert res.unplaced == []
+
+
+def test_th_styles_default_is_byte_identical():
+    from foeopt.packer import repack
+    layout = _sparse_layout()
+    a = repack(layout, budget_seconds=2, seed=5)
+    b = repack(layout, budget_seconds=2, seed=5, th_styles=("corner",))
+    assert {x.entity_id: x.footprint for x in a.layout.buildings} == \
+           {x.entity_id: x.footprint for x in b.layout.buildings}
+    assert a.layout.roads == b.layout.roads
+
+
+def test_th_stub_template_is_sugar_for_styles():
+    from foeopt.packer import repack
+    layout = _sparse_layout()
+    a = repack(layout, budget_seconds=2, seed=5, th_stub_template=True)
+    b = repack(layout, budget_seconds=2, seed=5, th_styles=("corner", "stub"))
+    assert {x.entity_id: x.footprint for x in a.layout.buildings} == \
+           {x.entity_id: x.footprint for x in b.layout.buildings}
+    assert a.layout.roads == b.layout.roads
