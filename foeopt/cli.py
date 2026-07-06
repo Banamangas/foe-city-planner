@@ -72,7 +72,7 @@ def _cmd_layout(args) -> int:
         cmp_path = out_dir / f"{stem}-{stamp}.html"
         cmp_path.write_text(render_comparison(lns_res.base_layout, lns_res.final.layout),
                             encoding="utf-8")
-        print(f"  polished roads: {lns_res.final.base_roads} -> {len(lns_res.final.layout.roads)}")
+        print(f"  lns roads: {lns_res.final.base_roads} -> {len(lns_res.final.layout.roads)}")
         print(f"lns: {lns_res.accepted}/{lns_res.rounds} corridor rewrites accepted | "
               f"before/after: {cmp_path}")
         res = lns_res.final
