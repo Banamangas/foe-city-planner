@@ -79,15 +79,20 @@ discarded (not padded arbitrarily).
 
 ## 5. Arithmetic pre-filter (no solver)
 
-Reject a pattern in microseconds when any of these fail:
+Reject a pattern in microseconds only on NECESSARY conditions (each rejection is a proof of UNSAT, so
+the certificate survives pre-filtering):
 
-1. **Frontage capacity:** total free-cell frontage adjacent to the pattern's road cells ≥ Σ over
-   consumers of min(w, l) — with per-cell capacity ≤ its free orthogonal neighbours.
-2. **Per-branch two-sided capacity:** for each branch, the buildable depth on each side (clipped by
-   region/TH) must admit at least the smallest consumer; branches with zero usable frontage are dead
-   cells and the pattern wastes k.
-3. **Area fit:** consumer area + k + filler area ≤ region cells (always true on darkzig by inventory,
-   kept as a guard for other inputs).
+1. **Area fit:** consumer area + |road cells| ≤ |region cells − TH cells| (placements and roads are
+   disjoint from each other and the TH).
+2. **Adjacency capacity:** 3 × |road cells with ≥1 free orthogonal neighbour| ≥ 63 (a road cell serves
+   at most 3 consumers — the `bound_adjacency` argument).
+3. **Per-consumer anchor existence** is checked exactly in the probe's fast-fail (§6) — a consumer with
+   zero legal anchors is UNSAT without a solve; it is part of the probe, not a heuristic.
+
+Heuristic dominance filters (full-frontage capacity, dead-branch rejection) are deliberately NOT used:
+they reject patterns that may still be feasible, which would break "all attempted patterns UNSAT ⇒
+level infeasible". Wasteful patterns cost probe time, not correctness — and `route()` prunes dead road
+cells from any SAT result anyway (§7.4).
 
 ## 6. CP-SAT placement feasibility (the core probe)
 
