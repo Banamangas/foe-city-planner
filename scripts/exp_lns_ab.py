@@ -45,7 +45,7 @@ def main():
             out_dir.mkdir(parents=True, exist_ok=True)
             safe = name.replace(" ", "_").replace("=", "")
             (out_dir / f"{safe}-seed{seed}.html").write_text(
-                render_comparison(b.base_layout, b.final.layout))
+                render_comparison(b.base_layout, b.final.layout), encoding="utf-8")
         summarize(f"{name} lns=off", rows_a)
         summarize(f"{name} lns=on ", rows_b)
         acc = [r["accepted"] for r in rows_b]

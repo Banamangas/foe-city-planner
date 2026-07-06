@@ -16,7 +16,7 @@ _ORTHO = ((1, 0), (-1, 0), (0, 1), (0, -1))
 class PackConfig:
     anchor: str   # Townhall start corner: "bl" | "br" | "tl" | "tr"
     seed: int     # seeds the building-order tie-break (road growth is deterministic)
-    th_style: str = "corner"  # "corner" (status quo) | "stub" (offset TH + corner stubs)
+    th_style: str = "corner"  # "corner" (status quo) | "stub" (offset TH + corner stubs) | "offset" (Chebyshev-offset TH, spec 8b probe)
 
 
 @dataclass
@@ -198,8 +198,10 @@ def build_candidate(layout: Layout, config: PackConfig, *,
 
     # 1. Townhall at the chosen corner. th_style="stub" scans for the first
     #    position that also admits a flank-pair of corner-stub road cells;
-    #    falling back to plain _corner_fit (like th_style="corner") when none
-    #    exists anywhere in the region.
+    #    th_style="offset" scans for the first position at least Chebyshev
+    #    distance d from the anchor corner; both fall back to plain
+    #    _corner_fit (like th_style="corner") when none exists anywhere in
+    #    the region.
     tw, tl = townhall.footprint.width, townhall.footprint.length
     stub_pair: tuple[tuple[int, int], tuple[int, int]] | None = None
     pos = None
@@ -209,7 +211,7 @@ def build_candidate(layout: Layout, config: PackConfig, *,
             pos, stub_pair = found
     elif config.th_style == "offset":
         d = rng.choice((2, 4, 6, 8))
-        pos = _offset_fit(grid, tw, tl, config.anchor, d) or _corner_fit(grid, tw, tl, config.anchor)
+        pos = _offset_fit(grid, tw, tl, config.anchor, d)
     if pos is None:
         pos = _corner_fit(grid, tw, tl, config.anchor)
     if pos is None:
@@ -373,7 +375,11 @@ def repack(layout: Layout, *, thorough: bool = False,
     `th_stub_template`: sugar for adding `"stub"` to `th_styles` (kept for
     back-compat; `th_stub_template=True` is equivalent to appending `"stub"`
     to `th_styles`, drawing from the exact same portfolio and rng stream as
-    before this parameter existed).
+    before this parameter existed). Note: if `th_styles` already contains
+    `"stub"`, combining it with `th_stub_template=True` appends a second
+    `"stub"` entry, double-weighting that style in the rng draw.
+
+    `th_styles` must be non-empty.
 
     `safe_placements`: when True, masks placements that wall off free space or
     seal a consumer, reducing road-wasting dead-ends (experimental, default off;
@@ -383,6 +389,8 @@ def repack(layout: Layout, *, thorough: bool = False,
     master = random.Random(seed)
     anchors = ("bl", "br", "tl", "tr")
     styles = tuple(th_styles) + (("stub",) if th_stub_template else ())
+    if not styles:
+        raise ValueError("th_styles must be non-empty")
     best: PackResult | None = None
     best_key: tuple[int, int] | None = None
     trials = 0

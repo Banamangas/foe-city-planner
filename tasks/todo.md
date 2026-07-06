@@ -112,7 +112,8 @@ Change the *move set*, not the search:
 
 - [x] Corridor-granularity destroy-repair: pick an under-used corridor via
       `quality.py`, free its buildings + road cells, rebuild as a balanced double
-      row using A1's balancer; add row-shift and junction/stub-promotion moves.
+      row using A1's balancer; add row-shift and junction/stub-promotion moves
+      — descoped to v2-if-gate-passes per spec §1.3; never built (gate failed).
       Built (`--lns` flag, `lns_polish`), default off.
 - [x] Run inside the existing anneal/polish harness; same A/B discipline.
       **RESULT (2026-07-06): GATE FAILS on darkzig** — `lns_polish(60,30,30)`
