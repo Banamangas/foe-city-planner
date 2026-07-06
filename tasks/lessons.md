@@ -490,3 +490,14 @@ per the pre-committed rule (no tuning marathon; revisiting needs new evidence).
    `--lns` when overhead cells > X" heuristic could be a Track D item if the
    project reaches productionization. See `output/lns/<stamp>/` HTML folders
    for visual before/after inspection of the accepted corridor rewrites.
+
+## Dependency policy: gated solver extras (2026-07-06)
+**Rule:** any solver-dependent method that passes its pre-registered A/B gate is productionized as a
+`[solver]` optional extra in pyproject.toml (stdlib core keeps working without it — same pattern as the
+existing `rl` extra), rather than being penalized for the dependency. Experiments keep using
+`uv run --with <lib>` throwaway scripts; `foeopt/` core stays pure-stdlib.
+**Why:** a full audit (2026-07-06) found the stdlib constraint cost exactly one measured road across the
+project's history (attempt #7's 157-vs-158 LNS+CP-SAT, rejected as "not worth the dependency") — every
+other dead track died on evidence about the problem, not on library access. But methods were carrying an
+unspoken extra bar. Pre-committing the promotion rule removes the distortion without giving up the
+zero-dependency core install.
