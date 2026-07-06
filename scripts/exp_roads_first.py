@@ -145,9 +145,10 @@ def generate_patterns(region: set[Cell], tw: int, tl: int, k: int,
                         roads: set[Cell] = set()
                         stubs = _stub_cells(reg, th, roads) if use_stubs else []
                         budget = k - len(stubs)
-                        if budget < 2:
+                        if budget < 1:
                             continue
-                        trunk_used = trunk[:min(len(trunk), max(2, budget // 2))]
+                        trunk_len = 1 if budget == 1 else max(2, budget // 2)
+                        trunk_used = trunk[:min(len(trunk), trunk_len)]
                         roads |= set(trunk_used)
                         remaining = budget - len(trunk_used)
                         if remaining < 0:
@@ -227,13 +228,161 @@ def _check_pattern(p: Pattern, region: set[Cell], k: int) -> None:
     assert seen == set(p.roads), "pattern not connected to the TH"
 
 
+def _anchor_candidates(b: Building, region: set[Cell], blocked: set[Cell],
+                       roads: frozenset[Cell]) -> list[tuple[int, int, int]]:
+    """All (x, y, orient) with footprint in-region, off blocked cells, and >=1
+    border cell on a road. orient 0: w x l; orient 1: l x w (skipped for squares)."""
+    out = []
+    w0, l0 = b.footprint.width, b.footprint.length
+    x0, y0, x1, y1 = _bbox(region)
+    dims = [(w0, l0)] if w0 == l0 else [(w0, l0), (l0, w0)]
+    for o, (w, l) in enumerate(dims):
+        for y in range(y0, y1 - l + 2):
+            for x in range(x0, x1 - w + 2):
+                fp = Footprint(x, y, w, l)
+                cells = fp.cells()
+                if not (cells <= region) or (cells & blocked):
+                    continue
+                if any(c in roads for c in fp.border_cells()):
+                    out.append((x, y, o))
+    return out
+
+
+def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
+          *, probe_limit: float) -> tuple[str, dict | None]:
+    from ortools.sat.python import cp_model
+
+    th_cells = set(pattern.th.cells())
+    blocked = set(pattern.roads) | th_cells
+    cand = []
+    for b in consumers:
+        opts = _anchor_candidates(b, region, blocked, pattern.roads)
+        if not opts:
+            return ("UNSAT", None)            # exact fast-fail (spec §6)
+        cand.append((b, opts))
+
+    m = cp_model.CpModel()
+    x0b, y0b, x1b, y1b = _bbox(region)
+    xs, ys, os_, xiv, yiv = [], [], [], [], []
+    for i, (b, opts) in enumerate(cand):
+        w0, l0 = b.footprint.width, b.footprint.length
+        x = m.NewIntVar(x0b, x1b, f"x{i}")
+        y = m.NewIntVar(y0b, y1b, f"y{i}")
+        o = m.NewIntVar(0, 1, f"o{i}")
+        m.AddAllowedAssignments([x, y, o], opts)
+        if w0 == l0:
+            m.Add(o == 0)
+            xiv.append(m.NewFixedSizeIntervalVar(x, w0, f"xi{i}"))
+            yiv.append(m.NewFixedSizeIntervalVar(y, l0, f"yi{i}"))
+        else:
+            lit0 = m.NewBoolVar(f"lit0_{i}")
+            m.Add(o == 0).OnlyEnforceIf(lit0)
+            m.Add(o == 1).OnlyEnforceIf(lit0.Not())
+            xiv.append(m.NewOptionalFixedSizeIntervalVar(x, w0, lit0, f"xi0_{i}"))
+            yiv.append(m.NewOptionalFixedSizeIntervalVar(y, l0, lit0, f"yi0_{i}"))
+            xiv.append(m.NewOptionalFixedSizeIntervalVar(x, l0, lit0.Not(), f"xi1_{i}"))
+            yiv.append(m.NewOptionalFixedSizeIntervalVar(y, w0, lit0.Not(), f"yi1_{i}"))
+        xs.append(x); ys.append(y); os_.append(o)
+    m.AddNoOverlap2D(xiv, yiv)
+
+    solver = cp_model.CpSolver()
+    solver.parameters.num_search_workers = 1
+    solver.parameters.random_seed = 0
+    solver.parameters.max_time_in_seconds = probe_limit
+    st = solver.Solve(m)
+    if st in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        pos = {}
+        for i, (b, _) in enumerate(cand):
+            w0, l0 = b.footprint.width, b.footprint.length
+            w, l = (w0, l0) if solver.Value(os_[i]) == 0 else (l0, w0)
+            pos[b.entity_id] = (solver.Value(xs[i]), solver.Value(ys[i]), w, l)
+        return ("SAT", pos)
+    if st == cp_model.INFEASIBLE:
+        return ("UNSAT", None)
+    return ("UNKNOWN", None)
+
+
+def validate(layout_src: Layout, pattern: Pattern,
+             positions: dict) -> tuple[str, Layout | None, int]:
+    """SAT result -> full routed layout or a distinct failure status (spec §7)."""
+    consumers = layout_src.road_needing()
+    fillers = [b for b in layout_src.buildings
+               if not b.needs_road and not b.is_townhall]
+    placed = []
+    for b in consumers:
+        x, y, w, l = positions[b.entity_id]
+        placed.append(replace(b, footprint=Footprint(x, y, w, l)))
+    th = replace(layout_src.townhall, footprint=pattern.th)
+    cand = Layout(layout_src.region, [th, *placed], th, {})
+    try:
+        roads = route(cand)
+    except RouteError:
+        return ("ROUTE_FAIL", None, 0)
+    cand.roads = roads
+    if not is_valid(cand):
+        return ("INVALID", None, 0)
+    # gap-fill ALL fillers (explicit acceptance condition, spec §7.2)
+    region = set(layout_src.region.cells)
+    x0, y0, x1, y1 = _bbox(region)
+    w, h = x1 + 1, y1 + 1
+    occupied = set(roads) | set(th.footprint.cells())
+    for b in placed:
+        occupied |= b.footprint.cells()
+    free = region - occupied
+    grid = Grid(w, h, {(x, y) for x in range(w) for y in range(h)} - free)
+    for b in sorted(fillers, key=lambda b: -(b.footprint.width * b.footprint.length)):
+        bw, bl = b.footprint.width, b.footprint.length
+        spot = first_fit(grid, bw, bl)
+        if spot is None and bw != bl:
+            bw, bl = bl, bw
+            spot = first_fit(grid, bw, bl)
+        if spot is None:
+            return ("SAT_FILLER_FAIL", None, len(roads))
+        grid.occupy(spot[0], spot[1], bw, bl)
+        cand.buildings.append(replace(b, footprint=Footprint(spot[0], spot[1], bw, bl)))
+    return ("OK", cand, len(roads))
+
+
+def _selftest() -> int:
+    from rl.oracle import optimal_roads
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
+                  False, 1, True, None, None, "TH")
+    c1 = Building(10, "c10", "g", Footprint(0, 0, 2, 2), True, 1, False, None, None, "a")
+    c2 = Building(11, "c11", "g", Footprint(0, 0, 2, 1), True, 1, False, None, None, "b")
+    region_cells = frozenset((x, y) for x in range(6) for y in range(6))
+    lay = Layout(Region(region_cells), [th, c1, c2], th, {})
+    oracle = optimal_roads(lay, budget_s=60.0)
+    region = set(region_cells)
+    rng = random.Random(0)
+    ok_k1 = False
+    for pat in generate_patterns(region, 2, 2, 1, rng, 50):
+        if prefilter(pat, region, [c1, c2]) is not None:
+            continue
+        st, pos = probe(pat, region, [c1, c2], probe_limit=30.0)
+        if st != "SAT":
+            continue
+        vstat, vlay, achieved = validate(lay, pat, pos)
+        if vstat == "OK" and achieved == oracle:
+            ok_k1 = True
+            break
+    # k=0 is UNSAT by definition (no pattern has road cells -> no anchors);
+    # generate_patterns(k=0) yields nothing, which is the same statement.
+    ok_k0 = generate_patterns(region, 2, 2, 0, random.Random(0), 50) == []
+    print(f"selftest: oracle={oracle} k1_validated={ok_k1} k0_empty={ok_k0} "
+          f"{'PASS' if (ok_k1 and ok_k0) else 'FAIL'}")
+    return 0 if (ok_k1 and ok_k0) else 1
+
+
 def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("city", nargs="?")
     p.add_argument("--dump-patterns", type=int, default=None, metavar="K")
     p.add_argument("--patterns", type=int, default=200)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--selftest", action="store_true")
     args = p.parse_args(argv)
+    if args.selftest:
+        return _selftest()
     if args.dump_patterns is not None:
         layout = load_layout(args.city)
         region = set(layout.region.cells)
