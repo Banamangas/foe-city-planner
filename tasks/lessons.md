@@ -469,8 +469,7 @@ per the pre-committed rule (no tuning marathon; revisiting needs new evidence).
 1. The mechanism is validated, the target was wrong. Corridor rebuilds convert
    single-loaded corridors into double rows wherever free space allows
    re-arrangement: fill 0.5 shows a **-7.4 roads mean win at equal wall-clock**
-   — the first structural method in this project's history (7 packer/CP-SAT/RL
-   attempts, all prior lessons.md entries) to beat plain polish at its own game
+   — the first structural method in this project's history to beat plain polish at its own game
    *anywhere*. On darkzig-density cities there is no slack for the template to
    use: repairs can't fit the two-row pattern into the freed cells, so almost
    nothing is accepted (rounds spin, accepted 0-1 per seed) — per the earlier
