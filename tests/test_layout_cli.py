@@ -44,3 +44,31 @@ def test_layout_cli_accepts_polish_flags():
     args = parser.parse_args(["layout", "city.json", "--polish", "--anneal-budget", "0.2"])
     assert args.polish is True
     assert args.anneal_budget == 0.2
+
+
+def test_layout_cli_accepts_lns_flag():
+    from foeopt.cli import build_parser
+    parser = build_parser()
+    args = parser.parse_args(["layout", "city.json", "--lns", "2"])
+    assert args.lns == 2.0
+
+
+def test_layout_lns_writes_comparison_html(tmp_path, monkeypatch, repo_root):
+    """--lns runs the corridor-LNS pass and writes a before/after HTML under
+    output/lns/<city-stem>-<timestamp>.html. This real fixture sits at ~96.6%
+    density (see test_repack_real_city_is_valid_or_reports_unplaced above), so
+    a small test budget can legitimately leave buildings unplaced (rc == 1);
+    that's an expected outcome here, not a test failure -- the thing under
+    test is that the comparison HTML gets written regardless."""
+    from foeopt.cli import main
+    monkeypatch.chdir(tmp_path)  # output/lns lands under tmp_path
+    rc = main(["layout", str(repo_root / "city-user-data.json"),
+               str(repo_root / "city-user-data-foe-helper.json"),
+               "--budget", "2", "--anneal-budget", "1", "--lns", "2",
+               "-o", str(tmp_path / "layout.html")])
+    assert rc in (0, 1)
+    out_dir = tmp_path / "output" / "lns"
+    files = list(out_dir.glob("*.html"))
+    assert len(files) == 1
+    text = files[0].read_text()
+    assert "before" in text.lower() and "after" in text.lower()
