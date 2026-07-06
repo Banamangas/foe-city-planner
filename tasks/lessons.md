@@ -384,3 +384,110 @@ unused).
    flag-gated, measure-first discipline worked exactly as designed here:
    zero cost to the default path, a clean negative result recorded instead
    of a merged regression.
+
+## Track B corridor-LNS A/B + TH-offset probe (2026-07-06)
+
+Corridor-granularity destroy-repair (`--lns`, arm B `lns_polish(60, 30, 30)`)
+A/B'd against plain `polish(60, 60)` at equal wall-clock, 8 seeds, darkzig +
+`make_real_like_city` fill 0.5/0.7/0.9 (`output/lns-ab.txt`), per the
+pre-committed gate in spec §1.1/§8: on darkzig, 0-unplaced rows only,
+`mean(B) <= mean(A) - 2 AND max(B) <= max(A)` -> pass; else fail -> flag
+stays opt-in, Track B closes (no tuning marathon; revisit needs new
+evidence). A parallel TH-offset probe (pure-style arms, corner-only vs
+offset-only repack, 8 seeds, `output/th-offset-ab.txt`) ran alongside as a
+diagnostic only, no gate.
+
+**Summary lines (verbatim) + accepted-rewrites lines, `output/lns-ab.txt`:**
+```
+city lns=off: unplaced min/mean/max 0/0.0/0 | 0-unplaced roads [153, 154, 155, 157, 158, 165, 169, 175] | trials/run mean 102
+city lns=on : unplaced min/mean/max 0/0.0/0 | 0-unplaced roads [155, 155, 155, 156, 158, 164, 172, 175] | trials/run mean 102
+  lns accepted rewrites per seed: [0, 0, 1, 0, 0, 1, 0, 0]
+real-like fill=0.5 lns=off: unplaced min/mean/max 0/0.0/0 | 0-unplaced roads [115, 115, 115, 115, 116, 116, 116, 116] | trials/run mean 121
+real-like fill=0.5 lns=on : unplaced min/mean/max 0/0.0/0 | 0-unplaced roads [105, 107, 107, 107, 108, 108, 108, 115] | trials/run mean 122
+  lns accepted rewrites per seed: [1, 2, 0, 1, 1, 1, 1, 1]
+real-like fill=0.7 lns=off: unplaced min/mean/max 0/0.0/0 | 0-unplaced roads [144, 150, 152, 152, 154, 154, 154, 165] | trials/run mean 134
+real-like fill=0.7 lns=on : unplaced min/mean/max 0/0.0/0 | 0-unplaced roads [144, 150, 152, 152, 152, 152, 154, 174] | trials/run mean 136
+  lns accepted rewrites per seed: [1, 0, 1, 0, 0, 0, 0, 1]
+real-like fill=0.9 lns=off: unplaced min/mean/max 0/3.0/10 | 0-unplaced roads [180, 190] | trials/run mean 64
+real-like fill=0.9 lns=on : unplaced min/mean/max 0/3.0/10 | 0-unplaced roads [180, 190] | trials/run mean 64
+  lns accepted rewrites per seed: [0, 0, 0, 0, 0, 1, 1, 0]
+```
+
+**Summary lines (verbatim), `output/th-offset-ab.txt`:**
+```
+city th=corner: unplaced min/mean/max 0/0.0/0 | 0-unplaced roads [159, 160, 162, 162, 167, 168, 169, 170] | trials/run mean 205
+city th=offset: unplaced min/mean/max 0/0.0/0 | 0-unplaced roads [162, 165, 165, 166, 166, 167, 171, 174] | trials/run mean 210
+real-like fill=0.5 th=corner: unplaced min/mean/max 0/0.0/0 | 0-unplaced roads [115, 115, 115, 115, 115, 115, 116, 116] | trials/run mean 243
+real-like fill=0.5 th=offset: unplaced min/mean/max 0/0.0/0 | 0-unplaced roads [115, 115, 115, 115, 115, 115, 115, 116] | trials/run mean 244
+real-like fill=0.7 th=corner: unplaced min/mean/max 0/0.0/0 | 0-unplaced roads [152, 152, 152, 152, 154, 154, 154, 156] | trials/run mean 266
+real-like fill=0.7 th=offset: unplaced min/mean/max 0/0.0/0 | 0-unplaced roads [151, 151, 153, 153, 153, 153, 154, 155] | trials/run mean 244
+real-like fill=0.9 th=corner: unplaced min/mean/max 0/0.6/4 | 0-unplaced roads [180, 188, 192, 193, 198, 211] | trials/run mean 133
+real-like fill=0.9 th=offset: unplaced min/mean/max 0/1.6/4 | 0-unplaced roads [190, 195, 219] | trials/run mean 135
+```
+
+**Gate arithmetic (recomputed from the raw lists above, darkzig, 0-unplaced only):**
+- off (A): sum 153+154+155+157+158+165+169+175 = 1286, mean **160.75**, max **175**.
+- on (B): sum 155+155+155+156+158+164+172+175 = 1290, mean **161.25**, max **175**.
+- `mean(B) <= mean(A) - 2` -> 161.25 <= 158.75 -> **FALSE** (B is 0.5 roads *worse* on
+  mean, not 2 better). `max(B) <= max(A)` -> 175 <= 175 -> true, but the AND fails
+  on the mean clause alone. **GATE FAILS.**
+
+**Secondary fill-level readings (not gated, diagnostic):**
+- fill 0.5: off mean 924/8=115.5, on mean 865/8=**108.125** -> B wins by **7.375**
+  roads mean at equal wall-clock; accepted-rewrites-per-seed `[1,2,0,1,1,1,1,1]`
+  (7/8 seeds with >=1 accepted rewrite) — this is the headline secondary finding:
+  the corridor-rebuild mechanism *works* where slack exists. Darkzig's accepted
+  rewrites are `[0,0,1,0,0,1,0,0]` (0-1 per seed) — at 97%-dense era layouts and
+  60 s polish there is essentially no room for the double-row template to fire.
+- fill 0.7: off mean 1225/8=153.125, on mean 1230/8=153.75 — a wash (0.625 worse
+  mean, and worse max: on 174 vs off 165).
+- fill 0.9: off and on distributions identical (`[180, 190]` both arms, mean
+  185, accepted rewrites 0-1 per seed) — no effect, most seeds don't even reach
+  0-unplaced (unplaced mean 3.0 both arms).
+
+**TH-offset probe reading (diagnostic only, no gate — `output/th-offset-ab.txt`):**
+- darkzig: corner sum 1317/8=**164.625**, offset sum 1336/8=**167.0** — offset is
+  ~2.4 roads *worse* on mean.
+- fill 0.5: corner mean 922/8=115.25, offset mean 921/8=115.125 — effectively
+  identical.
+- fill 0.7: corner mean 1226/8=153.25, offset mean 1223/8=**152.875** — offset
+  marginally *better* here (0.375 roads mean).
+- fill 0.9: corner unplaced 0/0.6/4 (6/8 seeds reach 0-unplaced), offset unplaced
+  0/1.6/4 (only 3/8 reach 0-unplaced) — offset is worse on placement at high
+  density.
+- Reading: per-trial offset-TH is neutral-to-worse on the darkzig gate city and
+  the high-fill tail, marginally better only at fill 0.7, and worse where
+  density matters overall. Corner-seeking is **not** a measurable cause of the
+  darkzig plateau via this constructor alone — the expert city's offset-TH
+  advantage evidently comes from the coordinated surrounding structure the
+  player builds around it, not from the placement choice in isolation.
+
+**Verdict: GATE FAILS -> `--lns` stays opt-in (default off). Track B CLOSES**
+per the pre-committed rule (no tuning marathon; revisiting needs new evidence).
+
+**Interpretation:**
+1. The mechanism is validated, the target was wrong. Corridor rebuilds convert
+   single-loaded corridors into double rows wherever free space allows
+   re-arrangement: fill 0.5 shows a **-7.4 roads mean win at equal wall-clock**
+   — the first structural method in this project's history (7 packer/CP-SAT/RL
+   attempts, all prior lessons.md entries) to beat plain polish at its own game
+   *anywhere*. On darkzig-density cities there is no slack for the template to
+   use: repairs can't fit the two-row pattern into the freed cells, so almost
+   nothing is accepted (rounds spin, accepted 0-1 per seed) — per the earlier
+   RL/T5 framing, that means "converged, no room," not "broken."
+2. Rule for the record: destroy-repair value scales with free-space slack;
+   density is the binding constraint, and the darkzig plateau (~158-165 roads,
+   0-unplaced) remains unbeaten by every method tried so far in this project
+   (structured packers x4, CP-SAT, LNS+CP-SAT, RL M2-M4, safe-placements mask,
+   TH-stub template, and now corridor-LNS). Any future attempt must explain how
+   it *creates* slack (e.g. cross-region coordinated moves that free cells
+   somewhere else first) rather than how it *uses* slack that isn't there.
+3. Probe: no follow-up TH-placement investigation is warranted by these numbers
+   alone — noting the user's standing interest (memory-flagged,
+   `foe-layout-heuristics.md`) as deferred, with this probe as its first
+   data point.
+4. Fill-0.5 salvage option, noted but NOT pursued: `--lns` is a legitimate
+   opt-in win for players whose cities have overhead-cell slack; a "recommend
+   `--lns` when overhead cells > X" heuristic could be a Track D item if the
+   project reaches productionization. See `output/lns/<stamp>/` HTML folders
+   for visual before/after inspection of the accepted corridor rewrites.
