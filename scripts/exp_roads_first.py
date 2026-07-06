@@ -373,6 +373,111 @@ def _selftest() -> int:
     return 0 if (ok_k1 and ok_k0) else 1
 
 
+def _probe_level(layout, region, consumers, k, rng, args, log) -> tuple[str, int | None]:
+    """Probe up to --patterns patterns at level k. Returns (level_status, best_achieved):
+    level_status in {"FEASIBLE", "INFEASIBLE", "INCONCLUSIVE"} — INFEASIBLE only if
+    every attempted pattern was UNSAT (incl. prefilter rejections, which are proofs);
+    any UNKNOWN or SAT_FILLER_FAIL/ROUTE_FAIL/INVALID makes a failed level INCONCLUSIVE."""
+    th = layout.townhall.footprint
+    pats = generate_patterns(region, th.width, th.length, k, rng, args.patterns)
+    best_achieved = None
+    saw_nonproof_failure = False
+    for pat in pats:
+        t0 = time.monotonic()
+        reason = prefilter(pat, region, consumers)
+        if reason is not None:
+            log({"k": k, "params": pat.params, "status": "PREFILTERED",
+                 "reason": reason, "secs": 0.0})
+            continue
+        st, pos = probe(pat, region, consumers, probe_limit=args.probe_limit)
+        secs = round(time.monotonic() - t0, 1)
+        if st == "SAT":
+            vstat, vlay, achieved = validate(layout, pat, pos)
+            log({"k": k, "params": pat.params, "status": vstat if vstat != "OK" else "SAT",
+                 "achieved": achieved if vstat == "OK" else None, "secs": secs})
+            if vstat == "OK":
+                if best_achieved is None or achieved < best_achieved:
+                    best_achieved = achieved
+                    out_dir = pathlib.Path("output/roads-first")
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    stem = f"best-k{k}-a{achieved}"
+                    (out_dir / f"{stem}.json").write_text(json.dumps({
+                        "k": k, "achieved": achieved, "pattern": pat.params,
+                        "roads": sorted(vlay.roads),
+                        "buildings": {b.entity_id: [b.footprint.x, b.footprint.y,
+                                                    b.footprint.width, b.footprint.length]
+                                      for b in vlay.buildings}}, indent=1), encoding="utf-8")
+                    (out_dir / f"{stem}.html").write_text(render_html(vlay), encoding="utf-8")
+            else:
+                saw_nonproof_failure = True
+        else:
+            log({"k": k, "params": pat.params, "status": st, "secs": secs})
+            if st == "UNKNOWN":
+                saw_nonproof_failure = True
+        if time.monotonic() > args.deadline:
+            return ("INCONCLUSIVE" if best_achieved is None else "FEASIBLE", best_achieved)
+    if best_achieved is not None:
+        return ("FEASIBLE", best_achieved)
+    if not pats:
+        return ("INCONCLUSIVE", None)         # generator produced nothing: no proof either way
+    return ("INCONCLUSIVE" if saw_nonproof_failure else "INFEASIBLE", None)
+
+
+def run_search(layout, args) -> dict:
+    region = set(layout.region.cells)
+    consumers = layout.road_needing()
+    rng = random.Random(args.seed)
+    out_dir = pathlib.Path("output/roads-first")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    logf = (out_dir / "probes.jsonl").open("a", encoding="utf-8")
+
+    def log(row):
+        logf.write(json.dumps(row) + "\n")
+        logf.flush()
+
+    results: dict[int, tuple[str, int | None]] = {}
+
+    def level(k):
+        if k not in results:
+            print(f"probing k={k} ...", flush=True)
+            results[k] = _probe_level(layout, region, consumers, k, rng, args, log)
+            print(f"  k={k}: {results[k][0]}"
+                  f"{' achieved=' + str(results[k][1]) if results[k][1] else ''}", flush=True)
+        return results[k]
+
+    k = args.k_start
+    st, _ = level(k)
+    if st != "FEASIBLE":                      # spec §8: family-too-weak fallback
+        while st != "FEASIBLE" and k < 168 and time.monotonic() < args.deadline:
+            k += 4
+            st, _ = level(k)
+        if st != "FEASIBLE":
+            return {"verdict": "FAMILY_TOO_WEAK", "results": results}
+    lo_feasible = k
+    while time.monotonic() < args.deadline:   # walk down in steps of 4
+        nxt = lo_feasible - 4
+        if nxt < 1:
+            break
+        st, _ = level(nxt)
+        if st == "FEASIBLE":
+            lo_feasible = nxt
+        else:
+            break
+    # bisect the gap [nxt, lo_feasible)
+    lo, hi = lo_feasible - 4, lo_feasible
+    while hi - lo > 1 and time.monotonic() < args.deadline:
+        mid = (lo + hi) // 2
+        st, _ = level(mid)
+        if st == "FEASIBLE":
+            hi = mid
+        else:
+            lo = mid
+    best = min((r[1] for r in results.values() if r[1] is not None), default=None)
+    unknowns = sum(1 for r in results.values() if r[0] == "INCONCLUSIVE")
+    return {"verdict": "DONE", "first_feasible_k": hi if best is not None else None,
+            "best_achieved": best, "inconclusive_levels": unknowns, "results": results}
+
+
 def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("city", nargs="?")
@@ -380,7 +485,16 @@ def main(argv=None):
     p.add_argument("--patterns", type=int, default=200)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--selftest", action="store_true")
+    p.add_argument("--k-start", type=int, default=152)
+    p.add_argument("--probe-limit", type=float, default=120.0)
+    p.add_argument("--time-box", type=float, default=21600.0)
+    p.add_argument("--smoke", action="store_true")
     args = p.parse_args(argv)
+    if args.smoke:
+        args.k_start = 156
+        args.patterns = 20
+        args.probe_limit = 20.0
+        args.time_box = 600.0
     if args.selftest:
         return _selftest()
     if args.dump_patterns is not None:
@@ -400,7 +514,15 @@ def main(argv=None):
         for pat in pats[:5]:
             print("  ", pat.params)
         return 0
-    p.error("no mode selected (T2/T3 add --selftest and the k-walk)")
+    if args.city is None:
+        p.error("city is required for the k-walk (or use --selftest / --dump-patterns)")
+    args.deadline = time.monotonic() + args.time_box
+    layout = load_layout(args.city)
+    res = run_search(layout, args)
+    print(json.dumps({k: v for k, v in res.items() if k != "results"}, indent=1))
+    per_level = {k: v[0] + (f" achieved={v[1]}" if v[1] else "") for k, v in sorted(res["results"].items())}
+    print("levels:", json.dumps(per_level, indent=1))
+    return 0
 
 
 if __name__ == "__main__":
