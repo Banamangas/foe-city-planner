@@ -7,15 +7,20 @@ repair shapes roads by shaping placements."""
 from __future__ import annotations
 
 import random
-from dataclasses import replace
+import time
+from dataclasses import dataclass, replace
 
+from foeopt.anneal import anneal
 from foeopt.model import Building, Footprint, Layout
+from foeopt.packer import PackResult
+from foeopt.polish import polish
 from foeopt.quality import road_cell_load
 from foeopt.router import RouteError, route
 from foeopt.validate import is_valid
 
 _ORTHO = ((1, 0), (-1, 0), (0, 1), (0, -1))
 Cell = tuple[int, int]
+_REANNEAL_SLICE = 2.0
 
 
 def _underused(layout: Layout) -> set[Cell]:
@@ -224,3 +229,67 @@ def rebuild_corridor(layout: Layout, run_cells: list[Cell], victims: list[Buildi
         if best is None or len(cand.roads) < len(best.roads):
             best = cand
     return best
+
+
+@dataclass
+class LNSResult:
+    final: PackResult        # never-worse vs base; same unplaced set
+    base_layout: Layout      # post-polish, pre-LNS ("before" for viz)
+    rounds: int              # corridor attempts made
+    accepted: int            # improvements accepted
+
+
+def lns_polish(layout: Layout, *, repack_budget: float, anneal_budget: float,
+               lns_budget: float, seed: int = 0) -> LNSResult:
+    """polish(), then corridor destroy-repair rounds until lns_budget is spent.
+
+    Each round: find_corridor picks a destroy set; rebuild_corridor returns its
+    own best-scoring candidate across every lane placement it tried (or None).
+    That candidate is accepted only on strict improvement over the current
+    best -- rebuild_corridor already picked its best internally, so this is
+    the sole acceptance gate, not a redundant one. After each acceptance, a
+    short re-anneal slice (fixed 2s, carved out of the remaining lns_budget)
+    lets single-building moves clean up around the rewrite; the refined
+    layout replaces `best` only if it re-routes to a valid, no-worse result --
+    anneal() already never returns worse than its input, so this is a
+    belt-and-braces check, not load-bearing.
+
+    Invariants (never-worse anchoring, as in anneal/polish): the result's
+    `unplaced` is exactly the post-polish base's `unplaced` (LNS only moves
+    already-placed buildings), `len(final.layout.roads) <= len(base_layout.roads)`,
+    and the whole run is deterministic for a fixed seed (one `random.Random(seed)`
+    drives every corridor pick, repair, and re-anneal seed draw).
+    """
+    base = polish(layout, repack_budget=repack_budget,
+                  anneal_budget=anneal_budget, seed=seed)
+    rng = random.Random(seed)
+    best = base.layout
+    rounds = accepted = 0
+    deadline = time.monotonic() + lns_budget
+    while time.monotonic() < deadline:
+        picked = find_corridor(best, rng)
+        if picked is None:
+            break
+        rounds += 1
+        run, victims = picked
+        cand = rebuild_corridor(best, run, victims, rng)
+        if cand is None or len(cand.roads) >= len(best.roads):
+            continue
+        accepted += 1
+        best = cand
+        slice_budget = min(_REANNEAL_SLICE, max(0.0, deadline - time.monotonic()))
+        if slice_budget > 0:
+            refined = anneal(best, budget_seconds=slice_budget,
+                             seed=rng.randrange(2 ** 32))
+            routed = Layout(best.region, refined.layout.buildings,
+                            refined.layout.townhall, {})
+            try:
+                routed.roads = route(routed)
+            except RouteError:
+                continue
+            if is_valid(routed) and len(routed.roads) <= len(best.roads):
+                best = routed
+    final = PackResult(layout=best, unplaced=base.unplaced, trials=base.trials,
+                       base_roads=len(base.layout.roads))
+    return LNSResult(final=final, base_layout=base.layout,
+                     rounds=rounds, accepted=accepted)

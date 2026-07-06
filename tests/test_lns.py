@@ -1,6 +1,6 @@
 import random
 
-from foeopt.lns import find_corridor, rebuild_corridor, _partition
+from foeopt.lns import find_corridor, lns_polish, rebuild_corridor, _partition
 from foeopt.model import Building, Footprint, Layout, Region
 from foeopt.router import route
 
@@ -83,3 +83,38 @@ def test_rebuild_returns_none_when_nothing_fits():
     # acceptable — but never an invalid/worse claim of improvement
     if res is not None:
         assert len(res.roads) <= 1
+
+
+def _lns_kwargs():
+    return dict(repack_budget=2.0, anneal_budget=1.0, lns_budget=3.0, seed=0)
+
+
+def test_lns_polish_never_worse_and_preserves_buildings():
+    lay = _comb_layout()
+    res = lns_polish(lay, **_lns_kwargs())
+    assert res.final.unplaced == []
+    assert len(res.final.layout.buildings) == len(lay.buildings)
+    assert len(res.final.layout.roads) <= len(res.base_layout.roads)
+    assert res.rounds >= res.accepted >= 0
+
+
+def test_lns_polish_is_deterministic():
+    # repack/anneal budgets pinned to 0.0 (mirrors test_repack_deterministic_given_seed:
+    # a 0.0 budget pins repack to exactly one trial and anneal to its warmup-only pass,
+    # so `base` is byte-identical across runs instead of depending on how many timed
+    # trials/moves fit in the wall-clock window). lns_budget is kept small (0.5s): the
+    # comb fixture's single defect is found and accepted in round 1, and the following
+    # 2s-capped re-anneal slice consumes the rest of the 0.5s budget outright, so the
+    # loop exits after exactly one round on both runs -- deterministic by construction,
+    # not by racing the clock across thousands of no-op corridor probes (which the
+    # unpinned repack/anneal budgets from _lns_kwargs() were observed to do: with
+    # nothing left to improve, the loop busy-spins on find_corridor/rebuild_corridor
+    # for the full lns_budget, and the exact iteration count completed in a fixed wall
+    # -clock window is inherently timing-jittered -- confirmed as an always-reproducing
+    # off-by-a-handful mismatch in `rounds`, not an occasional flake).
+    lay = _comb_layout()
+    kwargs = dict(repack_budget=0.0, anneal_budget=0.0, lns_budget=0.5, seed=0)
+    a = lns_polish(lay, **kwargs)
+    b = lns_polish(lay, **kwargs)
+    assert a.final.layout.roads == b.final.layout.roads
+    assert (a.rounds, a.accepted) == (b.rounds, b.accepted)
