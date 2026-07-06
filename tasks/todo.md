@@ -344,7 +344,7 @@ harness.
 **Mechanism validated, just not on the gate city.** At real-like fill 0.5
 (a slack city) the identical mechanism wins by **-7.4 roads mean** at equal
 wall-clock (115.5 -> 108.125), with accepted rewrites in 7/8 seeds — the
-first structural method in this project's now-eight-attempt history (four
+first structural method in this project's long history of structural attempts (four
 structured packers, CP-SAT, LNS+CP-SAT, RL M2-M4, safe-placements mask,
 TH-stub template, corridor-LNS) to beat plain local-search polish at its own
 game anywhere. On darkzig (97%-dense era layout at 60 s polish) there's no
