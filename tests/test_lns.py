@@ -1,7 +1,8 @@
 import random
 
-from foeopt.lns import find_corridor
+from foeopt.lns import find_corridor, rebuild_corridor, _partition
 from foeopt.model import Building, Footprint, Layout, Region
+from foeopt.router import route
 
 
 def _b(eid, x, y, w, l, *, needs=True, th=False):
@@ -51,3 +52,34 @@ def test_find_corridor_caps_victims():
     lay = _comb_layout()
     run, victims = find_corridor(lay, random.Random(0), max_buildings=2)
     assert len(victims) <= 2
+
+
+def test_partition_is_exact():
+    # frontages [4,3,3,2]: greedy-by-size gives sides {4,3}/{3,2} -> max 7;
+    # the optimum is {4,2}/{3,3} -> max 6.
+    mask = _partition([4, 3, 3, 2])
+    side_a = sum(f for i, f in enumerate([4, 3, 3, 2]) if mask >> i & 1)
+    assert max(side_a, 12 - side_a) == 6
+
+
+def test_rebuild_comb_strictly_reduces_roads():
+    lay = _comb_layout()
+    baseline = len(route(lay))
+    rng = random.Random(0)
+    run, victims = find_corridor(lay, rng)
+    cand = rebuild_corridor(lay, run, victims, rng)
+    assert cand is not None
+    assert len(cand.buildings) == len(lay.buildings)         # nobody lost
+    assert len(cand.roads) < baseline                        # strict improvement
+
+
+def test_rebuild_returns_none_when_nothing_fits():
+    # freed area too small for any lane: single 1x1 victim in a 1-wide pocket
+    th = _b(1, 0, 0, 1, 1, needs=False, th=True)
+    c = _b(10, 2, 0, 1, 1)
+    lay = Layout(Region(frozenset({(0, 0), (1, 0), (2, 0)})), [th, c], th, {(1, 0): 1})
+    res = rebuild_corridor(lay, [(1, 0)], [c], random.Random(0))
+    # the only re-placement is the original spot; None or an equal layout are both
+    # acceptable — but never an invalid/worse claim of improvement
+    if res is not None:
+        assert len(res.roads) <= 1
