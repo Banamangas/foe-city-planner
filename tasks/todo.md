@@ -104,18 +104,28 @@ combinatorial (tractable), and keep the 2-D geometry trivial:
 - [ ] **Discipline:** throwaway prototypes; A/B vs 158 only at 0-unplaced across
       ≥8 seeds (lessons rule); explicit kill criterion at each sub-step.
 
-## Track B — Structured LNS on the 158 plateau (cheap, parallel)
+## Track B — Structured LNS on the 158 plateau (cheap, parallel) — CLOSED at the gate (2026-07-06)
 
 Local search plateaus because single moves/swaps can't perform the coordinated
 multi-building rearrangement that turns a grow-tree corridor into a double row.
 Change the *move set*, not the search:
 
-- [ ] Corridor-granularity destroy-repair: pick an under-used corridor via
+- [x] Corridor-granularity destroy-repair: pick an under-used corridor via
       `quality.py`, free its buildings + road cells, rebuild as a balanced double
       row using A1's balancer; add row-shift and junction/stub-promotion moves.
-- [ ] Run inside the existing anneal/polish harness; same A/B discipline.
-      Expected: single-digit road gains; also the productionizable fallback if
-      Track A dies at its gate.
+      Built (`--lns` flag, `lns_polish`), default off.
+- [x] Run inside the existing anneal/polish harness; same A/B discipline.
+      **RESULT (2026-07-06): GATE FAILS on darkzig** — `lns_polish(60,30,30)`
+      vs `polish(60,60)`, equal wall-clock, 8 seeds: mean 161.25 vs 160.75
+      (0.5 *worse*, gate needs `<= -2`), max tied 175=175. Pre-committed gate
+      (spec §1.1/§8) fails -> `--lns` stays opt-in, **Track B closes** (no
+      tuning marathon). Secondary finding: on slack cities (real-like
+      fill 0.5) the same mechanism wins by **-7.4 roads mean** at equal
+      wall-clock — the mechanism works, darkzig just has no slack to use it
+      on. A parallel TH-offset probe (diagnostic only, no gate) found
+      offset-TH placement alone is neutral-to-worse, not a fix for the
+      darkzig plateau. Full numbers: `tasks/lessons.md` 2026-07-06 entry,
+      `.superpowers/sdd/task-8-report.md`.
 
 ## Track C — RL: fix-or-fold (time-boxed, ranked last)
 
@@ -312,3 +322,50 @@ smoke run had shown the opposite ranking - the template wins fast but the
 standing "expert heuristics bolted onto the greedy constructor lose an
 equal-wall-clock A/B" pattern. Full numbers: `tasks/lessons.md`
 2026-07-06 entry, `.superpowers/sdd/tht-task-c-report.md`.
+
+### Track B — corridor-LNS gate fails on darkzig; mechanism validated on slack cities; TH-offset probe neutral (2026-07-06)
+
+Built the Track B corridor-granularity destroy-repair (`--lns` flag,
+`lns_polish`, default off): free an under-used corridor's buildings + road
+cells and rebuild it as a balanced double row, inside the existing
+anneal/polish harness. A/B'd per the pre-committed gate in spec §1.1/§8 —
+darkzig, 0-unplaced rows only, `mean(B) <= mean(A) - 2 AND max(B) <= max(A)`
+— against `polish(60,60)` at equal wall-clock (arm B `lns_polish(60,30,30)`),
+8 seeds, darkzig + `make_real_like_city` fill 0.5/0.7/0.9
+(`scripts/exp_lns_ab.py`, `output/lns-ab.txt`).
+
+**Gate result: FAILS.** darkzig mean(A)=160.75, mean(B)=161.25 — B is 0.5
+roads *worse* on mean (gate needed `<= -2`, i.e. `<= 158.75`); max tied at
+175=175. The mean clause alone kills the gate. **Verdict: `--lns` stays
+opt-in (default off); Track B is closed** per the pre-committed no-tuning-
+marathon rule — revisiting needs new evidence, not more knob turns on this
+harness.
+
+**Mechanism validated, just not on the gate city.** At real-like fill 0.5
+(a slack city) the identical mechanism wins by **-7.4 roads mean** at equal
+wall-clock (115.5 -> 108.125), with accepted rewrites in 7/8 seeds — the
+first structural method in this project's now-eight-attempt history (four
+structured packers, CP-SAT, LNS+CP-SAT, RL M2-M4, safe-placements mask,
+TH-stub template, corridor-LNS) to beat plain local-search polish at its own
+game anywhere. On darkzig (97%-dense era layout at 60 s polish) there's no
+free space for the double-row template to land in, so almost nothing gets
+accepted (0-1 rewrites/seed) — a slack/density story, not a bug.
+
+**TH-offset probe (diagnostic only, no gate, `output/th-offset-ab.txt`):**
+pure-style corner-only vs offset-only repack, 8 seeds. Darkzig: offset mean
+167.0 vs corner mean 164.625 (offset ~2.4 *worse*); fill 0.5 near-identical;
+fill 0.7 offset marginally better (152.875 vs 153.25); fill 0.9 offset worse
+on placement (only 3/8 seeds reach 0-unplaced vs 6/8 for corner). Reading:
+offset-TH placement alone is not a measurable fix for the darkzig plateau —
+the expert city's advantage from an offset Townhall evidently comes from the
+coordinated structure built around it, not the placement in isolation. No
+follow-up TH-placement track is warranted by this data alone; noted as the
+first data point against the user's standing (memory-flagged) interest.
+
+**Not pursued, noted for the record:** a "recommend `--lns` when a city has
+overhead-cell slack above some threshold" heuristic is a legitimate Track D
+candidate if this project reaches productionization — `--lns` is a genuine
+opt-in win for slack cities, just not for the darkzig gate. Visual before/
+after of accepted corridor rewrites: `output/lns/<stamp>/` HTML folders.
+Full numbers and gate arithmetic: `tasks/lessons.md` 2026-07-06 entry,
+`.superpowers/sdd/task-8-report.md`.
