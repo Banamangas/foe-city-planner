@@ -115,6 +115,7 @@ def test_probe_level_sequential_fallback_matches_today():
 def test_probe_level_parallel_dispatch_completes_all(monkeypatch):
     """With a real Pool(2), _probe_level must dispatch all surviving patterns
     and collect every result (order may vary, set of statuses must match)."""
+    pytest.importorskip("ortools")
     import random
     from foeopt.model import Building, Footprint, Layout, Region
     th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
