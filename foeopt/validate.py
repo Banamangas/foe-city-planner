@@ -43,3 +43,29 @@ def unsatisfied(layout: Layout) -> list[Building]:
 
 def is_valid(layout: Layout) -> bool:
     return not unsatisfied(layout)
+
+
+def canonical_dims(reference: Layout) -> dict[int, tuple[int, int]]:
+    """The canonical (width, length) of every building in a reference layout,
+    keyed by entity_id. FoE buildings cannot rotate, so the loaded layout's
+    ordered dimensions are the only legal orientation for each building."""
+    return {b.entity_id: (b.footprint.width, b.footprint.length)
+            for b in reference.buildings}
+
+
+def rotated_buildings(layout: Layout,
+                      canonical: dict[int, tuple[int, int]]) -> list[Building]:
+    """Buildings placed with their width/length swapped relative to the
+    canonical dimensions — illegal, because FoE buildings cannot be rotated.
+    `is_valid`/`unsatisfied` check road satisfaction only and are blind to
+    orientation, so any NEW placement method must call this against
+    `canonical_dims(loaded_layout)` to prove its output is legal. Buildings
+    absent from `canonical` are skipped (nothing to compare against)."""
+    bad: list[Building] = []
+    for b in layout.buildings:
+        canon = canonical.get(b.entity_id)
+        if canon is None:
+            continue
+        if (b.footprint.width, b.footprint.length) != canon:
+            bad.append(b)
+    return bad
