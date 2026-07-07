@@ -64,9 +64,23 @@ def _fits(region: set[Cell], fp: Footprint) -> bool:
     return fp.cells() <= region
 
 
-def th_anchor_candidates(region: set[Cell], tw: int, tl: int) -> list[Footprint]:
-    """Coarse TH anchors: 4 corner-most fits, offset-by-d variants (d in 2/4/6,
-    Chebyshev from that corner), 2 mid-edge fits. Deduplicated, sorted."""
+def th_anchor_candidates(region: set[Cell], tw: int, tl: int,
+                         mode: str = "coarse") -> list[Footprint]:
+    """TH anchor positions. mode="coarse" (default): 4 corner-most fits,
+    offset-by-d variants (d in 2/4/6, Chebyshev from that corner), 2 mid-edge
+    fits. Deduplicated, sorted. mode="full": every (x,y) where the tw x tl
+    footprint fits in-region — yields ~2000 positions on darkzig vs ~8 coarse.
+    Deduplicated, sorted."""
+    if mode == "full":
+        x0, y0, x1, y1 = _bbox(region)
+        out: dict[tuple[int, int], Footprint] = {}
+        for x in range(x0, x1 - tw + 2):
+            for y in range(y0, y1 - tl + 2):
+                fp = Footprint(x, y, tw, tl)
+                if _fits(region, fp):
+                    out[(x, y)] = fp
+        return [out[k] for k in sorted(out)]
+    # coarse mode (original heuristic)
     x0, y0, x1, y1 = _bbox(region)
     corners = [(x0, y0), (x1, y0), (x0, y1), (x1, y1)]
     out: dict[tuple[int, int], Footprint] = {}
@@ -138,7 +152,8 @@ def _stub_cells(region: set[Cell], th: Footprint, roads: set[Cell]) -> list[Cell
 
 
 def generate_patterns(region: set[Cell], tw: int, tl: int, k: int,
-                      rng: random.Random, max_patterns: int) -> list["Pattern"]:
+                      rng: random.Random, max_patterns: int,
+                      th_mode: str = "coarse") -> list["Pattern"]:
     """Deterministic parameter grid -> comb patterns with EXACTLY k road cells;
     rng shuffles only the order. Connectivity holds by construction (trunk hugs
     the TH border; branches touch the trunk; stubs touch the TH) for the
@@ -149,7 +164,7 @@ def generate_patterns(region: set[Cell], tw: int, tl: int, k: int,
     check — downstream must NOT assume pattern.roads is TH-connected/buildable."""
     out: list[Pattern] = []
     seen: set[frozenset[Cell]] = set()
-    for th in th_anchor_candidates(region, tw, tl):
+    for th in th_anchor_candidates(region, tw, tl, mode=th_mode):
         th_cells = th.cells()
         reg = region  # roads may not overlap the TH
         for side in ("top", "bottom", "left", "right"):
@@ -479,7 +494,8 @@ def _probe_level(layout, region, consumers, k, rng, args, log, pool=None) -> tup
     to the pre-parallel behavior). If pool is a multiprocessing.pool.Pool, dispatches
     surviving patterns via imap_unordered and collects results in completion order."""
     th = layout.townhall.footprint
-    pats = generate_patterns(region, th.width, th.length, k, rng, args.patterns)
+    pats = generate_patterns(region, th.width, th.length, k, rng, args.patterns,
+                             th_mode=args.th_anchors)
     best_achieved = None
     saw_nonproof_failure = False
     order = 0  # monotonic completion counter for the log's `order` field
@@ -639,6 +655,8 @@ def main(argv=None):
     p.add_argument("city", nargs="?")
     p.add_argument("--dump-patterns", type=int, default=None, metavar="K")
     p.add_argument("--patterns", type=int, default=200)
+    p.add_argument("--th-anchors", choices=("coarse", "full"), default="coarse",
+                   help="TH anchor sampling: coarse (~8 heuristic) or full (~2000)")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--selftest", action="store_true")
     p.add_argument("--k-start", type=int, default=152)
