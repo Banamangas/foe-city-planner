@@ -379,9 +379,47 @@ def _selftest() -> int:
     # k=0 is UNSAT by definition (no pattern has road cells -> no anchors);
     # generate_patterns(k=0) yields nothing, which is the same statement.
     ok_k0 = generate_patterns(region, 2, 2, 0, random.Random(0), 50) == []
-    print(f"selftest: oracle={oracle} k1_validated={ok_k1} k0_empty={ok_k0} "
-          f"{'PASS' if (ok_k1 and ok_k0) else 'FAIL'}")
-    return 0 if (ok_k1 and ok_k0) else 1
+
+    # Parallel-equivalence (spec §10): --workers 1 --probe-workers 1 must
+    # produce the same set of (k, params, status) as the sequential path,
+    # and --workers 2 --probe-workers 1 must produce a subset of those
+    # statuses (parallelism must not invent new statuses; at probe-workers=1
+    # even SAT/UNKNOWN flips are fixed, so the set should be identical).
+    import multiprocessing as _mp
+    seq_statuses = set()
+    rng2 = random.Random(0)
+    for pat in generate_patterns(region, 2, 2, 1, rng2, 50):
+        if prefilter(pat, region, [c1, c2]) is not None:
+            seq_statuses.add(("PREFILTERED", tuple(sorted(pat.params.items()))))
+            continue
+        st, _ = probe(pat, region, [c1, c2], probe_limit=30.0, probe_workers=1)
+        seq_statuses.add((st, tuple(sorted(pat.params.items()))))
+
+    # Parallel path with --workers 2 --probe-workers 1.
+    par_statuses = set()
+    pool = _mp.Pool(2, initializer=_worker_init,
+                    initargs=(lay, 30.0, 1))
+    try:
+        rng3 = random.Random(0)
+        pats3 = [p for p in generate_patterns(region, 2, 2, 1, rng3, 50)]
+        surviving = [(p, 1, idx) for idx, p in enumerate(pats3)
+                     if prefilter(p, region, [c1, c2]) is None]
+        prefiltered = [tuple(sorted(p.params.items())) for p in pats3
+                       if prefilter(p, region, [c1, c2]) is not None]
+        for pf in prefiltered:
+            par_statuses.add(("PREFILTERED", pf))
+        for result in pool.imap_unordered(_run_probe, surviving):
+            par_statuses.add((result["status"],
+                              tuple(sorted(pats3[result["pat_index"]].params.items()))))
+    finally:
+        pool.close(); pool.join()
+
+    ok_parallel_equiv = par_statuses == seq_statuses
+    print(f"selftest: parallel_equiv={ok_parallel_equiv} "
+          f"(seq={len(seq_statuses)} par={len(par_statuses)})")
+    ok = ok_k1 and ok_k0 and ok_parallel_equiv
+    print(f"selftest: {'PASS' if ok else 'FAIL'}")
+    return 0 if ok else 1
 
 
 def _run_probe(payload: tuple) -> dict:
