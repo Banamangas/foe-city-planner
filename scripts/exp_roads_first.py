@@ -27,7 +27,7 @@ from foeopt.loader import load_layout
 from foeopt.model import Building, Footprint, Layout, Region
 from foeopt.packing import Grid, first_fit
 from foeopt.router import RouteError, route
-from foeopt.validate import is_valid
+from foeopt.validate import canonical_dims, is_valid, rotated_buildings
 from foeopt.viz import render_html
 
 _ORTHO = ((1, 0), (-1, 0), (0, 1), (0, -1))
@@ -238,22 +238,21 @@ def _check_pattern(p: Pattern, region: set[Cell], k: int) -> None:
 
 
 def _anchor_candidates(b: Building, region: set[Cell], blocked: set[Cell],
-                       roads: frozenset[Cell]) -> list[tuple[int, int, int]]:
-    """All (x, y, orient) with footprint in-region, off blocked cells, and >=1
-    border cell on a road. orient 0: w x l; orient 1: l x w (skipped for squares)."""
+                       roads: frozenset[Cell]) -> list[tuple[int, int]]:
+    """All (x, y) with the building's CANONICAL footprint in-region, off blocked
+    cells, and >=1 border cell on a road. FoE buildings cannot rotate, so only
+    the loaded (w, l) orientation is ever considered."""
     out = []
-    w0, l0 = b.footprint.width, b.footprint.length
+    w, l = b.footprint.width, b.footprint.length
     x0, y0, x1, y1 = _bbox(region)
-    dims = [(w0, l0)] if w0 == l0 else [(w0, l0), (l0, w0)]
-    for o, (w, l) in enumerate(dims):
-        for y in range(y0, y1 - l + 2):
-            for x in range(x0, x1 - w + 2):
-                fp = Footprint(x, y, w, l)
-                cells = fp.cells()
-                if not (cells <= region) or (cells & blocked):
-                    continue
-                if any(c in roads for c in fp.border_cells()):
-                    out.append((x, y, o))
+    for y in range(y0, y1 - l + 2):
+        for x in range(x0, x1 - w + 2):
+            fp = Footprint(x, y, w, l)
+            cells = fp.cells()
+            if not (cells <= region) or (cells & blocked):
+                continue
+            if any(c in roads for c in fp.border_cells()):
+                out.append((x, y))
     return out
 
 
@@ -272,26 +271,16 @@ def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
 
     m = cp_model.CpModel()
     x0b, y0b, x1b, y1b = _bbox(region)
-    xs, ys, os_, xiv, yiv = [], [], [], [], []
+    xs, ys, xiv, yiv = [], [], [], []
     for i, (b, opts) in enumerate(cand):
         w0, l0 = b.footprint.width, b.footprint.length
         x = m.NewIntVar(x0b, x1b, f"x{i}")
         y = m.NewIntVar(y0b, y1b, f"y{i}")
-        o = m.NewIntVar(0, 1, f"o{i}")
-        m.AddAllowedAssignments([x, y, o], opts)
-        if w0 == l0:
-            m.Add(o == 0)
-            xiv.append(m.NewFixedSizeIntervalVar(x, w0, f"xi{i}"))
-            yiv.append(m.NewFixedSizeIntervalVar(y, l0, f"yi{i}"))
-        else:
-            lit0 = m.NewBoolVar(f"lit0_{i}")
-            m.Add(o == 0).OnlyEnforceIf(lit0)
-            m.Add(o == 1).OnlyEnforceIf(lit0.Not())
-            xiv.append(m.NewOptionalFixedSizeIntervalVar(x, w0, lit0, f"xi0_{i}"))
-            yiv.append(m.NewOptionalFixedSizeIntervalVar(y, l0, lit0, f"yi0_{i}"))
-            xiv.append(m.NewOptionalFixedSizeIntervalVar(x, l0, lit0.Not(), f"xi1_{i}"))
-            yiv.append(m.NewOptionalFixedSizeIntervalVar(y, w0, lit0.Not(), f"yi1_{i}"))
-        xs.append(x); ys.append(y); os_.append(o)
+        m.AddAllowedAssignments([x, y], opts)
+        # Fixed canonical footprint — no orientation choice (FoE forbids rotation).
+        xiv.append(m.NewFixedSizeIntervalVar(x, w0, f"xi{i}"))
+        yiv.append(m.NewFixedSizeIntervalVar(y, l0, f"yi{i}"))
+        xs.append(x); ys.append(y)
     m.AddNoOverlap2D(xiv, yiv)
 
     solver = cp_model.CpSolver()
@@ -302,8 +291,7 @@ def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
     if st in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         pos = {}
         for i, (b, _) in enumerate(cand):
-            w0, l0 = b.footprint.width, b.footprint.length
-            w, l = (w0, l0) if solver.Value(os_[i]) == 0 else (l0, w0)
+            w, l = b.footprint.width, b.footprint.length   # canonical, never rotated
             pos[b.entity_id] = (solver.Value(xs[i]), solver.Value(ys[i]), w, l)
         return ("SAT", pos)
     if st == cp_model.INFEASIBLE:
@@ -341,14 +329,15 @@ def validate(layout_src: Layout, pattern: Pattern,
     grid = Grid(w, h, {(x, y) for x in range(w) for y in range(h)} - free)
     for b in sorted(fillers, key=lambda b: -(b.footprint.width * b.footprint.length)):
         bw, bl = b.footprint.width, b.footprint.length
-        spot = first_fit(grid, bw, bl)
-        if spot is None and bw != bl:
-            bw, bl = bl, bw
-            spot = first_fit(grid, bw, bl)
+        spot = first_fit(grid, bw, bl)      # canonical orientation only (no rotation)
         if spot is None:
             return ("SAT_FILLER_FAIL", None, len(roads))
         grid.occupy(spot[0], spot[1], bw, bl)
         cand.buildings.append(replace(b, footprint=Footprint(spot[0], spot[1], bw, bl)))
+    # defence-in-depth: never emit a rotated layout even if the model regresses.
+    bad = rotated_buildings(cand, canonical_dims(layout_src))
+    if bad:
+        return ("SAT_ROTATED", None, len(roads))
     return ("OK", cand, len(roads))
 
 
