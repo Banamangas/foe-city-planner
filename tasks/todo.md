@@ -473,3 +473,33 @@ core is unchanged. Full numbers, per-level table, mechanism, and probe-limit tun
 `output/roads-first/best-k118-a106.json`/`.html` (winning layout) and the full `best-k*.json`/`.html` set.
 Void v1 artifacts: `output/roads-first/invalid-rotated-2026-07-06/`. Full v1 report (void):
 `.superpowers/sdd/task-4-report.md`.
+
+### Track E v3 — Parallel re-run: 104 roads in ~2h, VERIFIED LEGAL, gate WIN (2026-07-07)
+
+Parallelized the search via `multiprocessing.Pool` (4 probes × 4 CP-SAT portfolio workers,
+default). `scripts/exp_roads_first.py` throwaway-only; no new dep, no `foeopt/` change.
+Spec: `docs/superpowers/specs/2026-07-07-roads-first-parallel-search-design.md`; plan:
+`docs/superpowers/plans/2026-07-07-roads-first-parallel-search.md`; 5 commits on
+`feat/roads-first-parallel` (d023632..0cd9346), all reviews clean.
+
+**Result: 104 roads at k=116, independently verified LEGAL** (224/224 placed, `route()`=104
+matches, `is_valid` True, 0 unsatisfied, `rotated_buildings`=0, 0 overlaps, 0 out-of-region).
+Beats the sequential v2 106 (−2), prior all-time best 153 (−49), local floor 158 (−54),
+Σ/2 estimate 114 (−10). Gate 104 ≤ 148 → decisive WIN.
+
+**~4x throughput, ~1/3 wall-clock:** 2496 probes in ~2h wall (cumulative 7.085h across 4
+workers = 3.9x parallel efficiency) vs the sequential 2189 probes in 5.988h. `walk_complete
+= TRUE`, `deadline_hit = FALSE` — the k-walk converged at k=116 (1 SAT → 104) with k=112/
+114/115 INCONCLUSIVE, leaving ~4h of the 6h box unspent. 13 k-levels probed. UNKNOWN rate
+29.3% — unchanged from the sequential (the 4-worker portfolio did NOT flip UNKNOWNs; the
+throughput win is what delivered the result). Lesson: the reliable fix for UNKNOWN-dominated
+budget is more k-coverage via throughput, not portfolio depth.
+
+104 is a validated achievable count, not a proven floor — k=112–115 are INCONCLUSIVE (60
+UNKNOWNs each, may be feasible with more probe-time). The early completion + unspent ~4h
+point at the next experiment: longer `--probe-limit` / more `--patterns` at the tightest
+k-levels to flip INCONCLUSIVE→FEASIBLE. Separate later spec per the gated-solver-extras
+policy. Full numbers, per-level table, mechanism, and code-change summary:
+`tasks/lessons.md` 2026-07-07 entry ("Roads-first parallel re-run"). Artifacts:
+`output/roads-first/best-k116-a104.json`/`.html`; sequential baseline preserved in
+`output/roads-first/sequential-baseline-2026-07-07/`.
