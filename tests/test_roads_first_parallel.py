@@ -269,3 +269,51 @@ def test_k_start_explicit_integer_overrides_auto(monkeypatch):
     monkeypatch.undo()
     assert captured_k, "run_search did not probe any level"
     assert captured_k[0] == 152, f"explicit --k-start 152 ignored, got {captured_k[0]}"
+
+
+def test_fallback_cap_is_k_max_not_168(monkeypatch):
+    """When k_start is infeasible, the upward fallback must walk up to k_max
+    (city-specific area ceiling), not the hardcoded 168. Verify on the user's
+    city (k_max=145): an infeasible k_start=145 should let the fallback try
+    145+4=149 only if 149 <= k_max=145 (it isn't) -> fallback stops at 145,
+    FAMILY_TOO_WEAK. If the cap were still 168, the fallback would try
+    149,153,...,169 (all area-infeasible above 145) before giving up."""
+    import sys, pathlib
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts"))
+    import exp_roads_first as mod
+    from foeopt.loader import load_layout
+
+    helper = pathlib.Path("city-user-data-foe-helper.json")
+    if not (pathlib.Path("city-user-data.json").exists() and helper.exists()):
+        pytest.skip("user city files not present")
+    lay = load_layout("city-user-data.json", str(helper))
+    k_max = len(lay.region.cells) - sum(b.footprint.width * b.footprint.length
+                                        for b in lay.buildings)
+    assert k_max == 145  # sanity: the user city's area ceiling
+
+    probed_ks = []
+    def spy_probe_level(layout, region, consumers, k, rng, args, log, pool=None):
+        probed_ks.append(k)
+        return ("INFEASIBLE", None)  # every level infeasible -> fallback climbs
+    monkeypatch.setattr(mod, "_probe_level", spy_probe_level)
+    import time as _t
+    class FakeArgs:
+        k_start = 145  # = k_max, infeasible -> fallback should try up
+        patterns = 5
+        probe_limit = 30.0
+        probe_workers = 1
+        workers = 1
+        th_anchors = "coarse"
+        seed = 0
+        time_box = 60.0
+        deadline = _t.monotonic() + 60.0
+    try:
+        result = mod.run_search(lay, FakeArgs())
+    except Exception:
+        result = None
+    monkeypatch.undo()
+    # The fallback must NOT probe above k_max=145. If the cap were 168,
+    # probed_ks would contain 149, 153, ... up to 168.
+    above_kmax = [k for k in probed_ks if k > k_max]
+    assert not above_kmax, (
+        f"fallback probed above k_max={k_max}: {above_kmax} (cap not respected)")

@@ -606,7 +606,9 @@ def run_search(layout, args) -> dict:
             k = args.k_start
             st, _ = level(k)
             if st != "FEASIBLE":                  # spec §8: family-too-weak fallback
-                while st != "FEASIBLE" and k < 168:
+                k_max = len(layout.region.cells) - sum(
+                    b.footprint.width * b.footprint.length for b in layout.buildings)
+                while st != "FEASIBLE" and k < k_max:
                     if timed_out():
                         truncated = True
                         break
