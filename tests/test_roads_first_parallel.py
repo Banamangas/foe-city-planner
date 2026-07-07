@@ -34,10 +34,15 @@ def test_run_probe_unsat_returns_status_no_layout():
         return ("UNSAT", None)
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(mod, "probe", fake_probe)
+    # Set the worker globals as _worker_init would in the pool path.
+    mod._WORKER_LAYOUT = lay
+    mod._WORKER_PROBE_LIMIT = 30.0
+    mod._WORKER_PROBE_WORKERS = 1
     try:
-        result = mod._run_probe((pat, 1, lay, 30.0, 1, 0))
+        result = mod._run_probe((pat, 1, 0))  # 3-tuple: pat, k, pat_index
     finally:
         monkeypatch.undo()
+        mod._WORKER_LAYOUT = None
     assert set(result.keys()) >= {"k", "params", "status", "achieved", "secs", "layout"}
     assert result["status"] == "UNSAT"
     assert result["achieved"] is None
@@ -64,14 +69,15 @@ def test_probe_level_sequential_fallback_matches_today():
     from types import SimpleNamespace
     fake_layout = SimpleNamespace(roads=set(), buildings=[])
     def fake_run_probe(payload):
-        pat, k, layout, probe_limit, probe_workers, pat_index = payload
+        pat, k, pat_index = payload  # 3-tuple (worker global carries layout)
         call_order.append(pat.params)
         if len(call_order) == 1:
             return {"k": k, "params": pat.params, "status": "SAT",
                     "achieved": k, "secs": 0.1,
-                    "layout": fake_layout}
+                    "layout": fake_layout, "pat_index": pat_index}
         return {"k": k, "params": pat.params, "status": "UNSAT",
-                "achieved": None, "secs": 0.1, "layout": None}
+                "achieved": None, "secs": 0.1, "layout": None,
+                "pat_index": pat_index}
 
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(mod, "_run_probe", fake_run_probe)
@@ -129,7 +135,8 @@ def test_probe_level_parallel_dispatch_completes_all(monkeypatch):
 
     region_set = set(region.cells)
     rng = random.Random(0)
-    pool = mod.multiprocessing.Pool(2)
+    pool = mod.multiprocessing.Pool(
+        2, initializer=mod._worker_init, initargs=(lay, 30.0, 1))
     try:
         status, best = mod._probe_level(lay, region_set, [c1], 1, rng,
                                         FakeArgs, log, pool=pool)
@@ -143,3 +150,39 @@ def test_probe_level_parallel_dispatch_completes_all(monkeypatch):
     assert len(probed) == len(surviving), (
         f"parallel dispatch must probe all {len(surviving)} surviving patterns, "
         f"got {len(probed)} log rows")
+
+
+def test_run_probe_payload_uses_worker_global_not_embedded_layout(monkeypatch):
+    """_run_probe must accept the 3-tuple (pat, k, pat_index) and read layout
+    from the worker global, not from the payload. Verify by setting the
+    global in-process and calling _run_probe with a 3-tuple."""
+    import random
+    from foeopt.model import Building, Footprint, Layout, Region
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
+                  False, 1, True, None, None, "TH")
+    c1 = Building(10, "c10", "g", Footprint(0, 0, 2, 2), True, 1, False, None, None, "a")
+    region = Region(frozenset((x, y) for x in range(6) for y in range(6)))
+    lay = Layout(region, [th, c1], th, {})
+
+    # Set the worker global as the initializer would.
+    mod._WORKER_LAYOUT = lay
+    mod._WORKER_PROBE_LIMIT = 30.0
+    mod._WORKER_PROBE_WORKERS = 1
+    try:
+        pats = list(mod.generate_patterns(set(region.cells), 2, 2, 1, random.Random(0), 5))
+        pat = next(p for p in pats if mod.prefilter(p, set(region.cells), [c1]) is None)
+        # Fake probe so we don't need ortools.
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(mod, "probe",
+                            lambda pattern, region, consumers, *, probe_limit, probe_workers=1:
+                            ("UNSAT", None))
+        try:
+            result = mod._run_probe((pat, 1, 0))  # 3-tuple: pat, k, pat_index
+        finally:
+            monkeypatch.undo()
+        assert result["pat_index"] == 0
+        assert result["k"] == 1
+    finally:
+        del mod._WORKER_LAYOUT
+        del mod._WORKER_PROBE_LIMIT
+        del mod._WORKER_PROBE_WORKERS
