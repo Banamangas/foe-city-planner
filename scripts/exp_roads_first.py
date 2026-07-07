@@ -34,6 +34,18 @@ from foeopt.viz import render_html
 _ORTHO = ((1, 0), (-1, 0), (0, 1), (0, -1))
 Cell = tuple[int, int]
 
+# Worker-process globals set by _worker_init (sent once per worker, not per task).
+_WORKER_LAYOUT: Layout | None = None
+_WORKER_PROBE_LIMIT: float = 30.0
+_WORKER_PROBE_WORKERS: int = 1
+
+
+def _worker_init(layout: Layout, probe_limit: float, probe_workers: int) -> None:
+    global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS
+    _WORKER_LAYOUT = layout
+    _WORKER_PROBE_LIMIT = probe_limit
+    _WORKER_PROBE_WORKERS = probe_workers
+
 
 @dataclass(frozen=True)
 class Pattern:
@@ -375,33 +387,49 @@ def _selftest() -> int:
 def _run_probe(payload: tuple) -> dict:
     """Worker entry point: run probe() + validate() for one (pattern, k).
 
-    payload = (pattern, k, layout, probe_limit, probe_workers, pat_index).
-    Returns a result dict with keys: k, params, status, achieved, secs, layout,
-    pat_index. status is one of the validate() statuses (SAT/UNSAT/UNKNOWN/
-    ROUTE_FAIL/INVALID/SAT_FILLER_FAIL/SAT_ROTATED) where SAT means validate()
-    returned OK. layout is the validated Layout on SAT, else None. secs is the
-    wall-clock of the probe() call only (prefilter excluded — caller runs
-    prefilter; validate excluded — matches today's secs semantics at line 391).
+    payload = (pattern, k, pat_index). Layout/probe_limit/probe_workers are read
+    from the worker-process globals (_WORKER_LAYOUT/_WORKER_PROBE_LIMIT/
+    _WORKER_PROBE_WORKERS), set once per worker by _worker_init (or transiently
+    by _run_probe_seq in the sequential path). Returns a result dict with keys:
+    k, params, status, achieved, secs, layout, pat_index. status is one of the
+    validate() statuses (SAT/UNSAT/UNKNOWN/ROUTE_FAIL/INVALID/SAT_FILLER_FAIL/
+    SAT_ROTATED) where SAT means validate() returned OK. layout is the validated
+    Layout on SAT, else None. secs is the wall-clock of the probe() call only
+    (prefilter excluded — caller runs prefilter; validate excluded — matches
+    today's secs semantics).
     """
-    pat, k, layout, probe_limit, probe_workers, pat_index = payload
+    pat, k, pat_index = payload
+    layout = _WORKER_LAYOUT
     region = set(layout.region.cells)
     consumers = layout.road_needing()
     t0 = time.monotonic()
-    st, pos = probe(pat, region, consumers, probe_limit=probe_limit,
-                   probe_workers=probe_workers)
+    st, pos = probe(pat, region, consumers,
+                   probe_limit=_WORKER_PROBE_LIMIT,
+                   probe_workers=_WORKER_PROBE_WORKERS)
     secs = round(time.monotonic() - t0, 1)
     if st != "SAT":
         return {"k": k, "params": pat.params, "status": st,
-                "achieved": None, "secs": secs, "layout": None,
-                "pat_index": pat_index}
+                "achieved": None, "secs": secs, "layout": None, "pat_index": pat_index}
     vstat, vlay, achieved = validate(layout, pat, pos)
     if vstat == "OK":
         return {"k": k, "params": pat.params, "status": "SAT",
-                "achieved": achieved, "secs": secs, "layout": vlay,
-                "pat_index": pat_index}
+                "achieved": achieved, "secs": secs, "layout": vlay, "pat_index": pat_index}
     return {"k": k, "params": pat.params, "status": vstat,
-            "achieved": None, "secs": secs, "layout": None,
-            "pat_index": pat_index}
+            "achieved": None, "secs": secs, "layout": None, "pat_index": pat_index}
+
+
+def _run_probe_seq(payload: tuple) -> dict:
+    """Sequential-mode wrapper: sets globals temporarily and calls _run_probe.
+    Kept separate so the pool path's globals are never mutated by the parent."""
+    global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS
+    pat, k, layout, probe_limit, probe_workers = payload
+    _WORKER_LAYOUT = layout
+    _WORKER_PROBE_LIMIT = probe_limit
+    _WORKER_PROBE_WORKERS = probe_workers
+    try:
+        return _run_probe((pat, k, 0))
+    finally:
+        _WORKER_LAYOUT = None
 
 
 def _probe_level(layout, region, consumers, k, rng, args, log, pool=None) -> tuple[str, int | None]:
@@ -457,13 +485,12 @@ def _probe_level(layout, region, consumers, k, rng, args, log, pool=None) -> tup
 
     if pool is None:
         for pat in surviving:
-            result = _run_probe((pat, k, layout, args.probe_limit, args.probe_workers, 0))
+            result = _run_probe_seq((pat, k, layout, args.probe_limit, args.probe_workers))
             if handle_result(result, pat):
                 return ("INCONCLUSIVE" if best_achieved is None else "FEASIBLE", best_achieved)
     else:
         # Dispatch via imap_unordered; collect in completion order.
-        payloads = [(pat, k, layout, args.probe_limit, args.probe_workers, idx)
-                    for idx, pat in enumerate(surviving)]
+        payloads = [(pat, k, idx) for idx, pat in enumerate(surviving)]
         for result in pool.imap_unordered(_run_probe, payloads):
             idx = result["pat_index"]
             pat = surviving[idx]
@@ -488,7 +515,10 @@ def run_search(layout, args) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     pool = None
     if args.workers > 1:
-        pool = multiprocessing.Pool(args.workers)
+        pool = multiprocessing.Pool(
+            args.workers,
+            initializer=_worker_init,
+            initargs=(layout, args.probe_limit, args.probe_workers))
     try:
         with (out_dir / "probes.jsonl").open("a", encoding="utf-8") as logf:
 
