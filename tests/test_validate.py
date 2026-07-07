@@ -75,3 +75,50 @@ def test_isolated_th_stub_road_is_valid():
     region = Region(frozenset((x, y) for x in range(6) for y in range(6)))
     layout = Layout(region, [th, consumer], th, roads={(3, 1): 1})
     assert is_valid(layout)
+
+
+# --- orientation / no-rotation guard (FoE buildings cannot rotate) ---
+from foeopt.validate import canonical_dims, rotated_buildings
+
+
+def _rect(eid, x, y, w, l, *, th=False):
+    return Building(eid, "R", "main_building" if th else "generic_building",
+                    Footprint(x, y, w, l), needs_road=not th, road_level=1,
+                    is_townhall=th, set_id=None, chain_id=None, name="R")
+
+
+def test_canonical_dims_extracts_ordered_wl_by_entity_id():
+    ref = Layout(_region(20, 20),
+                 [_rect(1, 0, 0, 2, 2, th=True), _rect(10, 4, 0, 6, 4),
+                  _rect(11, 0, 4, 4, 3)],
+                 _rect(1, 0, 0, 2, 2, th=True), roads={})
+    assert canonical_dims(ref) == {1: (2, 2), 10: (6, 4), 11: (4, 3)}
+
+
+def test_rotated_buildings_empty_when_all_match_canonical():
+    ref = Layout(_region(20, 20), [_rect(10, 4, 0, 6, 4)], None, roads={})
+    canon = canonical_dims(ref)
+    same = Layout(_region(20, 20), [_rect(10, 9, 9, 6, 4)], None, roads={})  # moved, not rotated
+    assert rotated_buildings(same, canon) == []
+
+
+def test_rotated_buildings_flags_swapped_wl():
+    canon = {10: (6, 4), 11: (4, 3)}
+    lay = Layout(_region(20, 20),
+                 [_rect(10, 0, 0, 6, 4),   # canonical -> ok
+                  _rect(11, 0, 6, 3, 4)],  # 4x3 placed as 3x4 -> ROTATED
+                 None, roads={})
+    flagged = [b.entity_id for b in rotated_buildings(lay, canon)]
+    assert flagged == [11]
+
+
+def test_rotated_buildings_ignores_squares():
+    canon = {10: (2, 2)}
+    lay = Layout(_region(9, 9), [_rect(10, 0, 0, 2, 2)], None, roads={})
+    assert rotated_buildings(lay, canon) == []
+
+
+def test_rotated_buildings_skips_unknown_ids():
+    # a building absent from the canonical map is not flagged (defensive)
+    lay = Layout(_region(9, 9), [_rect(99, 0, 0, 3, 2)], None, roads={})
+    assert rotated_buildings(lay, {}) == []
