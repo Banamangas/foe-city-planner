@@ -516,7 +516,13 @@ orientation-blind by necessity — a bare Layout has no canonical reference, so 
 call the guard explicitly); rotation removed from `scripts/exp_roads_first.py` and `foeopt/lns.py`
 (the pre-existing packer/anneal/router never rotated — they use same-footprint position moves, so all
 prior 250→158→153 results are unaffected). The de-rotated search must be re-run for an honest legal
-number, which will be HIGHER than 127 (19 buildings lose a degree of freedom) and may land above 153.
+number ~~which will be HIGHER than 127 (19 buildings lose a degree of freedom) and may land above 153~~
+— **prediction was wrong, see the 2026-07-07 de-rotated entry below: actual result is 106, LOWER than
+127.** The reasoning (same k is tighter without rotation) was correct in isolation but missed that the
+prior run was truncated at 2 k-levels by the 120s probe-limit; tuning the limit to 30s unlocked 12
+k-levels (down to k=117), and the lower-k probes more than compensated for the lost rotation degree of
+freedom. Lesson: don't predict a re-run's number from a single factor when the run configuration also
+changes.
 **Rule:** never write placement code that tries both `(w,l)` and `(l,w)`; verify every new placement
 method with `rotated_buildings` against the loaded canonical dims. The rest of this entry is kept for
 the record but its 127/WIN conclusion is void.
@@ -577,3 +583,87 @@ stays a throwaway `uv run --with` dependency, `foeopt/` core is unchanged, and p
 search (continuing the k-walk past 148, wiring it into `polish`/webapp) is a separate, later spec.
 Artifacts: `output/roads-first/best-k148-a127.json` / `.html` (the winning layout) and the full
 `output/roads-first/best-k*.json` / `.html` set (every improving incumbent found during the walk).
+
+## Roads-first de-rotated re-run — 106 roads, verified LEGAL, gate WIN (2026-07-07)
+
+Re-ran the roads-first CP-SAT feasibility search with the rotation fix in place (`scripts/exp_roads_first.py`
+canonical-footprint-only probe + `rotated_buildings` defence-in-depth guard in `validate()`). This is the
+honest legal number the RETRACTION demanded; it replaces the void 127 above.
+
+**Configuration change that mattered:** `--probe-limit 30` (down from the prior 120s default), per this
+file's own 2026-07-06 operational finding ("tune the probe-limit shorter to sample more k-levels per hour").
+The prior 120s run reached only 2 k-levels in 6h (49% UNKNOWN, 5.7h burned at the limit). The de-rotated
+smoke run (20 patterns × 20s, 10 min) already returned a verified-legal 123 and showed de-rotated SAT
+probes resolve fast (mean 3.0s, max 13.6s) — so 30s catches ~all SATs while giving ~3x the k-coverage.
+
+**Headline result: 106 roads on darkzig, independently verified LEGAL.** `output/roads-first/best-k118-a106.json`
+(pattern k=118, comb+TH-stub family) was re-derived from scratch outside the probe harness:
+- 224/224 buildings placed; 0 overlapping cells; 0 cells out of region.
+- `route()` returns exactly 106 (matches the 106-entry `roads` array, matches `achieved`).
+- `is_valid` True, 0 unsatisfied consumers.
+- **`rotated_buildings(cand, canonical_dims(loaded))` = 0** — the invariant the prior "verification" never
+  checked. Every non-square consumer is in its canonical `(width, length)` orientation.
+
+**Gate arithmetic (spec §2.1): best achieved = 106 ≤ 148 → decisive WIN.** 106 also beats: the void 127
+(−21), the prior all-time best 153 (−47), the long-standing local-method floor 158 (−52), and the
+Σ(min-side)/2 estimate of 114 (−8 — and 114 was never a bound, just a double-row-tiling estimate the
+2026-06-23 entry called "geometrically unreachable for any packer"; 106 clears it via the stubs/junctions
+mechanism where a single road cell serves 3 buildings, exactly as the user's own 142-road city does at
+avg load 2.02).
+
+**Independent recomputation from `output/roads-first/probes.jsonl` (2189 lines, not trusted from the run
+summary):**
+
+| k | SAT | UNSAT | UNKNOWN | filler-fail | best achieved | level secs | mins |
+|---|---|---|---|---|---|---|---|
+| 152 | 49 | 92 | 50 | 1 | 127 | 1707.8 | 28.5 |
+| 148 | 42 | 94 | 56 | 0 | 128 | 1916.3 | 31.9 |
+| 144 | 37 | 102 | 53 | 0 | 121 | 1788.7 | 29.8 |
+| 140 | 31 | 111 | 49 | 1 | 119 | 1739.3 | 29.0 |
+| 136 | 28 | 115 | 49 | 0 | 116 | 1782.1 | 29.7 |
+| 132 | 15 | 116 | 61 | 0 | 118 | 2036.3 | 33.9 |
+| 128 | 10 | 120 | 62 | 0 | 118 | 2016.3 | 33.6 |
+| 124 | 8 | 124 | 60 | 0 | 113 | 1982.2 | 33.0 |
+| 120 | 7 | 129 | 56 | 0 | 107 | 1947.1 | 32.5 |
+| 118 | 2 | 127 | 63 | 0 | **106** | 2015.1 | 33.6 |
+| 117 | 1 | 53 | 23 | 0 | 112 | 734.0 | 12.2 |
+| 116 | 0 | 132 | 60 | 0 | — (INCONCLUSIVE) | 1892.0 | 31.5 |
+| **total** | **230** | **1315** | **642** | **2** | **106** | **21557.2** | **359.3** |
+
+Overall: SAT mean 4.75s (max 28.9s — all resolved within the 30s limit, confirming the probe-limit tuning);
+UNSAT mean 0.76s (max 29.4s); UNKNOWN mean 30.31s (all hit the 30s limit). `sum_secs = 21557.2s = 5.988h`
+(the full 6h box, confirms no unlogged probe). UNKNOWN sum_secs = 19460.9s = 5.406h (**90.3% of the budget**)
+— still the dominant cost even at 30s; the shorter limit just made each UNKNOWN 4x cheaper, buying 12
+k-levels instead of 2.
+
+**k-walk trace (spec §2.2: start 152, step −4 while feasible, bisect the gap):** 152→148→144→140→136→132→
+128→124→120 all FEASIBLE → 116 INCONCLUSIVE (0 SAT, 132 UNSAT, 60 UNKNOWN) → bisect 116↔120 → 118 FEASIBLE
+(106) → bisect 116↔118 → 117 FEASIBLE (112) → deadline. `walk_complete = TRUE` (the integer bisection
+converged: 117 lowest proven-feasible k, 116 INCONCLUSIVE adjacent), `deadline_hit = TRUE`. **106 is a
+validated achievable count, not a proven floor** — k=116's 60 UNKNOWNs mean it may be feasible with more
+probe time, and even at 117 only 1 of 77 probes SAT'd (the family is sparse there). The true within-family
+floor for the comb+TH-stub pattern is very likely at or below 106; do not read 106 as optimal.
+
+**Why 106 is at k=118, not at the lowest feasible k (117→112).** Lower k = tighter road skeleton = fewer
+patterns SAT (230 SAT total, but only 1 at k=117, 2 at k=118, 7 at k=120). The best-achieved-at-k does not
+monotonically decrease with k — there's a sweet spot (k=118 here) where enough patterns still SAT for one
+to route-prune aggressively. Below that, SATs get too rare to find a low-achieved one; above it, the
+skeleton has more roads to prune but the starting count is higher. The k-walk records the best across ALL
+levels, so 106 stands regardless.
+
+**Probe-limit tuning verdict (the 2026-07-06 operational finding, acted on):** 30s was the right call.
+Every SAT resolved within 30s (max 28.9s), so no achievable layout was missed by the shorter limit, and
+the 4x-cheaper UNKNOWNs bought 12 k-levels of coverage (vs the prior 120s run's 2 levels) — which is the
+entire reason 106 (at k=118) was reachable at all. The prior run's 127 was at k=148; it never probed below
+148. **Rule reaffirmed:** when the operational finding says tune a bottleneck, tune it before re-running.
+
+**Strategic implication.** 106 is the first method in this project's history to beat the Σ/2 estimate
+(114) and the local-method floor (158) simultaneously, by a wide margin, with a verified-legal layout.
+Roads-first (fix the skeleton, then exact-pack) is the project's winning structural idea — the same one
+that beat 153 with the invalid 127, now confirmed legal. Per the 2026-07-06 gated-solver-extras policy,
+this is a search-time result: `ortools` stays a throwaway `uv run --with` dependency, `foeopt/` core is
+unchanged, and productionizing (wiring the k-walk into `polish`/webapp, tuning for lower k or a tighter
+family) is a separate, later spec. Artifacts: `output/roads-first/best-k118-a106.json`/`.html` (winning
+layout) and the full `best-k*.json`/`.html` set. The void 127 artifacts are in
+`output/roads-first/invalid-rotated-2026-07-06/`; smoke artifacts in
+`output/roads-first/smoke-derotated-artifacts/`.
