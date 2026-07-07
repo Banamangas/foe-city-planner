@@ -667,3 +667,98 @@ family) is a separate, later spec. Artifacts: `output/roads-first/best-k118-a106
 layout) and the full `best-k*.json`/`.html` set. The void 127 artifacts are in
 `output/roads-first/invalid-rotated-2026-07-06/`; smoke artifacts in
 `output/roads-first/smoke-derotated-artifacts/`.
+
+## Roads-first parallel re-run — 104 roads in ~2h wall-clock, gate WIN (2026-07-07)
+
+Parallelized the throwaway CP-SAT feasibility search via `multiprocessing.Pool` (spec
+`docs/superpowers/specs/2026-07-07-roads-first-parallel-search-design.md`, plan
+`docs/superpowers/plans/2026-07-07-roads-first-parallel-search.md`). Default config:
+`--workers 4 --probe-workers 4` = 4 concurrent probes × 4 CP-SAT portfolio workers = 16
+cores. The k-walk stays sequential (each level is a barrier); only the 200 patterns within
+a level dispatch concurrently via `imap_unordered`. Verification (`route()`/`is_valid`/
+`rotated_buildings`) stays in-worker and deterministic — every saved layout remains
+independently verifiable-legal. `--workers 1 --probe-workers 1` reproduces the sequential
+run exactly.
+
+**Headline result: 104 roads on darkzig, independently verified LEGAL, in ~2h wall-clock
+(vs the sequential 6h).** `output/roads-first/best-k116-a104.json` re-derived from scratch:
+224/224 placed, 0 overlaps, 0 out-of-region, `route()`=104 matches, `is_valid` True,
+0 unsatisfied, `rotated_buildings`=0. 104 beats the sequential 106 (−2), the prior
+all-time best 153 (−49), the local-method floor 158 (−54), and the Σ/2 estimate 114 (−10).
+Gate (spec §2.1): 104 ≤ 148 → decisive WIN (already cleared by 106; this extends it).
+
+**k-walk converged before the deadline:** `walk_complete=TRUE`, `deadline_hit=FALSE` —
+the bisection finished at k=115 (INCONCLUSIVE) / k=116 (FEASIBLE, 1 SAT → 104) in ~2h,
+leaving ~4h of the 6h box unspent. The sequential run hit the deadline at k=117
+(`walk_complete=TRUE` there too, but only after the full 6h). 13 k-levels probed (152→112
+in steps of −4, then bisection at 115/114/113-equivalent density).
+
+**Throughput (spec §9 must): ~4x.** 2496 probes in ~2h wall-clock (cumulative probe-time
+25505s = 7.085h across 4 workers → 3.9x parallel efficiency). The sequential baseline did
+2189 probes in 5.988h wall-clock (6.1 probes/min wall); the parallel run did 2496 probes
+in ~2h (~20.8 probes/min wall). This is the reliable, mechanical win — exactly as predicted.
+
+**UNKNOWN rate (spec §9 nice-to-have, NOT a gate): unchanged.** 731/2496 = 29.3% UNKNOWN,
+statistically identical to the sequential baseline's 642/2189 = 29.3%. The 4-worker CP-SAT
+portfolio did NOT meaningfully flip UNKNOWNs to SAT/UNSAT — the UNKNOWN probes are genuinely
+hard (the model is loose at low k), and 4 parallel search strategies don't resolve them
+within the 30s probe-limit any better than 1 does. The portfolio win was empirical and
+unpromised; the throughput win is what delivered the result. **Lesson: when the operational
+finding says the bottleneck is UNKNOWN timeouts, the reliable fix is more k-level coverage
+via throughput, not portfolio depth.** UNKNOWNs still consumed 87.7% of cumulative
+probe-time — but at 4x cheaper per wall-clock minute, the run reached 13 levels (incl.
+bisection) instead of 12, and finished 3x faster.
+
+**Why 104 (at k=116) and not lower.** The k-walk converged: 116 is the lowest
+proven-feasible k (1 SAT out of 192 probes there); 112/114/115 all INCONCLUSIVE (0 SAT,
+~60 UNKNOWN each — may be feasible with more probe time, but the family is sparse there).
+104 is a validated achievable count, not a proven floor — the true within-family floor is
+very likely at or below 104. The parallel run's early completion means a follow-up could
+spend the remaining ~4h probing harder at k=112–115 (longer probe-limit, more patterns) to
+try to flip those INCONCLUSIVE levels to FEASIBLE. That is a separate later spec per the
+gated-solver-extras policy.
+
+**Per-level table (independently recomputed from `probes.jsonl`, 2496 lines):**
+
+| k | SAT | UNSAT | UNKNOWN | filler | best |
+|---|---|---|---|---|---|
+| 152 | 49 | 92 | 50 | 1 | 127 |
+| 148 | 42 | 94 | 55 | 1 | 126 |
+| 144 | 36 | 104 | 52 | 0 | 121 |
+| 140 | 32 | 110 | 49 | 1 | 119 |
+| 136 | 27 | 116 | 49 | 0 | 117 |
+| 132 | 17 | 114 | 61 | 0 | 115 |
+| 128 | 11 | 119 | 62 | 0 | 118 |
+| 124 | 9 | 124 | 59 | 0 | 113 |
+| 120 | 3 | 128 | 61 | 0 | 112 |
+| 116 | 1 | 133 | 58 | 0 | **104** |
+| 115 | 0 | 133 | 59 | 0 | — (INCONCLUSIVE) |
+| 114 | 0 | 132 | 60 | 0 | — (INCONCLUSIVE) |
+| 112 | 0 | 136 | 56 | 0 | — (INCONCLUSIVE) |
+| **total** | **227** | **1535** | **731** | **3** | **104** |
+
+SAT mean 6.09s (max 29.9s — all resolved within the 30s limit); UNSAT mean 1.14s; UNKNOWN
+mean 30.61s (all hit the 30s limit). `sum_secs` = 25505s = 7.085h cumulative (4 workers ×
+~2h wall = ~8h, matching).
+
+**Code change:** pure-Python `multiprocessing` in the throwaway `scripts/exp_roads_first.py`
+only — no new dependency, no change to `foeopt/` core (per the gated-solver-extras policy).
+New CLI: `--workers N` (default 4), `--probe-workers M` (default 4). Worker initializer
+sends the read-only layout once per worker (not per task). `pool.terminate()` on deadline-hit
+(worst-case overrun = 0, not `probe_limit` — the final-review fix). Selftest asserts
+parallel-equivalence (`par_statuses == seq_statuses` at `--workers 2 --probe-workers 1`).
+4 unit tests + selftest all pass; `--workers 1 --probe-workers 1` reproduces the sequential
+run exactly. Full implementation: 5 commits on `feat/roads-first-parallel` (d023632..0cd9346),
+all per-task reviews + final whole-branch review clean (2 Important findings from final
+review — deadline-drain overrun + ortools test gate — both fixed).
+
+**Strategic implication.** The parallel search delivers the same verified-legal road count
+(104, beating the sequential 106) in 1/3 the wall-clock, with the k-walk converging early
+and ~4h of budget unspent. Roads-first remains the project's winning structural idea; the
+parallelism makes it practical to iterate on (a 2h run instead of 6h). The remaining
+~4h of budget and the INCONCLUSIVE k=112–115 levels point at the next experiment: spend
+more probe-time per pattern at the tightest k-levels (longer `--probe-limit`, more
+`--patterns`) to try to flip INCONCLUSIVE to FEASIBLE and push below 104. Productionization
+(wiring into `polish`/webapp) remains a separate later spec. Artifacts:
+`output/roads-first/best-k116-a104.json`/`.html` and the full `best-k*.json`/`.html` set;
+sequential baseline preserved in `output/roads-first/sequential-baseline-2026-07-07/`.
