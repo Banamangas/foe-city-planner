@@ -128,7 +128,12 @@ def generate_patterns(region: set[Cell], tw: int, tl: int, k: int,
                       rng: random.Random, max_patterns: int) -> list["Pattern"]:
     """Deterministic parameter grid -> comb patterns with EXACTLY k road cells;
     rng shuffles only the order. Connectivity holds by construction (trunk hugs
-    the TH border; branches touch the trunk; stubs touch the TH)."""
+    the TH border; branches touch the trunk; stubs touch the TH) for the
+    full-trunk patterns that dominate at realistic k. NOTE: trunk_used = trunk[:trunk_len]
+    below takes a prefix of a run that extends both ways through the anchor, so for
+    very short trunks the TH-touching anchor cell can be dropped and this guarantee
+    does not hold. route()+is_valid() in validate() are the authoritative connectivity
+    check — downstream must NOT assume pattern.roads is TH-connected/buildable."""
     out: list[Pattern] = []
     seen: set[frozenset[Cell]] = set()
     for th in th_anchor_candidates(region, tw, tl):
@@ -202,6 +207,10 @@ def prefilter(pattern: Pattern, region: set[Cell],
     if area_needed + len(pattern.roads) > len(region) - len(th_cells):
         return "area"
     free = region - pattern.roads - th_cells
+    # <=3 consumers per road cell holds because a connected road network of >=2 cells
+    # guarantees every cell has >=1 non-consumer (road/TH) orthogonal neighbour; a
+    # hypothetical isolated 1-cell network could serve 4. This assumes the generator
+    # only emits TH-connected patterns, which it does by construction.
     capacity = sum(3 for c in pattern.roads
                    if any((c[0] + dx, c[1] + dy) in free for dx, dy in _ORTHO))
     if capacity < len(consumers):
@@ -420,6 +429,9 @@ def _probe_level(layout, region, consumers, k, rng, args, log) -> tuple[str, int
         return ("FEASIBLE", best_achieved)
     if not pats:
         return ("INCONCLUSIVE", None)         # generator produced nothing: no proof either way
+    # INFEASIBLE here = every SAMPLED pattern (<=max_patterns of the family) was a
+    # UNSAT/PREFILTERED proof — a sample statement, NOT a k-level floor proof for the
+    # whole family (generate_patterns returns only a shuffled <=max_patterns prefix).
     return ("INCONCLUSIVE" if saw_nonproof_failure else "INFEASIBLE", None)
 
 
@@ -544,6 +556,8 @@ def main(argv=None):
     per_level = {k: v[0] + (f" achieved={v[1]}" if v[1] is not None else "")
                  for k, v in sorted(res["results"].items())}
     print("levels:", json.dumps(per_level, indent=1))
+    if any(v[0] == "INFEASIBLE" for v in res["results"].values()):
+        print("note: INFEASIBLE = all sampled patterns UNSAT at that k, not a family-wide floor proof")
     return 0
 
 
