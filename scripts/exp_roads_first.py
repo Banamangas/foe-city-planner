@@ -257,7 +257,7 @@ def _anchor_candidates(b: Building, region: set[Cell], blocked: set[Cell],
 
 
 def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
-          *, probe_limit: float) -> tuple[str, dict | None]:
+          *, probe_limit: float, probe_workers: int = 1) -> tuple[str, dict | None]:
     from ortools.sat.python import cp_model
 
     th_cells = set(pattern.th.cells())
@@ -284,7 +284,7 @@ def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
     m.AddNoOverlap2D(xiv, yiv)
 
     solver = cp_model.CpSolver()
-    solver.parameters.num_search_workers = 1
+    solver.parameters.num_search_workers = probe_workers
     solver.parameters.random_seed = 0
     solver.parameters.max_time_in_seconds = probe_limit
     st = solver.Solve(m)
@@ -369,6 +369,35 @@ def _selftest() -> int:
     print(f"selftest: oracle={oracle} k1_validated={ok_k1} k0_empty={ok_k0} "
           f"{'PASS' if (ok_k1 and ok_k0) else 'FAIL'}")
     return 0 if (ok_k1 and ok_k0) else 1
+
+
+def _run_probe(payload: tuple) -> dict:
+    """Worker entry point: run probe() + validate() for one (pattern, k).
+
+    payload = (pattern, k, layout, probe_limit, probe_workers).
+    Returns a result dict with keys: k, params, status, achieved, secs, layout.
+    status is one of the validate() statuses (SAT/UNSAT/UNKNOWN/ROUTE_FAIL/
+    INVALID/SAT_FILLER_FAIL/SAT_ROTATED) where SAT means validate() returned OK.
+    layout is the validated Layout on SAT, else None. secs is the wall-clock of
+    the probe() call only (prefilter excluded — caller runs prefilter;
+    validate excluded — matches today's secs semantics at line 391).
+    """
+    pat, k, layout, probe_limit, probe_workers = payload
+    region = set(layout.region.cells)
+    consumers = layout.road_needing()
+    t0 = time.monotonic()
+    st, pos = probe(pat, region, consumers, probe_limit=probe_limit,
+                   probe_workers=probe_workers)
+    secs = round(time.monotonic() - t0, 1)
+    if st != "SAT":
+        return {"k": k, "params": pat.params, "status": st,
+                "achieved": None, "secs": secs, "layout": None}
+    vstat, vlay, achieved = validate(layout, pat, pos)
+    if vstat == "OK":
+        return {"k": k, "params": pat.params, "status": "SAT",
+                "achieved": achieved, "secs": secs, "layout": vlay}
+    return {"k": k, "params": pat.params, "status": vstat,
+            "achieved": None, "secs": secs, "layout": None}
 
 
 def _probe_level(layout, region, consumers, k, rng, args, log) -> tuple[str, int | None]:
