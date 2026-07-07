@@ -187,3 +187,85 @@ def test_run_probe_payload_uses_worker_global_not_embedded_layout(monkeypatch):
         del mod._WORKER_LAYOUT
         del mod._WORKER_PROBE_LIMIT
         del mod._WORKER_PROBE_WORKERS
+
+
+def test_k_start_auto_resolves_to_pick_k_start_value(monkeypatch):
+    """--k-start auto should resolve to pick_k_start(layout) inside run_search,
+    not stay as the string 'auto' (which would crash the k-walk's integer
+    arithmetic). Verify by capturing the k the first level() call probes."""
+    import sys, pathlib
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts"))
+    import exp_roads_first as mod
+    from foeopt.loader import load_layout
+    from foeopt.bounds import pick_k_start
+
+    lay = load_layout("darkzig.json")  # assumes cwd is repo root; skip if absent
+    if not pathlib.Path("darkzig.json").exists():
+        pytest.skip("darkzig.json not present")
+
+    captured_k = []
+    real_probe_level = mod._probe_level
+    def spy_probe_level(layout, region, consumers, k, rng, args, log, pool=None):
+        captured_k.append(k)
+        return ("FEASIBLE", 200)  # short-circuit: one level, then walk stops
+
+    monkeypatch.setattr(mod, "_probe_level", spy_probe_level)
+    # Also force an immediate deadline so the walk does one level and exits.
+    import time as _t
+    class FakeArgs:
+        k_start = "auto"
+        patterns = 5
+        probe_limit = 30.0
+        probe_workers = 1
+        workers = 1
+        th_anchors = "coarse"
+        seed = 0
+        time_box = 1.0  # 1 second -> deadline fires immediately after first level
+        deadline = _t.monotonic() + 1.0
+    args = FakeArgs()
+    try:
+        mod.run_search(lay, args)
+    except Exception:
+        pass  # run_search may error on the short-circuit; we only care about captured_k
+    monkeypatch.undo()
+    expected = pick_k_start(lay)
+    assert captured_k, "run_search did not probe any level"
+    assert captured_k[0] == expected, (
+        f"--k-start auto should probe k={expected} first (pick_k_start), "
+        f"got k={captured_k[0]}")
+
+
+def test_k_start_explicit_integer_overrides_auto(monkeypatch):
+    """--k-start 152 (explicit integer) must use 152 exactly, not pick_k_start."""
+    import sys, pathlib
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts"))
+    import exp_roads_first as mod
+    from foeopt.loader import load_layout
+
+    if not pathlib.Path("darkzig.json").exists():
+        pytest.skip("darkzig.json not present")
+    lay = load_layout("darkzig.json")
+
+    captured_k = []
+    def spy_probe_level(layout, region, consumers, k, rng, args, log, pool=None):
+        captured_k.append(k)
+        return ("FEASIBLE", 200)
+    monkeypatch.setattr(mod, "_probe_level", spy_probe_level)
+    import time as _t
+    class FakeArgs:
+        k_start = 152
+        patterns = 5
+        probe_limit = 30.0
+        probe_workers = 1
+        workers = 1
+        th_anchors = "coarse"
+        seed = 0
+        time_box = 1.0
+        deadline = _t.monotonic() + 1.0
+    try:
+        mod.run_search(lay, FakeArgs())
+    except Exception:
+        pass
+    monkeypatch.undo()
+    assert captured_k, "run_search did not probe any level"
+    assert captured_k[0] == 152, f"explicit --k-start 152 ignored, got {captured_k[0]}"
