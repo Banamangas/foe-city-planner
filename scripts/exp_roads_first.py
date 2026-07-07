@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import multiprocessing
 import pathlib
 import random
 import sys
@@ -374,15 +375,15 @@ def _selftest() -> int:
 def _run_probe(payload: tuple) -> dict:
     """Worker entry point: run probe() + validate() for one (pattern, k).
 
-    payload = (pattern, k, layout, probe_limit, probe_workers).
-    Returns a result dict with keys: k, params, status, achieved, secs, layout.
-    status is one of the validate() statuses (SAT/UNSAT/UNKNOWN/ROUTE_FAIL/
-    INVALID/SAT_FILLER_FAIL/SAT_ROTATED) where SAT means validate() returned OK.
-    layout is the validated Layout on SAT, else None. secs is the wall-clock of
-    the probe() call only (prefilter excluded — caller runs prefilter;
-    validate excluded — matches today's secs semantics at line 391).
+    payload = (pattern, k, layout, probe_limit, probe_workers, pat_index).
+    Returns a result dict with keys: k, params, status, achieved, secs, layout,
+    pat_index. status is one of the validate() statuses (SAT/UNSAT/UNKNOWN/
+    ROUTE_FAIL/INVALID/SAT_FILLER_FAIL/SAT_ROTATED) where SAT means validate()
+    returned OK. layout is the validated Layout on SAT, else None. secs is the
+    wall-clock of the probe() call only (prefilter excluded — caller runs
+    prefilter; validate excluded — matches today's secs semantics at line 391).
     """
-    pat, k, layout, probe_limit, probe_workers = payload
+    pat, k, layout, probe_limit, probe_workers, pat_index = payload
     region = set(layout.region.cells)
     consumers = layout.road_needing()
     t0 = time.monotonic()
@@ -391,58 +392,84 @@ def _run_probe(payload: tuple) -> dict:
     secs = round(time.monotonic() - t0, 1)
     if st != "SAT":
         return {"k": k, "params": pat.params, "status": st,
-                "achieved": None, "secs": secs, "layout": None}
+                "achieved": None, "secs": secs, "layout": None,
+                "pat_index": pat_index}
     vstat, vlay, achieved = validate(layout, pat, pos)
     if vstat == "OK":
         return {"k": k, "params": pat.params, "status": "SAT",
-                "achieved": achieved, "secs": secs, "layout": vlay}
+                "achieved": achieved, "secs": secs, "layout": vlay,
+                "pat_index": pat_index}
     return {"k": k, "params": pat.params, "status": vstat,
-            "achieved": None, "secs": secs, "layout": None}
+            "achieved": None, "secs": secs, "layout": None,
+            "pat_index": pat_index}
 
 
-def _probe_level(layout, region, consumers, k, rng, args, log) -> tuple[str, int | None]:
+def _probe_level(layout, region, consumers, k, rng, args, log, pool=None) -> tuple[str, int | None]:
     """Probe up to --patterns patterns at level k. Returns (level_status, best_achieved):
     level_status in {"FEASIBLE", "INFEASIBLE", "INCONCLUSIVE"} — INFEASIBLE only if
     every attempted pattern was UNSAT (incl. prefilter rejections, which are proofs);
-    any UNKNOWN or SAT_FILLER_FAIL/ROUTE_FAIL/INVALID makes a failed level INCONCLUSIVE."""
+    any UNKNOWN or SAT_FILLER_FAIL/ROUTE_FAIL/INVALID/SAT_ROTATED makes a failed level
+    INCONCLUSIVE. If pool is None, probes sequentially in generation order (identical
+    to the pre-parallel behavior). If pool is a multiprocessing.pool.Pool, dispatches
+    surviving patterns via imap_unordered and collects results in completion order."""
     th = layout.townhall.footprint
     pats = generate_patterns(region, th.width, th.length, k, rng, args.patterns)
     best_achieved = None
     saw_nonproof_failure = False
+    order = 0  # monotonic completion counter for the log's `order` field
+
+    def handle_result(result, pat):
+        nonlocal best_achieved, order, saw_nonproof_failure
+        order += 1
+        status = result["status"]
+        achieved = result["achieved"]
+        log({"k": k, "params": pat.params, "status": status,
+             "achieved": achieved, "secs": result["secs"], "order": order})
+        if status == "SAT":
+            vlay = result["layout"]
+            if best_achieved is None or achieved < best_achieved:
+                best_achieved = achieved
+                out_dir = pathlib.Path("output/roads-first")
+                out_dir.mkdir(parents=True, exist_ok=True)
+                stem = f"best-k{k}-a{achieved}"
+                (out_dir / f"{stem}.json").write_text(json.dumps({
+                    "k": k, "achieved": achieved, "pattern": pat.params,
+                    "roads": sorted(vlay.roads),
+                    "buildings": {b.entity_id: [b.footprint.x, b.footprint.y,
+                                                b.footprint.width, b.footprint.length]
+                                  for b in vlay.buildings}}, indent=1), encoding="utf-8")
+                (out_dir / f"{stem}.html").write_text(render_html(vlay), encoding="utf-8")
+        elif status in ("UNKNOWN", "ROUTE_FAIL", "INVALID", "SAT_FILLER_FAIL", "SAT_ROTATED"):
+            saw_nonproof_failure = True
+        if time.monotonic() > args.deadline:
+            return True  # signal: stop submitting / drain
+        return False
+
+    # Prefilter in the parent (cheap, no CP-SAT), log rejections immediately.
+    surviving = []
     for pat in pats:
-        t0 = time.monotonic()
         reason = prefilter(pat, region, consumers)
         if reason is not None:
             log({"k": k, "params": pat.params, "status": "PREFILTERED",
-                 "reason": reason, "secs": 0.0})
+                 "reason": reason, "secs": 0.0, "order": 0})
             continue
-        st, pos = probe(pat, region, consumers, probe_limit=args.probe_limit)
-        secs = round(time.monotonic() - t0, 1)
-        if st == "SAT":
-            vstat, vlay, achieved = validate(layout, pat, pos)
-            log({"k": k, "params": pat.params, "status": vstat if vstat != "OK" else "SAT",
-                 "achieved": achieved if vstat == "OK" else None, "secs": secs})
-            if vstat == "OK":
-                if best_achieved is None or achieved < best_achieved:
-                    best_achieved = achieved
-                    out_dir = pathlib.Path("output/roads-first")
-                    out_dir.mkdir(parents=True, exist_ok=True)
-                    stem = f"best-k{k}-a{achieved}"
-                    (out_dir / f"{stem}.json").write_text(json.dumps({
-                        "k": k, "achieved": achieved, "pattern": pat.params,
-                        "roads": sorted(vlay.roads),
-                        "buildings": {b.entity_id: [b.footprint.x, b.footprint.y,
-                                                    b.footprint.width, b.footprint.length]
-                                      for b in vlay.buildings}}, indent=1), encoding="utf-8")
-                    (out_dir / f"{stem}.html").write_text(render_html(vlay), encoding="utf-8")
-            else:
-                saw_nonproof_failure = True
-        else:
-            log({"k": k, "params": pat.params, "status": st, "secs": secs})
-            if st == "UNKNOWN":
-                saw_nonproof_failure = True
-        if time.monotonic() > args.deadline:
-            return ("INCONCLUSIVE" if best_achieved is None else "FEASIBLE", best_achieved)
+        surviving.append(pat)
+
+    if pool is None:
+        for pat in surviving:
+            result = _run_probe((pat, k, layout, args.probe_limit, args.probe_workers, 0))
+            if handle_result(result, pat):
+                return ("INCONCLUSIVE" if best_achieved is None else "FEASIBLE", best_achieved)
+    else:
+        # Dispatch via imap_unordered; collect in completion order.
+        payloads = [(pat, k, layout, args.probe_limit, args.probe_workers, idx)
+                    for idx, pat in enumerate(surviving)]
+        for result in pool.imap_unordered(_run_probe, payloads):
+            idx = result["pat_index"]
+            pat = surviving[idx]
+            if handle_result(result, pat):
+                break
+
     if best_achieved is not None:
         return ("FEASIBLE", best_achieved)
     if not pats:
@@ -459,74 +486,83 @@ def run_search(layout, args) -> dict:
     rng = random.Random(args.seed)
     out_dir = pathlib.Path("output/roads-first")
     out_dir.mkdir(parents=True, exist_ok=True)
-    with (out_dir / "probes.jsonl").open("a", encoding="utf-8") as logf:
+    pool = None
+    if args.workers > 1:
+        pool = multiprocessing.Pool(args.workers)
+    try:
+        with (out_dir / "probes.jsonl").open("a", encoding="utf-8") as logf:
 
-        def log(row):
-            logf.write(json.dumps(row) + "\n")
-            logf.flush()
+            def log(row):
+                logf.write(json.dumps(row) + "\n")
+                logf.flush()
 
-        def timed_out():
-            return time.monotonic() >= args.deadline
+            def timed_out():
+                return time.monotonic() >= args.deadline
 
-        results: dict[int, tuple[str, int | None]] = {}
+            results: dict[int, tuple[str, int | None]] = {}
 
-        def level(k):
-            if k not in results:
-                print(f"probing k={k} ...", flush=True)
-                results[k] = _probe_level(layout, region, consumers, k, rng, args, log)
-                print(f"  k={k}: {results[k][0]}"
-                      f"{' achieved=' + str(results[k][1]) if results[k][1] is not None else ''}",
-                      flush=True)
-            return results[k]
+            def level(k):
+                if k not in results:
+                    print(f"probing k={k} ...", flush=True)
+                    results[k] = _probe_level(layout, region, consumers, k, rng, args, log,
+                                              pool=pool)
+                    print(f"  k={k}: {results[k][0]}"
+                          f"{' achieved=' + str(results[k][1]) if results[k][1] is not None else ''}",
+                          flush=True)
+                return results[k]
 
-        truncated = False                     # any loop cut short by the deadline
-        k = args.k_start
-        st, _ = level(k)
-        if st != "FEASIBLE":                  # spec §8: family-too-weak fallback
-            while st != "FEASIBLE" and k < 168:
+            truncated = False                     # any loop cut short by the deadline
+            k = args.k_start
+            st, _ = level(k)
+            if st != "FEASIBLE":                  # spec §8: family-too-weak fallback
+                while st != "FEASIBLE" and k < 168:
+                    if timed_out():
+                        truncated = True
+                        break
+                    k += 4
+                    st, _ = level(k)
+                if st != "FEASIBLE":
+                    return {"verdict": "FAMILY_TOO_WEAK", "walk_complete": not truncated,
+                            "deadline_hit": timed_out(), "results": results}
+            lo_feasible = k
+            while True:                           # walk down in steps of 4
                 if timed_out():
                     truncated = True
                     break
-                k += 4
-                st, _ = level(k)
-            if st != "FEASIBLE":
-                return {"verdict": "FAMILY_TOO_WEAK", "walk_complete": not truncated,
-                        "deadline_hit": timed_out(), "results": results}
-        lo_feasible = k
-        while True:                           # walk down in steps of 4
-            if timed_out():
-                truncated = True
-                break
-            nxt = lo_feasible - 4
-            if nxt < 1:
-                break
-            st, _ = level(nxt)
-            if st == "FEASIBLE":
-                lo_feasible = nxt
-            else:
-                break
-        # bisect the gap [nxt, lo_feasible)
-        lo, hi = lo_feasible - 4, lo_feasible
-        while hi - lo > 1:
-            if timed_out():
-                truncated = True
-                break
-            mid = (lo + hi) // 2
-            st, _ = level(mid)
-            if st == "FEASIBLE":
-                hi = mid
-            else:
-                lo = mid
-        best = min((r[1] for r in results.values() if r[1] is not None), default=None)
-        unknowns = sum(1 for r in results.values() if r[0] == "INCONCLUSIVE")
-        # `lowest_feasible_k_probed` is exactly that: the lowest level this (possibly
-        # deadline-truncated) walk probed FEASIBLE — not a proven floor. Levels below it
-        # may be unprobed or INCONCLUSIVE; see walk_complete/deadline_hit and `results`.
-        return {"verdict": "DONE",
-                "lowest_feasible_k_probed": hi if best is not None else None,
-                "best_achieved": best, "inconclusive_levels": unknowns,
-                "walk_complete": not truncated, "deadline_hit": timed_out(),
-                "results": results}
+                nxt = lo_feasible - 4
+                if nxt < 1:
+                    break
+                st, _ = level(nxt)
+                if st == "FEASIBLE":
+                    lo_feasible = nxt
+                else:
+                    break
+            # bisect the gap [nxt, lo_feasible)
+            lo, hi = lo_feasible - 4, lo_feasible
+            while hi - lo > 1:
+                if timed_out():
+                    truncated = True
+                    break
+                mid = (lo + hi) // 2
+                st, _ = level(mid)
+                if st == "FEASIBLE":
+                    hi = mid
+                else:
+                    lo = mid
+            best = min((r[1] for r in results.values() if r[1] is not None), default=None)
+            unknowns = sum(1 for r in results.values() if r[0] == "INCONCLUSIVE")
+            # `lowest_feasible_k_probed` is exactly that: the lowest level this (possibly
+            # deadline-truncated) walk probed FEASIBLE — not a proven floor. Levels below it
+            # may be unprobed or INCONCLUSIVE; see walk_complete/deadline_hit and `results`.
+            return {"verdict": "DONE",
+                    "lowest_feasible_k_probed": hi if best is not None else None,
+                    "best_achieved": best, "inconclusive_levels": unknowns,
+                    "walk_complete": not truncated, "deadline_hit": timed_out(),
+                    "results": results}
+    finally:
+        if pool is not None:
+            pool.close()
+            pool.join()
 
 
 def main(argv=None):
@@ -540,12 +576,18 @@ def main(argv=None):
     p.add_argument("--probe-limit", type=float, default=120.0)
     p.add_argument("--time-box", type=float, default=21600.0)
     p.add_argument("--smoke", action="store_true")
+    p.add_argument("--workers", type=int, default=4,
+                   help="concurrent probe processes (1 = sequential fallback)")
+    p.add_argument("--probe-workers", type=int, default=4,
+                   help="CP-SAT num_search_workers per probe (portfolio)")
     args = p.parse_args(argv)
     if args.smoke:
         args.k_start = 156
         args.patterns = 20
         args.probe_limit = 20.0
         args.time_box = 600.0
+        args.workers = 1
+        args.probe_workers = 1
     if args.selftest:
         return _selftest()
     if args.dump_patterns is not None:
