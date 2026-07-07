@@ -501,3 +501,60 @@ project's history (attempt #7's 157-vs-158 LNS+CP-SAT, rejected as "not worth th
 other dead track died on evidence about the problem, not on library access. But methods were carrying an
 unspoken extra bar. Pre-committing the promotion rule removes the distortion without giving up the
 zero-dependency core install.
+
+## Roads-first feasibility search (2026-07-06)
+
+**Headline result: 127 roads on darkzig, independently verified.** `output/roads-first/best-k148-a127.json`
+(pattern k=148, comb+TH-stub family) was re-derived from scratch outside the probe harness: all 224
+buildings placed, all 63 consumers 0-unsatisfied, `route()` returns exactly 127 (matches the 127-entry
+`roads` array in the JSON), `is_valid` True, no overlaps. This is a proven achievable count, not a claim.
+
+**Gate arithmetic (spec §2.1, `docs/superpowers/specs/2026-07-06-roads-first-feasibility-design.md` §2):**
+best achieved = 127 ≤ 148 → **WIN**. Recomputed independently from `output/roads-first/probes.jsonl`
+(348 lines, not trusted from the run summary):
+
+| k | SAT | UNSAT | UNKNOWN | best achieved | solve-time note |
+|---|---|---|---|---|---|
+| 152 | 54 | 45 | 93 | **128** | SAT mean 9.4s/max 100.5s; UNSAT mean 2.2s/max 48.4s; UNKNOWN pinned at ~120.5-121.3s (probe limit) — 11815.5s (3.28h) of the budget spent at this level |
+| 148 | 41 | 36 | 79 | **127** | SAT mean 5.5s/max 20.1s; UNSAT mean 1.1s/max 2.0s; UNKNOWN pinned at ~120.5-120.6s — 9785.4s (2.72h) of the budget spent at this level |
+| **total** | **95** | **81** | **172** | — | overall SAT mean 7.7s (max 100.5); UNSAT mean 1.7s (max 48.4); UNKNOWN mean 120.5s (all hit the 120s probe-limit, i.e. truly inconclusive, not slow-SAT/UNSAT) |
+
+Sum of `secs` across all 348 probes = 21600.9s = 6.0002h (the full 6h box, confirming no probe went
+unlogged). The 172 UNKNOWNs alone consumed 20727.3s = 5.758h ≈ 5.7h of that 6h — this is the key
+operational finding, not a footnote.
+
+**Verdict: DONE, walk_complete = FALSE, deadline_hit = TRUE.** Per the pre-committed k-search (spec §2.2:
+start at 152, step −4 while feasible, bisect the gap), only k=152 and k=148 were ever probed before the
+6h deadline; nothing below k=148 was attempted. **127 is a validated achievable count, not a proven
+floor.** The true within-family floor for the comb+TH-stub pattern is very likely lower than 127 — the
+search was truncated by wall-clock, not by exhausting the family. Do not read "WIN" as "127 is optimal";
+read it as "127 already clears the win bar with most of the k-space unexplored."
+
+**Operational finding: the 120s per-probe UNKNOWN limit ate the budget.** 172/348 probes (49%) timed out
+without CP-SAT reaching SAT or UNSAT, burning 5.7h of 6h while only advancing two k-levels. SAT and UNSAT
+probes are both fast (means 7.7s and 1.7s) — the cost is entirely in probes CP-SAT can't resolve either
+way within the limit. A follow-up run should tune the probe-limit (shorter, to sample more k-levels per
+hour, accepting more UNKNOWNs per level) or the model/solver hints (better bounds, symmetry breaking, a
+different search strategy) before spending more wall-clock on this exact configuration.
+
+**Mechanism reading — why roads-first beats every prior method on this project.** Every earlier structural
+attempt (four constructive lane/hybrid packers, CP-SAT lane composition, LNS+CP-SAT, RL M2-M4) died on one
+of two couplings: greedy inner placement that can't find the overhang/corner-contact assignments a real
+optimum needs, or joint placement+routing that blew CP-SAT's ~11×11 window. Roads-first (the user's own
+framing) breaks both at once by fixing the road network *before* placement: with the skeleton fixed per
+probe, the inner problem is pure 2D rectangle packing with an adjacency side-constraint and zero
+connectivity variables — well inside CP-SAT's reach as an exact feasibility check. Because the inner step
+is exact rather than greedy, it can find the same overhang/corner placements that let the user's own
+142-road city route at 2.02 average cell-sharing, which is exactly the trick no prior constructive
+heuristic in this project ever reproduced.
+
+**Strategic implication.** 127 is the first method in this project's history to beat the previous
+all-time-best of 153 (this week's polish arm) and the long-standing local-method floor of 158 — by a
+decisive margin, with most of the search space still unexplored below k=148. It also sits well above the
+Σ(min-side)/2 estimate of 114 (not a bound — assumes perfect double-row tiling, geometrically unreachable
+per the 2026-06-23 entry), so there is room for the k-walk to keep improving without approaching that
+estimate. Per the 2026-07-06 gated-solver-extras policy, this is a search-time result only: `ortools`
+stays a throwaway `uv run --with` dependency, `foeopt/` core is unchanged, and productionizing the pattern
+search (continuing the k-walk past 148, wiring it into `polish`/webapp) is a separate, later spec.
+Artifacts: `output/roads-first/best-k148-a127.json` / `.html` (the winning layout) and the full
+`output/roads-first/best-k*.json` / `.html` set (every improving incumbent found during the walk).

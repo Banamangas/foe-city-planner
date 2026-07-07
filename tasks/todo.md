@@ -165,6 +165,28 @@ all, change the *problem formulation*, not the knobs:
 - [ ] Fold the winning path into `polish`/webapp; surface quality + lower-bound
       numbers in CLI/report output; update README + lessons.
 
+## Track E — Roads-first fixed-skeleton CP-SAT feasibility search — WIN at the gate (2026-07-06)
+
+Per `docs/superpowers/plans/2026-07-06-roads-first-feasibility.md` /
+`docs/superpowers/specs/2026-07-06-roads-first-feasibility-design.md` (the user's own roads-first framing,
+refined against the project's evidence base):
+
+- [x] T1 — Spec §5 amendment + comb/TH-stub pattern generator + certificate-safe arithmetic pre-filter.
+- [x] T2 — CP-SAT placement-feasibility probe + validation pipeline (`route()` + `is_valid` + filler
+      placement) + oracle self-test.
+- [x] T3 — k-walk protocol (152 → −4 while feasible, bisect the gap), JSONL probe log, best-layout
+      artifacts, smoke mode.
+- [x] T4 — Real 6h run + gate verdict: **WIN**. Best achieved 127 roads on darkzig (k=148 pattern,
+      independently re-derived: 224/224 buildings, 63/63 consumers satisfied, `route()`=127, `is_valid`
+      True, no overlaps), 127 ≤ gate threshold 148. **Search truncated by deadline** — only k=152 and
+      k=148 were probed in 6h (172/348 probes timed out at the 120s probe-limit, burning 5.7h); nothing
+      below k=148 was explored, so 127 is a validated achievable count, not a proven floor. First method
+      in the project's history to beat the previous best (153) and the local-method floor (158). Full
+      numbers, gate arithmetic, and mechanism reading: `tasks/lessons.md` 2026-07-06 entry
+      ("Roads-first feasibility search"). Productionization (continuing the k-walk, wiring into
+      `polish`/webapp) is a separate later spec per the gated-solver-extras policy — `ortools` stays a
+      throwaway dependency, `foeopt/` core is unchanged by this result.
+
 ## Order & why this can reach the objective
 
 `0 → A1 (go/no-go) → {A2/A3 ‖ B} → D`, with C1 built early as shared
@@ -370,3 +392,39 @@ opt-in win for slack cities, just not for the darkzig gate. Visual before/
 after of accepted corridor rewrites: `output/lns/<stamp>/` HTML folders.
 Full numbers and gate arithmetic: `tasks/lessons.md` 2026-07-06 entry,
 `.superpowers/sdd/task-8-report.md`.
+
+### Track E — Roads-first feasibility search: gate WIN, search truncated by deadline (2026-07-06)
+
+Ran the pre-committed 6h box (`scripts/exp_roads_first.py darkzig.json`, `output/roads-first/run.txt`),
+348 CP-SAT probes logged to `output/roads-first/probes.jsonl` and recomputed independently (not trusted
+from the run summary): 95 SAT (mean 7.7s, max 100.5s), 81 UNSAT (mean 1.7s, max 48.4s), 172 UNKNOWN (all
+pinned at the 120s probe-limit). Sum of logged `secs` = 21600.9s = 6.0002h, confirming full accounting.
+
+Only two k-levels were reached: k=152 (54 SAT/45 UNSAT/93 UNKNOWN, best achieved 128) and k=148 (41
+SAT/36 UNSAT/79 UNKNOWN, best achieved **127**) — the 172 UNKNOWN timeouts consumed 20727.3s (5.758h,
+~5.7h of the 6h budget), leaving no time to probe below k=148.
+
+**Gate (spec §2.1): best achieved 127 ≤ 148 → WIN.** Independently re-derived
+`output/roads-first/best-k148-a127.json` from scratch: 224/224 buildings placed, 63/63 consumers
+satisfied, `route()` returns exactly 127 (matches the JSON's 127-entry `roads` array), `is_valid` True,
+no overlaps. **This is a validated achievable count, not a proven floor** — `walk_complete = FALSE`,
+`deadline_hit = TRUE`; nothing below k=148 was ever probed, so the true within-family floor is very
+likely lower than 127. 127 beats the previous all-time-best (153) and the long-standing local-method
+floor (158) by a decisive margin.
+
+**Mechanism:** roads-first (the user's own framing) fixes the road skeleton before placement, so the
+inner problem has zero connectivity variables — pure rectangle packing CP-SAT can solve exactly, finding
+the overhang/corner assignments greedy attach could never reach (the same trick behind the user's own
+142-road city's 2.02 average cell-sharing). This is why it beats every one of this project's prior
+structural attempts (four lane/hybrid packers, CP-SAT composition, LNS+CP-SAT, RL M2-M4).
+
+**Operational finding:** the 120s per-probe UNKNOWN limit is the bottleneck, not solve quality — SAT/UNSAT
+resolve fast (means 7.7s/1.7s) but 49% of probes hit the timeout and ate most of the budget. A follow-up
+should tune the probe-limit or solver hints before spending more wall-clock at this configuration.
+
+**Verdict: WIN, with the truncation caveat stated explicitly.** Productionization (continuing the k-walk,
+wiring into `polish`/webapp) is a separate later spec per the gated-solver-extras policy; `ortools` stays
+a throwaway `uv run --with` dependency and `foeopt/` core is unchanged. Full numbers, per-level table, and
+mechanism paragraph: `tasks/lessons.md` 2026-07-06 entry ("Roads-first feasibility search"). Artifacts:
+`output/roads-first/best-k148-a127.json`/`.html` (winning layout) and the full `best-k*.json`/`.html` set.
+Full report: `.superpowers/sdd/task-4-report.md`.
