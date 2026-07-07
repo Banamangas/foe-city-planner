@@ -126,24 +126,25 @@ def _place_row(members: list[Building], lane: list[Cell], side: int,
     cursor = 0
     lx, ly = lane[0]
     for b in members:
+        # FoE buildings cannot rotate: always place at the canonical (w, l).
+        # The lane orientation decides which extent runs ALONG the lane.
         w, l = b.footprint.width, b.footprint.length
-        for ext, dep in ((min(w, l), max(w, l)), (max(w, l), min(w, l))):
-            if horiz:
-                bx = lx + cursor
-                by = ly - dep if side < 0 else ly + 1
-                fp = Footprint(bx, by, ext, dep)
-            else:
-                bx = lx - dep if side < 0 else lx + 1
-                by = ly + cursor
-                fp = Footprint(bx, by, dep, ext)
-            cells = fp.cells()
-            frontage = {(lx + i, ly) if horiz else (lx, ly + i)
-                        for i in range(cursor, cursor + ext)}
-            if cells <= (free - used) and frontage <= set(lane):
-                placed.append(replace(b, footprint=fp))
-                used |= cells
-                cursor += ext
-                break
+        if horiz:
+            along, depth = w, l          # x-extent runs along a horizontal lane
+            bx = lx + cursor
+            by = ly - depth if side < 0 else ly + 1
+        else:
+            along, depth = l, w          # y-extent runs along a vertical lane
+            bx = lx - depth if side < 0 else lx + 1
+            by = ly + cursor
+        fp = Footprint(bx, by, w, l)
+        cells = fp.cells()
+        frontage = {(lx + i, ly) if horiz else (lx, ly + i)
+                    for i in range(cursor, cursor + along)}
+        if cells <= (free - used) and frontage <= set(lane):
+            placed.append(replace(b, footprint=fp))
+            used |= cells
+            cursor += along
         else:
             return None
     return placed
@@ -156,12 +157,9 @@ def _place_fillers(fillers: list[Building], free: set[Cell]) -> list[Building] |
         w, l = b.footprint.width, b.footprint.length
         spot = None
         for (x, y) in sorted(remaining):
-            for fw, fl in ((w, l), (l, w)):
-                fp = Footprint(x, y, fw, fl)
-                if fp.cells() <= remaining:
-                    spot = fp
-                    break
-            if spot:
+            fp = Footprint(x, y, w, l)   # canonical orientation only (no rotation)
+            if fp.cells() <= remaining:
+                spot = fp
                 break
         if spot is None:
             return None
