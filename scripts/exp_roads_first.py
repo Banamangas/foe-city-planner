@@ -494,8 +494,9 @@ def _probe_level(layout, region, consumers, k, rng, args, log, pool=None) -> tup
     to the pre-parallel behavior). If pool is a multiprocessing.pool.Pool, dispatches
     surviving patterns via imap_unordered and collects results in completion order."""
     th = layout.townhall.footprint
+    th_mode = getattr(args, "th_anchors", "coarse")
     pats = generate_patterns(region, th.width, th.length, k, rng, args.patterns,
-                             th_mode=args.th_anchors)
+                             th_mode=th_mode)
     best_achieved = None
     saw_nonproof_failure = False
     order = 0  # monotonic completion counter for the log's `order` field
