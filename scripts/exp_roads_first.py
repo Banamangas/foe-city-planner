@@ -533,6 +533,7 @@ def _probe_level(layout, region, consumers, k, rng, args, log, pool=None) -> tup
             idx = result["pat_index"]
             pat = surviving[idx]
             if handle_result(result, pat):
+                pool.terminate()
                 break
 
     if best_achieved is not None:
