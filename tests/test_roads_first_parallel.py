@@ -317,3 +317,41 @@ def test_fallback_cap_is_k_max_not_168(monkeypatch):
     above_kmax = [k for k in probed_ks if k > k_max]
     assert not above_kmax, (
         f"fallback probed above k_max={k_max}: {above_kmax} (cap not respected)")
+
+
+def test_smoke_does_not_override_k_start(monkeypatch):
+    """--smoke must NOT override k_start to 156; it should leave --k-start auto
+    (the default) so run_search resolves it to pick_k_start(layout). Verify by
+    parsing the smoke args and checking args.k_start == 'auto' (not 156)."""
+    import sys, pathlib
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts"))
+    import exp_roads_first as mod
+
+    # main() parses argv and applies smoke overrides but returns before
+    # run_search if no city is given. Pass --smoke with no city -> p.error()
+    # would fire; instead pass a dummy city path that exists so main proceeds
+    # to run_search, which we spy on.
+    if not pathlib.Path("darkzig.json").exists():
+        pytest.skip("darkzig.json not present")
+
+    captured_args = []
+    real_run_search = mod.run_search
+    def spy_run_search(layout, args):
+        captured_args.append(args)
+        return {"verdict": "DONE", "results": {}}  # short-circuit
+    monkeypatch.setattr(mod, "run_search", spy_run_search)
+    try:
+        mod.main(["darkzig.json", "--smoke"])
+    except Exception:
+        pass
+    monkeypatch.undo()
+    assert captured_args, "main() did not call run_search"
+    args = captured_args[0]
+    assert args.k_start == "auto", (
+        f"--smoke overrode k_start to {args.k_start!r}; expected 'auto' (the default)")
+    # Also confirm the other smoke overrides still apply.
+    assert args.workers == 1
+    assert args.probe_workers == 1
+    assert args.patterns == 20
+    assert args.probe_limit == 20.0
+    assert args.time_box == 600.0

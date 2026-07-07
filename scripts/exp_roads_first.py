@@ -688,7 +688,6 @@ def main(argv=None):
                    help="CP-SAT num_search_workers per probe (portfolio)")
     args = p.parse_args(argv)
     if args.smoke:
-        args.k_start = 156
         args.patterns = 20
         args.probe_limit = 20.0
         args.time_box = 600.0
