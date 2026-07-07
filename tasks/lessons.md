@@ -762,3 +762,156 @@ more probe-time per pattern at the tightest k-levels (longer `--probe-limit`, mo
 (wiring into `polish`/webapp) remains a separate later spec. Artifacts:
 `output/roads-first/best-k116-a104.json`/`.html` and the full `best-k*.json`/`.html` set;
 sequential baseline preserved in `output/roads-first/sequential-baseline-2026-07-07/`.
+
+## Pattern-family ceiling correction + full-TH-sampling test (2026-07-07)
+
+**Correction of an earlier misdiagnosis.** After the parallel run delivered 104, a targeted
+re-run (`--k-start 116 --probe-limit 60 --patterns 400`) was launched to test whether longer
+probe-limits / more patterns at the tight k-levels could flip INCONCLUSIVE→FEASIBLE and push
+below 104. Two findings reshaped the understanding:
+
+1. **`--patterns 400` was a no-op.** At k=116 *and* k=120 the generator yielded exactly 192
+   patterns — same as every k from 108–152. Initial diagnosis blamed the tight-k exact-k
+   discard; that was **wrong**. The real cause: `th_anchor_candidates` is a *deliberate coarse
+   heuristic* (~8 TH positions: 4 corner+offset variants + 2 mid-edge), and the parameter grid
+   (8 TH × 4 sides × 5 spacings × 2 modes × 2 stubs = 640 combinations) dedupes to ~192
+   distinct skeletons. The 192 is an **artifact of the 8-TH sampling**, not a constraint of the
+   comb family or of low k. Measured: 0 exact-k discards at k=120; the ceiling is dedup.
+   **Lesson: measure before reasoning from code shape.** I gave a confident low-k-supply
+   explanation that was empirically false; a 30-line instrumented run would have caught it.
+
+2. **The 104 was portfolio luck, not a robustly reachable result.** The targeted re-run
+   probed all 192 patterns at k=116 and got **0 SAT** (132 UNSAT, 60 UNKNOWN) — vs the
+   parallel run's 1/192 SAT (→ 104). Same family, fully sampled; the difference is CP-SAT
+   portfolio non-determinism (`--probe-workers 4` runs 4 parallel search strategies; whether
+   the one hard SAT at k=116 is found is a coin flip). Spec §6 flagged this as the cost of
+   relaxing search determinism; the targeted run is the first measurement of it. **The robust
+   floor is ~k=118** (108–110 roads): k=117 SAT at 110, k=118 SAT at 110, k=120 SAT at 108.
+   k=116's 104 stands as a validated achievable count (independently re-verified LEGAL on
+   2026-07-07) but NOT as a reproducible one — report it as "achievable under portfolio
+   luck," not "the floor."
+
+**Full-TH-sampling test.** Added `--th-anchors {coarse,full}` flag
+(`scripts/exp_roads_first.py:th_anchor_candidates`). `full` enumerates every (x,y) where the
+TH footprint fits in-region — **2162 positions on darkzig** vs ~8 coarse. Pattern counts:
+
+| k | coarse | full |
+|---|---|---|
+| 120 | 192 | 54,806 |
+| 116 | 192 | 54,995 |
+
+A ~285x increase in pattern diversity — the comb family was nowhere near exhausted; the TH
+sampling was the bottleneck. Quick probe test (`--th-anchors full --k-start 112 --patterns 200
+--probe-limit 30 --time-box 1800`, 4 workers): **k=116 confirmed FEASIBLE at 106** (vs 0 SAT
+coarse), and **k=112 found a SAT at 105 in just 16 probes** — an INCONCLUSIVE level in the
+coarse run (0 SAT, 136 UNSAT, 56 UNKNOWN) flipped to FEASIBLE immediately. Best **105,
+independently re-verified LEGAL** (224/224 placed, `route()`=105 matches, `is_valid` True, 0
+unsatisfied, `rotated_buildings`=0, 0 overlaps, 0 out-of-region).
+
+**This is the highest-leverage diversity lever found in this project.** It's a one-flag change
+to a throwaway script (no `foeopt/` change, no new dep), and it flips the "comb family is
+exhausted at 192" diagnosis into "the comb family has 55k instances; we were sampling 0.3% of
+it." The verified 105 (109% road efficiency) is a new all-time best for a *robustly reachable*
+result (the 104 was luck). Productionization and the richer-pattern-family spec (lanes/stubs)
+both build on this.
+
+## Road-efficiency metric + CP-SAT feasibility insight (2026-07-07)
+
+**Road efficiency = Σ(short sides of road-needing buildings)/2 / roads, as a %.** 100% = every
+road cell serves the double-row ideal (2 buildings); >100% = some road cells serve 3
+(stubs/junctions), beating the Σ/2 estimate. darkzig: 63 consumers, Σ/2 = 114.5.
+
+| run | roads | eff% |
+|---|---|---|
+| sequential baseline (106) | 106 | 108.0% |
+| parallel baseline (104, portfolio luck) | 104 | 110.1% |
+| targeted robust floor (108) | 108 | 106.0% |
+| full-TH k=112 (105, verified) | 105 | 109.0% |
+
+**Every recent roads-first result clears 100% efficiency — unprecedented for this game.**
+The user reports prior tools (one tried years ago) achieved 70–90% and usually had many
+unplaced. Roads-first + CP-SAT placement consistently beats the Σ/2 double-row-tiling
+estimate via the stubs/junctions mechanism (a single road cell serving 3 buildings), which the
+exact placer finds but no greedy constructor in this project ever reproduced.
+
+**CP-SAT returns the *first* feasible placement, not the best.** The probe is a feasibility
+problem (`AddNoOverlap2D` + anchor constraints, no objective). Whether CP-SAT finds SAT in
+3.2s or 30.3s, it stops at the first placement satisfying all constraints — the `secs` reflects
+search difficulty, not result quality. The road count comes from `route()` running on *that
+specific placement*; a different valid placement on the same skeleton could route lower. So:
+- A SAT at 30.3s (borderline, near the probe-limit) is a **ceiling** on what that skeleton can
+  achieve, not the floor. The same skeleton might yield fewer roads with a different placement.
+- A 30.4s UNKNOWN is a skeleton CP-SAT couldn't resolve either way in the limit — might be
+  placeable with more time, might not.
+**Lever identified but not built:** add an *objective* to the CP-SAT model (minimize something
+correlated with post-`route()` road count — e.g. maximize shared road-cell adjacency). Then
+longer probe-time directly lowers the achieved count rather than just flipping UNKNOWNs. This
+is a model change, separate spec. For R&D, not production (longer probes hurt user latency).
+
+**Pool dispatch is queue-based, not batch-based.** `imap_unordered` workers pull the next task
+the moment they finish — no per-task waiting. A 4s SAT worker runs ~7 probes while a 30s
+UNKNOWN worker runs 1. The only idle is at the **level barrier** (last slow task → other 3
+workers idle ~20-30s) — a small tax, measured at 3.9x effective parallelism vs 4x theoretical.
+The rejected Approach 2 (speculative next-k) would eliminate this; not worth the complexity
+now (the boundary idle is ~5-10 min over 13 levels).
+
+## Productionization analysis + RL verdict (2026-07-07)
+
+The user wants to productionize roads-first; 2h/6h search time is fine for R&D but no user will
+wait it. Analysis of how to make it fast for users, roughly in leverage order:
+
+1. **Time-boxed search with graceful degradation (core).** Run the k-walk with a user-facing
+   budget (60–120s, not 6h), return the best achieved layout. The data shows strong layouts
+   come early (k=152→127 in ~30 min sequential; first SAT at k=116 in ~60s with full-TH
+   parallel). A 120s budget lands in k=130–140 territory → ~120–130 roads → ~85–95% efficiency,
+   still far better than the old 70–90% tools. Promise a time bound, return the incumbent.
+2. **Warm-start from the classical pipeline (high leverage).** The project already has a fast
+   classical pipeline (repack + anneal polish → 158 roads in seconds, 0-unplaced). Productionize
+   roads-first as a *polish step on top of the classical result*, not a from-scratch search:
+   run classical (seconds) → 158, then roads-first `--k-start 158` walk-down with 60–120s budget
+   → ~125–135 roads, return whichever is better. User gets a good layout in ~2 min total; roads-
+   first only spends time improving. Slots in beside the existing `polish`/`improve` CLI modes.
+3. **Smarter k-start from a lower bound.** Today the walk starts at 152 (arbitrary) and steps
+   down. With the adjacency bound (`foeopt/bounds.py::bound_adjacency`=21) and Σ/2 (114), start
+   at ~130 (just below the classical 158) and step down — skip the easy high-k levels where
+   nothing is learned. The targeted run proved this: `--k-start 116` saved ~1.5h.
+4. **Any-time / incremental results.** Surface the incumbent layout to the user as it improves
+   (the webapp already renders HTML). A user watching 140→130→120 over 60s feels progress; a
+   60s spinner feels like nothing. UX lever, not algorithmic, but changes perceived performance.
+5. **Cache the pattern family.** `generate_patterns --th-anchors full` takes noticeable time to
+   enumerate 55k patterns. Precompute/memoize per region shape for a productionized tool.
+
+**Does NOT help productionization:** longer probe-limits (60–90s, helps R&D optima, hurts user
+latency); more patterns (400+, more thorough, slower); objective-augmented CP-SAT (better
+placements, more solve time). All are R&D levers.
+
+**Production recipe:** time-boxed (60–120s) + warm-started from the classical pipeline + smart
+k-start + any-time UX. That gets a user from 158 → ~125 roads in ~2 min — a ~21% improvement on
+the project's own best fast method, at ~110%+ efficiency. Unprecedented for the game.
+
+**RL verdict: NOT revived as the main bet.** Roads-first + CP-SAT is the main bet now and it
+works. But the findings open a **narrow, well-defined RL role** for later consideration:
+- **RL as skeleton chooser, CP-SAT as placer.** Train a policy to *select a road skeleton* (the
+  high-level decision: TH position + side + spacing + mode + stubs — discrete, low-dimensional),
+  then use the exact placer to fill buildings around it. The policy never places a building, so
+  the M2–M4 `unroutable` failure mode (placement at dense fill) disappears by construction.
+- **The roads-first probe *is* the labeler.** Run the probe on 55k patterns → 55k (skeleton →
+  achieved_roads) labels → train a policy to predict low-achieving skeletons. This is the BC/
+  DAgger setup C3 proposed, but with a much cleaner labeler than "repack outputs" (which capped
+  quality at ~169).
+- **Hesitations:** (a) CP-SAT is slow per label (~8h to label 55k patterns once on 16 cores;
+  DAgger iterates); (b) the policy would inherit the pattern generator's biases — needs the
+  richer lane/stub family first (the same next-spec identified 2026-07-02); (c) the productionized
+  time-boxed search might be fast enough that RL's marginal value is small — "last 30%" latency
+  optimization, not "make it work."
+**RL stays off the table for now.** Revisit only if (1) the time-boxed CP-SAT search ships and
+60–120s latency is still a user complaint, AND (2) the richer lane/stub pattern family has
+shipped (RL needs it to escape the comb bias). The M2–M4 placement-RL track stays archived.
+
+**Recommended next specs, in order:**
+1. **Productionization spec (Track D)** — time-boxed roads-first, warm-started from classical,
+   any-time UX. Delivers user value; the findings give it a clear recipe.
+2. **Richer pattern family spec** — expand TH sampling (proven: 55k patterns, flips INCONCLUSIVE
+   to FEASIBLE, verified 105) + add lane/stub topologies (to represent the expert's structure
+   and push below 105). R&D track that feeds back into #1 (better patterns → better user results
+   in the same time budget).
