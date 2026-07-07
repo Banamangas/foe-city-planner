@@ -165,7 +165,13 @@ all, change the *problem formulation*, not the knobs:
 - [ ] Fold the winning path into `polish`/webapp; surface quality + lower-bound
       numbers in CLI/report output; update README + lessons.
 
-## Track E — Roads-first fixed-skeleton CP-SAT feasibility search — WIN at the gate (2026-07-06)
+## Track E — Roads-first fixed-skeleton CP-SAT feasibility search — 127 RETRACTED, re-run pending (2026-07-07)
+
+**The T4 "127-road WIN" below is RETRACTED — the layout was invalid (19/33 non-square consumers placed
+ROTATED, which FoE forbids).** Fixed 2026-07-07: `rotated_buildings` guard in `foeopt/validate.py`;
+rotation removed from `scripts/exp_roads_first.py` + `foeopt/lns.py`; de-rotated search re-running for an
+honest legal number (will be higher than 127, possibly above 153). See the 2026-07-07 RETRACTION in
+`tasks/lessons.md`. T1–T3 stand (the machinery is correct once de-rotated); T4's verdict is void.
 
 Per `docs/superpowers/plans/2026-07-06-roads-first-feasibility.md` /
 `docs/superpowers/specs/2026-07-06-roads-first-feasibility-design.md` (the user's own roads-first framing,

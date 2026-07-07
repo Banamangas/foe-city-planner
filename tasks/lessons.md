@@ -502,7 +502,26 @@ other dead track died on evidence about the problem, not on library access. But 
 unspoken extra bar. Pre-committing the promotion rule removes the distortion without giving up the
 zero-dependency core install.
 
-## Roads-first feasibility search (2026-07-06)
+## Roads-first "127" RETRACTED — invalid, buildings were rotated (2026-07-07)
+**The 127-road result below is INVALID and the WIN is withdrawn.** The roads-first CP-SAT model gave each
+non-square consumer an orientation variable and placed **19 of the 33 non-square consumers ROTATED**
+(width/length swapped vs their canonical footprint). **FoE buildings cannot rotate** (hard game
+constraint, user-confirmed), so the layout is illegal. The "independent verification" below checked the
+wrong invariant: `route()`=127 / `is_valid` / 0-unsatisfied are all true but NONE of them look at
+orientation — `is_valid` has no canonical reference and never did.
+**Root cause & the real lesson:** verification must check the invariant that *matters*, not the ones that
+are easy. Every check I ran passed because none examined orientation. Fixed 2026-07-07:
+`foeopt/validate.py` gained `rotated_buildings(layout, canonical_dims(loaded))` (is_valid stays
+orientation-blind by necessity — a bare Layout has no canonical reference, so NEW placement methods must
+call the guard explicitly); rotation removed from `scripts/exp_roads_first.py` and `foeopt/lns.py`
+(the pre-existing packer/anneal/router never rotated — they use same-footprint position moves, so all
+prior 250→158→153 results are unaffected). The de-rotated search must be re-run for an honest legal
+number, which will be HIGHER than 127 (19 buildings lose a degree of freedom) and may land above 153.
+**Rule:** never write placement code that tries both `(w,l)` and `(l,w)`; verify every new placement
+method with `rotated_buildings` against the loaded canonical dims. The rest of this entry is kept for
+the record but its 127/WIN conclusion is void.
+
+## Roads-first feasibility search (2026-07-06) — [see RETRACTION above; 127 is invalid]
 
 **Headline result: 127 roads on darkzig, independently verified.** `output/roads-first/best-k148-a127.json`
 (pattern k=148, comb+TH-stub family) was re-derived from scratch outside the probe harness: all 224
