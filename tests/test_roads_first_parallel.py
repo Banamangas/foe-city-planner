@@ -1,4 +1,4 @@
-import sys, pathlib
+import sys, pathlib, time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts"))
 
 import pytest
@@ -35,7 +35,7 @@ def test_run_probe_unsat_returns_status_no_layout():
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(mod, "probe", fake_probe)
     try:
-        result = mod._run_probe((pat, 1, lay, 30.0, 1))
+        result = mod._run_probe((pat, 1, lay, 30.0, 1, 0))
     finally:
         monkeypatch.undo()
     assert set(result.keys()) >= {"k", "params", "status", "achieved", "secs", "layout"}
@@ -46,3 +46,100 @@ def test_run_probe_unsat_returns_status_no_layout():
     assert result["secs"] >= 0.0
     assert result["k"] == 1
     assert result["params"] == pat.params
+
+
+def test_probe_level_sequential_fallback_matches_today():
+    """With pool=None, _probe_level must behave exactly as today: patterns
+    probed in generation order, results logged in order, best-achieved
+    computed. Verify via a fake _run_probe that records call order."""
+    import random
+    from foeopt.model import Building, Footprint, Layout, Region
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
+                  False, 1, True, None, None, "TH")
+    c1 = Building(10, "c10", "g", Footprint(0, 0, 2, 2), True, 1, False, None, None, "a")
+    region = Region(frozenset((x, y) for x in range(6) for y in range(6)))
+    lay = Layout(region, [th, c1], th, {})
+
+    call_order = []
+    from types import SimpleNamespace
+    fake_layout = SimpleNamespace(roads=set(), buildings=[])
+    def fake_run_probe(payload):
+        pat, k, layout, probe_limit, probe_workers, pat_index = payload
+        call_order.append(pat.params)
+        if len(call_order) == 1:
+            return {"k": k, "params": pat.params, "status": "SAT",
+                    "achieved": k, "secs": 0.1,
+                    "layout": fake_layout}
+        return {"k": k, "params": pat.params, "status": "UNSAT",
+                "achieved": None, "secs": 0.1, "layout": None}
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(mod, "_run_probe", fake_run_probe)
+    monkeypatch.setattr(mod, "render_html", lambda lay: "<html/>")
+    monkeypatch.setattr(mod.json, "dumps", lambda obj, indent=None: "{}")
+
+    class FakeArgs:
+        patterns = 5
+        probe_limit = 30.0
+        probe_workers = 1
+        deadline = time.monotonic() + 600
+
+    log_rows = []
+    def log(row):
+        log_rows.append(row)
+
+    region_set = set(region.cells)
+    rng = random.Random(0)
+    try:
+        status, best = mod._probe_level(lay, region_set, [c1], 1, rng,
+                                        FakeArgs, log, pool=None)
+    finally:
+        monkeypatch.undo()
+
+    pats = list(mod.generate_patterns(region_set, 2, 2, 1, random.Random(0), 5))
+    expected_order = [p.params for p in pats if mod.prefilter(p, region_set, [c1]) is None]
+    assert call_order == expected_order, (
+        f"sequential fallback must probe in generation order; got {call_order} "
+        f"expected {expected_order}")
+    assert status == "FEASIBLE"
+    assert best == 1
+    assert any(r.get("status") == "SAT" for r in log_rows)
+
+
+def test_probe_level_parallel_dispatch_completes_all(monkeypatch):
+    """With a real Pool(2), _probe_level must dispatch all surviving patterns
+    and collect every result (order may vary, set of statuses must match)."""
+    import random
+    from foeopt.model import Building, Footprint, Layout, Region
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
+                  False, 1, True, None, None, "TH")
+    c1 = Building(10, "c10", "g", Footprint(0, 0, 2, 2), True, 1, False, None, None, "a")
+    region = Region(frozenset((x, y) for x in range(6) for y in range(6)))
+    lay = Layout(region, [th, c1], th, {})
+
+    class FakeArgs:
+        patterns = 5
+        probe_limit = 30.0
+        probe_workers = 1
+        deadline = time.monotonic() + 600
+
+    log_rows = []
+    def log(row):
+        log_rows.append(row)
+
+    region_set = set(region.cells)
+    rng = random.Random(0)
+    pool = mod.multiprocessing.Pool(2)
+    try:
+        status, best = mod._probe_level(lay, region_set, [c1], 1, rng,
+                                        FakeArgs, log, pool=pool)
+    finally:
+        pool.close()
+        pool.join()
+
+    pats = list(mod.generate_patterns(region_set, 2, 2, 1, random.Random(0), 5))
+    surviving = [p for p in pats if mod.prefilter(p, region_set, [c1]) is None]
+    probed = [r for r in log_rows if r.get("status") != "PREFILTERED"]
+    assert len(probed) == len(surviving), (
+        f"parallel dispatch must probe all {len(surviving)} surviving patterns, "
+        f"got {len(probed)} log rows")
