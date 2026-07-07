@@ -24,6 +24,7 @@ from dataclasses import dataclass, replace
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+from foeopt.bounds import pick_k_start
 from foeopt.loader import load_layout
 from foeopt.model import Building, Footprint, Layout, Region
 from foeopt.packing import Grid, first_fit
@@ -598,6 +599,10 @@ def run_search(layout, args) -> dict:
                 return results[k]
 
             truncated = False                     # any loop cut short by the deadline
+            # Resolve --k-start auto to the city-aware heuristic value.
+            if args.k_start == "auto":
+                args.k_start = pick_k_start(layout)
+                print(f"k_start (auto) = {args.k_start}", flush=True)
             k = args.k_start
             st, _ = level(k)
             if st != "FEASIBLE":                  # spec §8: family-too-weak fallback
@@ -651,6 +656,16 @@ def run_search(layout, args) -> dict:
             pool.join()
 
 
+def _k_start_type(s: str):
+    """argparse type for --k-start: 'auto' or an integer."""
+    if s == "auto":
+        return "auto"
+    try:
+        return int(s)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be 'auto' or an integer")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("city", nargs="?")
@@ -660,7 +675,8 @@ def main(argv=None):
                    help="TH anchor sampling: coarse (~8 heuristic) or full (~2000)")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--selftest", action="store_true")
-    p.add_argument("--k-start", type=int, default=152)
+    p.add_argument("--k-start", type=_k_start_type, default="auto",
+                   help="k-walk start: 'auto' (city-aware, default) or an integer")
     p.add_argument("--probe-limit", type=float, default=120.0)
     p.add_argument("--time-box", type=float, default=21600.0)
     p.add_argument("--smoke", action="store_true")
