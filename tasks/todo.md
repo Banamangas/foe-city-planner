@@ -503,3 +503,33 @@ policy. Full numbers, per-level table, mechanism, and code-change summary:
 `tasks/lessons.md` 2026-07-07 entry ("Roads-first parallel re-run"). Artifacts:
 `output/roads-first/best-k116-a104.json`/`.html`; sequential baseline preserved in
 `output/roads-first/sequential-baseline-2026-07-07/`.
+
+### Track E v4 — Pattern-ceiling correction + full-TH-sampling + productionization analysis (2026-07-07)
+
+Targeted re-run + full-TH test reshaped the understanding (see `tasks/lessons.md` 2026-07-07
+entries: "Pattern-family ceiling correction", "Road-efficiency metric + CP-SAT feasibility
+insight", "Productionization analysis + RL verdict"):
+
+- **The 192-per-k ceiling was an artifact of the 8-TH coarse heuristic**, NOT a comb-family or
+  low-k constraint. `--th-anchors full` enumerates 2162 TH positions → ~55k distinct patterns
+  per k (285x). Highest-leverage diversity lever found; one-flag throwaway-script change.
+- **The parallel 104 was portfolio luck** (targeted re-run got 0 SAT at k=116 across all 192
+  coarse patterns). Robust floor is ~k=118 (108–110 roads). Report 104 as "achievable under
+  portfolio luck," not "the floor."
+- **Full-TH test: 105 roads at k=112, independently verified LEGAL** (109.0% road efficiency),
+  in just 16 probes at k=112 — flips INCONCLUSIVE→FEASIBLE. New all-time best for a *robustly
+  reachable* result. `--th-anchors` flag shipped (commit 4655b51).
+- **Road efficiency metric established:** Σ(short)/2 / roads as %. Every recent roads-first
+  result >100% (106→108%, 104→110%, 105→109%) — unprecedented for the game (prior tools 70–90%
+  with many unplaced).
+- **CP-SAT returns first feasible placement, not best** (no objective) — a SAT at 30.3s is a
+  ceiling on that skeleton, not the floor. Objective-augmented probe is a candidate R&D spec.
+- **Productionization recipe:** time-boxed (60–120s) + warm-started from classical (158) +
+  smart k-start + any-time UX → ~125 roads in ~2 min, ~110%+ efficiency. Track D.
+- **RL NOT revived as main bet.** Narrow role as skeleton-chooser (CP-SAT as placer) possible
+  later, off the table until productionization ships AND the richer lane/stub family ships.
+
+**Next specs, in order:** (1) Productionization (Track D) — time-boxed roads-first warm-started
+from classical; (2) Richer pattern family — full-TH sampling (shipped) + lane/stub topologies
+to push below 105. Artifacts: `output/roads-first/best-k112-a105.json`/`.html` (verified 105);
+targeted baseline in `output/roads-first/targeted-baseline-2026-07-07/`.
