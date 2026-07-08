@@ -28,3 +28,28 @@ def report_bounds(layout: Layout) -> dict[str, int]:
     bounds = {"adjacency": bound_adjacency(layout)}
     bounds["max"] = max(bounds.values())
     return bounds
+
+
+def pick_k_start(layout: Layout) -> int:
+    """City-aware k_start for the roads-first k-walk.
+
+    k_start = min(k_max, ceil(sigma_half) + 8) where:
+      k_max      = region_cells - building_area  (hard area ceiling; above it
+                   no placement is possible by simple area accounting)
+      sigma_half = sum(min(w, l) for each road-needing consumer) / 2
+                   (the 100%-efficiency anchor; optima sit at or below it via
+                   stubs/junctions serving 3 buildings per road cell)
+
+    Margin 8 keeps the first probe almost always feasible for the comb family
+    while skipping the slack above sigma_half. If sigma_half + 8 is infeasible
+    the upward fallback walks up (capped at k_max). Never exceeds k_max.
+
+    Not a bound -- a starting guess. The walk-down stops at the first
+    INCONCLUSIVE/INFEASIBLE level, as today (bound_adjacency is unreachable
+    in practice and is not used as a stop signal)."""
+    region_cells = len(layout.region.cells)
+    building_area = sum(b.footprint.width * b.footprint.length for b in layout.buildings)
+    k_max = region_cells - building_area
+    sigma_half = sum(min(b.footprint.width, b.footprint.length)
+                     for b in layout.road_needing()) / 2
+    return min(k_max, math.ceil(sigma_half) + 8)
