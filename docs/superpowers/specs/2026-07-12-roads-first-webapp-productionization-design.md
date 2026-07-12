@@ -88,7 +88,7 @@ catalog only needs `width`, `length`, `requirements.street_connection_level`,
    `CityMapData`, `UnlockedAreas`, `CityEntities`).
 3. Extract and pass through `CityMapData` (~475 entries, ~200KB) and
    `UnlockedAreas` (~156 entries, ~20KB) unchanged.
-4. Strip each `CityEntities` entry to:
+4. Strip each `CityEntities` entry to the fields the catalog actually reads:
    ```json
    {
      "id": "...",
@@ -96,11 +96,22 @@ catalog only needs `width`, `length`, `requirements.street_connection_level`,
      "length": 5,
      "name": "...",
      "requirements": { "street_connection_level": 2 },
-     "abilities": [ {"setId": "..."}, {"chainId": "..."} ]
+     "abilities": [ {"setId": "..."}, {"chainId": "..."} ],
+     "components": { "p": { "placement": { "size": { "x": 5, "y": 5 } } } }
    }
    ```
-   Only these fields — `abilities`, `components`, `entity_levels` and all other
-   bloat dropped. Resulting slim payload: ~3-5MB.
+   - `width`/`length`: top-level size (primary).
+   - `requirements.street_connection_level`: road level.
+   - `abilities`: full array preserved (catalog iterates to find `setId`/
+     `chainId` keys). Other ability keys (rewards, boosts) are dropped per-entry
+     to slim further — only `setId`/`chainId` keys survive inside each ability
+     object.
+   - `components`: catalog's fallback for `size()` when `width`/`length` are
+     absent. Slim each component to only its `placement.size` field (drop
+     `asset`, `abilities`, `state`, etc.).
+   - `entity_levels`, `type`, `asset_id`, `stateDefinitionHash` and all other
+     bloat fields dropped.
+   Resulting slim payload: ~3-5MB (down from ~90MB).
 5. POST slim payload to `/api/load`.
 6. Web Worker posts progress messages (bytes processed / total) to React.
    React shows progress bar: "Stripping bloat… 45MB / 90MB".
