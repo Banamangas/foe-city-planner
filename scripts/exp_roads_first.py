@@ -8,17 +8,15 @@ the original CLI interface for experimentation:
   uv run python scripts/exp_roads_first.py darkzig.json --smoke
   uv run python scripts/exp_roads_first.py darkzig.json --th-anchors full
 
-The worker plumbing (_worker_init/_run_probe/_run_probe_seq/_probe_level/
-run_search) is defined here rather than re-imported so the existing parallel
-tests can monkeypatch mod.probe / mod._run_probe / mod._probe_level /
-mod.render_html / mod.run_search and have the patches take effect through this
-module's globals. The leaf helpers they call are imported from the module.
+The k-walk is driven by RoadsFirstSearch.run() from foeopt.roads_first. The
+worker plumbing (_worker_init/_run_probe) is still defined here because
+--selftest directly exercises the pool path at the worker level to verify
+parallel/sequential equivalence.
 """
 from __future__ import annotations
 
 import argparse
 import json
-import multiprocessing
 import pathlib
 import random
 import sys
@@ -26,20 +24,16 @@ import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from foeopt.bounds import pick_k_start
 from foeopt.loader import load_layout
 from foeopt.model import Layout
 from foeopt.roads_first import (
     Pattern, generate_patterns, prefilter, probe, validate,
     _check_pattern, RoadsFirstSearch,
 )
-from foeopt.viz import render_html
-
-# Re-export for existing tests that import from exp_roads_first.
-_ORTHO = ((1, 0), (-1, 0), (0, 1), (0, -1))
-Cell = tuple[int, int]
 
 # Worker-process globals set by _worker_init (sent once per worker, not per task).
+# Kept locally because --selftest exercises the pool path directly to verify
+# parallel/sequential equivalence at the worker level.
 _WORKER_LAYOUT: Layout | None = None
 _WORKER_PROBE_LIMIT: float = 30.0
 _WORKER_PROBE_WORKERS: int = 1
@@ -57,9 +51,8 @@ def _run_probe(payload: tuple) -> dict:
 
     payload = (pattern, k, pat_index). Layout/probe_limit/probe_workers are read
     from the worker-process globals (_WORKER_LAYOUT/_WORKER_PROBE_LIMIT/
-    _WORKER_PROBE_WORKERS), set once per worker by _worker_init (or transiently
-    by _run_probe_seq in the sequential path). Returns a result dict with keys:
-    k, params, status, achieved, secs, layout, pat_index.
+    _WORKER_PROBE_WORKERS), set once per worker by _worker_init. Returns a
+    result dict with keys: k, params, status, achieved, secs, layout, pat_index.
     """
     pat, k, pat_index = payload
     layout = _WORKER_LAYOUT
@@ -79,179 +72,6 @@ def _run_probe(payload: tuple) -> dict:
                 "achieved": achieved, "secs": secs, "layout": vlay, "pat_index": pat_index}
     return {"k": k, "params": pat.params, "status": vstat,
             "achieved": None, "secs": secs, "layout": None, "pat_index": pat_index}
-
-
-def _run_probe_seq(payload: tuple) -> dict:
-    """Sequential-mode wrapper: sets globals temporarily and calls _run_probe.
-    Kept separate so the pool path's globals are never mutated by the parent."""
-    global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS
-    pat, k, layout, probe_limit, probe_workers = payload
-    _WORKER_LAYOUT = layout
-    _WORKER_PROBE_LIMIT = probe_limit
-    _WORKER_PROBE_WORKERS = probe_workers
-    try:
-        return _run_probe((pat, k, 0))
-    finally:
-        _WORKER_LAYOUT = None
-
-
-def _probe_level(layout, region, consumers, k, rng, args, log, pool=None) -> tuple[str, int | None]:
-    """Probe up to --patterns patterns at level k. Returns (level_status, best_achieved):
-    level_status in {"FEASIBLE", "INFEASIBLE", "INCONCLUSIVE"}. If pool is None,
-    probes sequentially in generation order; if pool is a Pool, dispatches via
-    imap_unordered and collects results in completion order."""
-    th = layout.townhall.footprint
-    th_mode = getattr(args, "th_anchors", "coarse")
-    pats = generate_patterns(region, th.width, th.length, k, rng, args.patterns,
-                             th_mode=th_mode)
-    best_achieved = None
-    saw_nonproof_failure = False
-    order = 0
-
-    def handle_result(result, pat):
-        nonlocal best_achieved, order, saw_nonproof_failure
-        order += 1
-        status = result["status"]
-        achieved = result["achieved"]
-        log({"k": k, "params": pat.params, "status": status,
-             "achieved": achieved, "secs": result["secs"], "order": order})
-        if status == "SAT":
-            vlay = result["layout"]
-            if best_achieved is None or achieved < best_achieved:
-                best_achieved = achieved
-                out_dir = pathlib.Path("output/roads-first")
-                out_dir.mkdir(parents=True, exist_ok=True)
-                stem = f"best-k{k}-a{achieved}"
-                (out_dir / f"{stem}.json").write_text(json.dumps({
-                    "k": k, "achieved": achieved, "pattern": pat.params,
-                    "roads": sorted(vlay.roads),
-                    "buildings": {b.entity_id: [b.footprint.x, b.footprint.y,
-                                                b.footprint.width, b.footprint.length]
-                                  for b in vlay.buildings}}, indent=1), encoding="utf-8")
-                (out_dir / f"{stem}.html").write_text(render_html(vlay), encoding="utf-8")
-        elif status in ("UNKNOWN", "ROUTE_FAIL", "INVALID", "SAT_FILLER_FAIL", "SAT_ROTATED"):
-            saw_nonproof_failure = True
-        if time.monotonic() > args.deadline:
-            return True  # signal: stop submitting / drain
-        return False
-
-    surviving = []
-    for pat in pats:
-        reason = prefilter(pat, region, consumers)
-        if reason is not None:
-            log({"k": k, "params": pat.params, "status": "PREFILTERED",
-                 "reason": reason, "secs": 0.0, "order": 0})
-            continue
-        surviving.append(pat)
-
-    if pool is None:
-        for pat in surviving:
-            result = _run_probe_seq((pat, k, layout, args.probe_limit, args.probe_workers))
-            if handle_result(result, pat):
-                return ("INCONCLUSIVE" if best_achieved is None else "FEASIBLE", best_achieved)
-    else:
-        payloads = [(pat, k, idx) for idx, pat in enumerate(surviving)]
-        for result in pool.imap_unordered(_run_probe, payloads):
-            idx = result["pat_index"]
-            pat = surviving[idx]
-            if handle_result(result, pat):
-                pool.terminate()
-                break
-
-    if best_achieved is not None:
-        return ("FEASIBLE", best_achieved)
-    if not pats:
-        return ("INCONCLUSIVE", None)
-    return ("INCONCLUSIVE" if saw_nonproof_failure else "INFEASIBLE", None)
-
-
-def run_search(layout, args) -> dict:
-    region = set(layout.region.cells)
-    consumers = layout.road_needing()
-    rng = random.Random(args.seed)
-    out_dir = pathlib.Path("output/roads-first")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    pool = None
-    if args.workers > 1:
-        pool = multiprocessing.Pool(
-            args.workers,
-            initializer=_worker_init,
-            initargs=(layout, args.probe_limit, args.probe_workers))
-    try:
-        with (out_dir / "probes.jsonl").open("a", encoding="utf-8") as logf:
-
-            def log(row):
-                logf.write(json.dumps(row) + "\n")
-                logf.flush()
-
-            def timed_out():
-                return time.monotonic() >= args.deadline
-
-            results: dict[int, tuple[str, int | None]] = {}
-
-            def level(k):
-                if k not in results:
-                    print(f"probing k={k} ...", flush=True)
-                    results[k] = _probe_level(layout, region, consumers, k, rng, args, log,
-                                              pool=pool)
-                    print(f"  k={k}: {results[k][0]}"
-                          f"{' achieved=' + str(results[k][1]) if results[k][1] is not None else ''}",
-                          flush=True)
-                return results[k]
-
-            truncated = False
-            if args.k_start == "auto":
-                args.k_start = pick_k_start(layout)
-                print(f"k_start (auto) = {args.k_start}", flush=True)
-            k = args.k_start
-            st, _ = level(k)
-            if st != "FEASIBLE":
-                k_max = len(layout.region.cells) - sum(
-                    b.footprint.width * b.footprint.length for b in layout.buildings)
-                while st != "FEASIBLE" and k < k_max:
-                    if timed_out():
-                        truncated = True
-                        break
-                    k += 4
-                    st, _ = level(k)
-                if st != "FEASIBLE":
-                    return {"verdict": "FAMILY_TOO_WEAK", "walk_complete": not truncated,
-                            "deadline_hit": timed_out(), "results": results}
-            lo_feasible = k
-            while True:
-                if timed_out():
-                    truncated = True
-                    break
-                nxt = lo_feasible - 4
-                if nxt < 1:
-                    break
-                st, _ = level(nxt)
-                if st == "FEASIBLE":
-                    lo_feasible = nxt
-                else:
-                    break
-            lo, hi = lo_feasible - 4, lo_feasible
-            while hi - lo > 1:
-                if timed_out():
-                    truncated = True
-                    break
-                mid = (lo + hi) // 2
-                st, _ = level(mid)
-                if st == "FEASIBLE":
-                    hi = mid
-                else:
-                    lo = mid
-            best = min((r[1] for r in results.values() if r[1] is not None), default=None)
-            unknowns = sum(1 for r in results.values() if r[0] == "INCONCLUSIVE")
-            return {"verdict": "DONE",
-                    "lowest_feasible_k_probed": hi if best is not None else None,
-                    "best_achieved": best, "inconclusive_levels": unknowns,
-                    "walk_complete": not truncated, "deadline_hit": timed_out(),
-                    "results": results}
-    finally:
-        if pool is not None:
-            pool.close()
-            pool.join()
 
 
 def _selftest() -> int:
@@ -366,9 +186,37 @@ def main(argv=None):
     if args.city is None:
         p.error("city is required for the k-walk (or use --selftest / --dump-patterns)")
 
-    args.deadline = time.monotonic() + args.time_box
     layout = load_layout(args.city)
-    res = run_search(layout, args)
+    out_dir = pathlib.Path("output/roads-first")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    def on_status(k, status, _, _2):
+        print(f"  k={k}: {status}", flush=True)
+
+    def on_improvement(vlay, k, achieved):
+        stem = f"best-k{k}-a{achieved}"
+        (out_dir / f"{stem}.json").write_text(json.dumps({
+            "k": k, "achieved": achieved,
+            "roads": sorted(vlay.roads),
+            "buildings": {b.entity_id: [b.footprint.x, b.footprint.y,
+                                        b.footprint.width, b.footprint.length]
+                          for b in vlay.buildings}}, indent=1), encoding="utf-8")
+        try:
+            from foeopt.viz import render_html
+            (out_dir / f"{stem}.html").write_text(render_html(vlay), encoding="utf-8")
+        except Exception:
+            pass
+
+    res = RoadsFirstSearch(
+        layout,
+        time_box=args.time_box,
+        patterns=args.patterns,
+        probe_limit=args.probe_limit,
+        workers=args.workers,
+        probe_workers=args.probe_workers,
+        th_anchors=args.th_anchors,
+        k_start=args.k_start,
+    ).run(on_improvement=on_improvement, on_status=on_status)
     print(json.dumps({k: v for k, v in res.items() if k != "results"}, indent=1))
     per_level = {k: v[0] + (f" achieved={v[1]}" if v[1] is not None else "")
                  for k, v in sorted(res["results"].items())}

@@ -1,11 +1,9 @@
-import sys, pathlib, time
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts"))
-
+import time
 import pytest
 
-# Import without ortools in scope; _run_probe must be importable and its
-# non-CP-SAT branches testable without the solver installed.
-import exp_roads_first as mod
+# Import the real module under test, not the CLI wrapper. Tests that need
+# CLI-specific behavior (arg parsing, --smoke) import exp_roads_first locally.
+from foeopt import roads_first as mod
 
 
 def test_run_probe_unsat_returns_status_no_layout():
@@ -81,8 +79,6 @@ def test_probe_level_sequential_fallback_matches_today():
 
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(mod, "_run_probe", fake_run_probe)
-    monkeypatch.setattr(mod, "render_html", lambda lay: "<html/>")
-    monkeypatch.setattr(mod.json, "dumps", lambda obj, indent=None: "{}")
 
     class FakeArgs:
         patterns = 5
@@ -190,85 +186,65 @@ def test_run_probe_payload_uses_worker_global_not_embedded_layout(monkeypatch):
 
 
 def test_k_start_auto_resolves_to_pick_k_start_value(monkeypatch):
-    """--k-start auto should resolve to pick_k_start(layout) inside run_search,
-    not stay as the string 'auto' (which would crash the k-walk's integer
-    arithmetic). Verify by capturing the k the first level() call probes."""
-    import sys, pathlib
-    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts"))
-    import exp_roads_first as mod
+    """k_start='auto' should resolve to pick_k_start(layout) inside
+    RoadsFirstSearch.run, not stay as the string 'auto' (which would crash the
+    k-walk's integer arithmetic). Verify by capturing the k the first level()
+    call probes."""
     from foeopt.loader import load_layout
     from foeopt.bounds import pick_k_start
 
     lay = load_layout("darkzig.json")  # assumes cwd is repo root; skip if absent
+    import pathlib
     if not pathlib.Path("darkzig.json").exists():
         pytest.skip("darkzig.json not present")
 
     captured_k = []
-    real_probe_level = mod._probe_level
-    def spy_probe_level(layout, region, consumers, k, rng, args, log, pool=None):
+    def spy_probe_level(layout, region, consumers, k, rng, args, log, pool=None,
+                        on_improvement=None):
         captured_k.append(k)
         return ("FEASIBLE", 200)  # short-circuit: one level, then walk stops
 
     monkeypatch.setattr(mod, "_probe_level", spy_probe_level)
-    # Also force an immediate deadline so the walk does one level and exits.
-    import time as _t
-    class FakeArgs:
-        k_start = "auto"
-        patterns = 5
-        probe_limit = 30.0
-        probe_workers = 1
-        workers = 1
-        th_anchors = "coarse"
-        seed = 0
-        time_box = 1.0  # 1 second -> deadline fires immediately after first level
-        deadline = _t.monotonic() + 1.0
-    args = FakeArgs()
+    search = mod.RoadsFirstSearch(
+        lay, time_box=1.0, patterns=5, probe_limit=30.0,
+        workers=1, probe_workers=1, th_anchors="coarse", k_start="auto")
     try:
-        mod.run_search(lay, args)
+        search.run()
     except Exception:
-        pass  # run_search may error on the short-circuit; we only care about captured_k
+        pass  # run may error on the short-circuit; we only care about captured_k
     monkeypatch.undo()
     expected = pick_k_start(lay)
-    assert captured_k, "run_search did not probe any level"
+    assert captured_k, "run did not probe any level"
     assert captured_k[0] == expected, (
-        f"--k-start auto should probe k={expected} first (pick_k_start), "
+        f"k_start='auto' should probe k={expected} first (pick_k_start), "
         f"got k={captured_k[0]}")
 
 
 def test_k_start_explicit_integer_overrides_auto(monkeypatch):
-    """--k-start 152 (explicit integer) must use 152 exactly, not pick_k_start."""
-    import sys, pathlib
-    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts"))
-    import exp_roads_first as mod
+    """k_start=152 (explicit integer) must use 152 exactly, not pick_k_start."""
     from foeopt.loader import load_layout
+    import pathlib
 
     if not pathlib.Path("darkzig.json").exists():
         pytest.skip("darkzig.json not present")
     lay = load_layout("darkzig.json")
 
     captured_k = []
-    def spy_probe_level(layout, region, consumers, k, rng, args, log, pool=None):
+    def spy_probe_level(layout, region, consumers, k, rng, args, log, pool=None,
+                        on_improvement=None):
         captured_k.append(k)
         return ("FEASIBLE", 200)
     monkeypatch.setattr(mod, "_probe_level", spy_probe_level)
-    import time as _t
-    class FakeArgs:
-        k_start = 152
-        patterns = 5
-        probe_limit = 30.0
-        probe_workers = 1
-        workers = 1
-        th_anchors = "coarse"
-        seed = 0
-        time_box = 1.0
-        deadline = _t.monotonic() + 1.0
+    search = mod.RoadsFirstSearch(
+        lay, time_box=1.0, patterns=5, probe_limit=30.0,
+        workers=1, probe_workers=1, th_anchors="coarse", k_start=152)
     try:
-        mod.run_search(lay, FakeArgs())
+        search.run()
     except Exception:
         pass
     monkeypatch.undo()
-    assert captured_k, "run_search did not probe any level"
-    assert captured_k[0] == 152, f"explicit --k-start 152 ignored, got {captured_k[0]}"
+    assert captured_k, "run did not probe any level"
+    assert captured_k[0] == 152, f"explicit k_start=152 ignored, got {captured_k[0]}"
 
 
 def test_fallback_cap_is_k_max_not_168(monkeypatch):
@@ -278,10 +254,8 @@ def test_fallback_cap_is_k_max_not_168(monkeypatch):
     145+4=149 only if 149 <= k_max=145 (it isn't) -> fallback stops at 145,
     FAMILY_TOO_WEAK. If the cap were still 168, the fallback would try
     149,153,...,169 (all area-infeasible above 145) before giving up."""
-    import sys, pathlib
-    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts"))
-    import exp_roads_first as mod
     from foeopt.loader import load_layout
+    import pathlib
 
     helper = pathlib.Path("city-user-data-foe-helper.json")
     if not (pathlib.Path("city-user-data.json").exists() and helper.exists()):
@@ -292,23 +266,16 @@ def test_fallback_cap_is_k_max_not_168(monkeypatch):
     assert k_max == 145  # sanity: the user city's area ceiling
 
     probed_ks = []
-    def spy_probe_level(layout, region, consumers, k, rng, args, log, pool=None):
+    def spy_probe_level(layout, region, consumers, k, rng, args, log, pool=None,
+                        on_improvement=None):
         probed_ks.append(k)
         return ("INFEASIBLE", None)  # every level infeasible -> fallback climbs
     monkeypatch.setattr(mod, "_probe_level", spy_probe_level)
-    import time as _t
-    class FakeArgs:
-        k_start = 145  # = k_max, infeasible -> fallback should try up
-        patterns = 5
-        probe_limit = 30.0
-        probe_workers = 1
-        workers = 1
-        th_anchors = "coarse"
-        seed = 0
-        time_box = 60.0
-        deadline = _t.monotonic() + 60.0
+    search = mod.RoadsFirstSearch(
+        lay, time_box=60.0, patterns=5, probe_limit=30.0,
+        workers=1, probe_workers=1, th_anchors="coarse", k_start=145)
     try:
-        result = mod.run_search(lay, FakeArgs())
+        result = search.run()
     except Exception:
         result = None
     monkeypatch.undo()
@@ -321,37 +288,37 @@ def test_fallback_cap_is_k_max_not_168(monkeypatch):
 
 def test_smoke_does_not_override_k_start(monkeypatch):
     """--smoke must NOT override k_start to 156; it should leave --k-start auto
-    (the default) so run_search resolves it to pick_k_start(layout). Verify by
-    parsing the smoke args and checking args.k_start == 'auto' (not 156)."""
-    import sys, pathlib
-    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts"))
-    import exp_roads_first as mod
-
-    # main() parses argv and applies smoke overrides but returns before
-    # run_search if no city is given. Pass --smoke with no city -> p.error()
-    # would fire; instead pass a dummy city path that exists so main proceeds
-    # to run_search, which we spy on.
+    (the default) so RoadsFirstSearch resolves it to pick_k_start(layout).
+    Verify by spying on RoadsFirstSearch.__init__ to capture the kwargs main()
+    passes, and stubbing .run() to short-circuit."""
+    import pathlib
     if not pathlib.Path("darkzig.json").exists():
         pytest.skip("darkzig.json not present")
 
-    captured_args = []
-    real_run_search = mod.run_search
-    def spy_run_search(layout, args):
-        captured_args.append(args)
-        return {"verdict": "DONE", "results": {}}  # short-circuit
-    monkeypatch.setattr(mod, "run_search", spy_run_search)
+    import sys
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts"))
+    import exp_roads_first as cli
+
+    captured_kwargs = []
+    real_init = cli.RoadsFirstSearch.__init__
+    def spy_init(self, *a, **kw):
+        captured_kwargs.append(kw)
+    monkeypatch.setattr(cli.RoadsFirstSearch, "__init__", spy_init)
+    def fake_run(self, on_improvement=None, on_status=None, should_stop=None):
+        return {"verdict": "DONE", "results": {}}
+    monkeypatch.setattr(cli.RoadsFirstSearch, "run", fake_run)
     try:
-        mod.main(["darkzig.json", "--smoke"])
+        cli.main(["darkzig.json", "--smoke"])
     except Exception:
         pass
     monkeypatch.undo()
-    assert captured_args, "main() did not call run_search"
-    args = captured_args[0]
-    assert args.k_start == "auto", (
-        f"--smoke overrode k_start to {args.k_start!r}; expected 'auto' (the default)")
+    assert captured_kwargs, "main() did not create RoadsFirstSearch"
+    kw = captured_kwargs[0]
+    assert kw["k_start"] == "auto", (
+        f"--smoke overrode k_start to {kw['k_start']!r}; expected 'auto' (the default)")
     # Also confirm the other smoke overrides still apply.
-    assert args.workers == 1
-    assert args.probe_workers == 1
-    assert args.patterns == 20
-    assert args.probe_limit == 20.0
-    assert args.time_box == 600.0
+    assert kw["workers"] == 1
+    assert kw["probe_workers"] == 1
+    assert kw["patterns"] == 20
+    assert kw["probe_limit"] == 20.0
+    assert kw["time_box"] == 600.0
