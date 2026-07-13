@@ -59,17 +59,23 @@ export function CityMap() {
     }
   }, [view, t, optimized, showCurrent, showOptimized]);
 
-  const onWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    const factor = Math.pow(1.1, -e.deltaY / 100);
-    setT((prev) => {
-      const scale = Math.max(0.1, Math.min(8, prev.scale * factor));
-      const rect = canvasRef.current!.getBoundingClientRect();
-      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-      const k = scale / prev.scale;
-      return { scale, offsetX: mx - (mx - prev.offsetX) * k, offsetY: my - (my - prev.offsetY) * k };
-    });
-  };
+  useEffect(() => {
+    const cv = canvasRef.current;
+    if (!cv) return;
+    const handler = (e: WheelEvent) => {
+      e.preventDefault();
+      const factor = Math.pow(1.1, -e.deltaY / 100);
+      setT((prev) => {
+        const scale = Math.max(0.1, Math.min(8, prev.scale * factor));
+        const rect = cv.getBoundingClientRect();
+        const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+        const k = scale / prev.scale;
+        return { scale, offsetX: mx - (mx - prev.offsetX) * k, offsetY: my - (my - prev.offsetY) * k };
+      });
+    };
+    cv.addEventListener("wheel", handler, { passive: false });
+    return () => cv.removeEventListener("wheel", handler);
+  }, []);
 
   const onMouseDown = (e: React.MouseEvent) => { drag.current = { x: e.clientX, y: e.clientY }; };
   const onMouseUp = () => { drag.current = null; };
@@ -103,7 +109,6 @@ export function CityMap() {
           ref={canvasRef}
           width={900}
           height={640}
-          onWheel={onWheel}
           onMouseDown={onMouseDown}
           onMouseUp={onMouseUp}
           onMouseLeave={() => { drag.current = null; setTip(null); }}
