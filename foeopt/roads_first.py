@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+import multiprocessing
 import random
+import time
 from dataclasses import dataclass, replace
 
 from foeopt.model import Building, Footprint, Layout, Region
@@ -298,3 +301,48 @@ def validate(layout_src: Layout, pattern: Pattern,
     if bad:
         return ("SAT_ROTATED", None, len(roads))
     return ("OK", cand, len(roads))
+
+
+_WORKER_LAYOUT: Layout | None = None
+_WORKER_PROBE_LIMIT: float = 30.0
+_WORKER_PROBE_WORKERS: int = 1
+
+
+def _worker_init(layout: Layout, probe_limit: float, probe_workers: int) -> None:
+    global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS
+    _WORKER_LAYOUT = layout
+    _WORKER_PROBE_LIMIT = probe_limit
+    _WORKER_PROBE_WORKERS = probe_workers
+
+
+def _run_probe(payload: tuple) -> dict:
+    pat, k, pat_index = payload
+    layout = _WORKER_LAYOUT
+    region = set(layout.region.cells)
+    consumers = layout.road_needing()
+    t0 = time.monotonic()
+    st, pos = probe(pat, region, consumers,
+                   probe_limit=_WORKER_PROBE_LIMIT,
+                   probe_workers=_WORKER_PROBE_WORKERS)
+    secs = round(time.monotonic() - t0, 1)
+    if st != "SAT":
+        return {"k": k, "params": pat.params, "status": st,
+                "achieved": None, "secs": secs, "layout": None, "pat_index": pat_index}
+    vstat, vlay, achieved = validate(layout, pat, pos)
+    if vstat == "OK":
+        return {"k": k, "params": pat.params, "status": "SAT",
+                "achieved": achieved, "secs": secs, "layout": vlay, "pat_index": pat_index}
+    return {"k": k, "params": pat.params, "status": vstat,
+            "achieved": None, "secs": secs, "layout": None, "pat_index": pat_index}
+
+
+def _run_probe_seq(payload: tuple) -> dict:
+    global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS
+    pat, k, layout, probe_limit, probe_workers = payload
+    _WORKER_LAYOUT = layout
+    _WORKER_PROBE_LIMIT = probe_limit
+    _WORKER_PROBE_WORKERS = probe_workers
+    try:
+        return _run_probe((pat, k, 0))
+    finally:
+        _WORKER_LAYOUT = None
