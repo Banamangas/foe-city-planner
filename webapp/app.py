@@ -15,7 +15,7 @@ from foeopt.viz import layout_to_view
 from webapp.cache import CityCache
 from webapp.runner import JobManager
 
-_STATIC = os.path.join(os.path.dirname(__file__), "static")
+_DIST = os.path.join(os.path.dirname(__file__), "dist")
 
 
 def _city_hash(payload: bytes) -> str:
@@ -31,7 +31,7 @@ def _buildings_summary(layout) -> list[dict]:
 
 
 def create_app(db_path: str | None = None) -> Flask:
-    app = Flask(__name__, static_folder=_STATIC, static_url_path="/static")
+    app = Flask(__name__, static_folder=_DIST, static_url_path="/assets_root")
     cache = CityCache(db_path or os.path.join(os.path.dirname(__file__), "cities.db"))
     jobs = JobManager()
 
@@ -58,7 +58,9 @@ def create_app(db_path: str | None = None) -> Flask:
 
     @app.get("/")
     def index():
-        return send_from_directory(_STATIC, "index.html")
+        if not os.path.exists(os.path.join(_DIST, "index.html")):
+            return jsonify(error="frontend not built; run `npm run build` in frontend/"), 503
+        return send_from_directory(_DIST, "index.html")
 
     @app.post("/api/load")
     def api_load():
@@ -199,6 +201,21 @@ def create_app(db_path: str | None = None) -> Flask:
         if ok:
             return jsonify(ok=True)
         return jsonify(error="not found"), 404
+
+    @app.get("/assets/<path:filename>")
+    def spa_assets(filename):
+        return send_from_directory(os.path.join(_DIST, "assets"), filename)
+
+    @app.get("/<path:path>")
+    def spa_fallback(path):
+        if path.startswith("api/"):
+            return jsonify(error="not found"), 404
+        full = os.path.join(_DIST, path)
+        if os.path.isfile(full):
+            return send_from_directory(_DIST, path)
+        if not os.path.exists(os.path.join(_DIST, "index.html")):
+            return jsonify(error="frontend not built; run `npm run build` in frontend/"), 503
+        return send_from_directory(_DIST, "index.html")
 
     return app
 
