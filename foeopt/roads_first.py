@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from foeopt.model import Building, Footprint, Layout, Region
 
@@ -178,3 +178,123 @@ def prefilter(pattern: Pattern, region: set[Cell],
     if capacity < len(consumers):
         return "adjacency-capacity"
     return None
+
+
+from foeopt.packing import Grid, first_fit
+from foeopt.router import RouteError, route
+from foeopt.validate import canonical_dims, is_valid, rotated_buildings
+
+
+def _check_pattern(p: Pattern, region: set[Cell], k: int) -> None:
+    assert len(p.roads) == k, f"{len(p.roads)} != {k}"
+    assert p.roads <= region and not (p.roads & p.th.cells())
+    th_border = p.th.border_cells()
+    seeds = [c for c in p.roads if c in th_border]
+    assert seeds, "no road cell touches the TH border"
+    seen = set(seeds)
+    stack = list(seeds)
+    while stack:
+        cx, cy = stack.pop()
+        for dx, dy in _ORTHO:
+            n = (cx + dx, cy + dy)
+            if n in p.roads and n not in seen:
+                seen.add(n)
+                stack.append(n)
+    assert seen == set(p.roads), "pattern not connected to the TH"
+
+
+def _anchor_candidates(b: Building, region: set[Cell], blocked: set[Cell],
+                       roads: frozenset[Cell]) -> list[tuple[int, int]]:
+    out = []
+    w, l = b.footprint.width, b.footprint.length
+    x0, y0, x1, y1 = _bbox(region)
+    for y in range(y0, y1 - l + 2):
+        for x in range(x0, x1 - w + 2):
+            fp = Footprint(x, y, w, l)
+            cells = fp.cells()
+            if not (cells <= region) or (cells & blocked):
+                continue
+            if any(c in roads for c in fp.border_cells()):
+                out.append((x, y))
+    return out
+
+
+def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
+          *, probe_limit: float, probe_workers: int = 1) -> tuple[str, dict | None]:
+    from ortools.sat.python import cp_model
+
+    th_cells = set(pattern.th.cells())
+    blocked = set(pattern.roads) | th_cells
+    cand = []
+    for b in consumers:
+        opts = _anchor_candidates(b, region, blocked, pattern.roads)
+        if not opts:
+            return ("UNSAT", None)
+        cand.append((b, opts))
+
+    m = cp_model.CpModel()
+    x0b, y0b, x1b, y1b = _bbox(region)
+    xs, ys, xiv, yiv = [], [], [], []
+    for i, (b, opts) in enumerate(cand):
+        w0, l0 = b.footprint.width, b.footprint.length
+        x = m.NewIntVar(x0b, x1b, f"x{i}")
+        y = m.NewIntVar(y0b, y1b, f"y{i}")
+        m.AddAllowedAssignments([x, y], opts)
+        xiv.append(m.NewFixedSizeIntervalVar(x, w0, f"xi{i}"))
+        yiv.append(m.NewFixedSizeIntervalVar(y, l0, f"yi{i}"))
+        xs.append(x); ys.append(y)
+    m.AddNoOverlap2D(xiv, yiv)
+
+    solver = cp_model.CpSolver()
+    solver.parameters.num_search_workers = probe_workers
+    solver.parameters.random_seed = 0
+    solver.parameters.max_time_in_seconds = probe_limit
+    st = solver.Solve(m)
+    if st in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        pos = {}
+        for i, (b, _) in enumerate(cand):
+            w, l = b.footprint.width, b.footprint.length
+            pos[b.entity_id] = (solver.Value(xs[i]), solver.Value(ys[i]), w, l)
+        return ("SAT", pos)
+    if st == cp_model.INFEASIBLE:
+        return ("UNSAT", None)
+    return ("UNKNOWN", None)
+
+
+def validate(layout_src: Layout, pattern: Pattern,
+             positions: dict) -> tuple[str, Layout | None, int]:
+    consumers = layout_src.road_needing()
+    fillers = [b for b in layout_src.buildings
+               if not b.needs_road and not b.is_townhall]
+    placed = []
+    for b in consumers:
+        x, y, w, l = positions[b.entity_id]
+        placed.append(replace(b, footprint=Footprint(x, y, w, l)))
+    th = replace(layout_src.townhall, footprint=pattern.th)
+    cand = Layout(layout_src.region, [th, *placed], th, {})
+    try:
+        roads = route(cand)
+    except RouteError:
+        return ("ROUTE_FAIL", None, 0)
+    cand.roads = roads
+    if not is_valid(cand):
+        return ("INVALID", None, 0)
+    region = set(layout_src.region.cells)
+    x0, y0, x1, y1 = _bbox(region)
+    w, h = x1 + 1, y1 + 1
+    occupied = set(roads) | set(th.footprint.cells())
+    for b in placed:
+        occupied |= b.footprint.cells()
+    free = region - occupied
+    grid = Grid(w, h, {(x, y) for x in range(w) for y in range(h)} - free)
+    for b in sorted(fillers, key=lambda b: -(b.footprint.width * b.footprint.length)):
+        bw, bl = b.footprint.width, b.footprint.length
+        spot = first_fit(grid, bw, bl)
+        if spot is None:
+            return ("SAT_FILLER_FAIL", None, len(roads))
+        grid.occupy(spot[0], spot[1], bw, bl)
+        cand.buildings.append(replace(b, footprint=Footprint(spot[0], spot[1], bw, bl)))
+    bad = rotated_buildings(cand, canonical_dims(layout_src))
+    if bad:
+        return ("SAT_ROTATED", None, len(roads))
+    return ("OK", cand, len(roads))
