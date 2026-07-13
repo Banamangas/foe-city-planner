@@ -915,3 +915,31 @@ shipped (RL needs it to escape the comb bias). The M2–M4 placement-RL track st
    to FEASIBLE, verified 105) + add lane/stub topologies (to represent the expert's structure
    and push below 105). R&D track that feeds back into #1 (better patterns → better user results
    in the same time budget).
+
+## Green tests ≠ working server: cross-thread SQLite in the Flask API (2026-07-13)
+**Bug:** `webapp/cache.py::CityCache` opened one `sqlite3.connect(db_path)` in the main thread and
+reused that connection across all requests. Flask's dev/prod server handles each request on a
+**worker thread**, and sqlite3 forbids using a connection from a thread other than the one that
+created it → the very first real `/api/load` returned a 400 `"SQLite objects created in a thread
+can only be used in that same thread"`. **The full pytest suite (274 tests) was green** because
+Flask's `test_client` runs the handler in the *same* thread as the test — so no test ever crossed
+a thread boundary, and the entire cache layer looked correct.
+**How it was caught:** driving the *real* server end-to-end (start `make_server`, POST over a real
+socket), not the test_client — exactly the CLAUDE.md "verify the real flow, not just tests" rule.
+The test_client is not a server; it never exercises threading, real SSE streaming, or an on-disk DB.
+**Fix:** `sqlite3.connect(db_path, check_same_thread=False)` + a `threading.Lock` guarding every DB
+method. `check_same_thread=False` allows cross-thread use of the one shared connection (required so a
+`:memory:` DB stays shared — thread-local connections would give each thread its *own empty*
+in-memory DB); the lock serializes access so there's no concurrent-transaction corruption. Fine for
+this app's traffic. Added a cross-thread regression test (`test_cache_usable_from_other_thread`)
+that runs get/store from a spawned thread — it reproduces the ProgrammingError before the fix.
+**Rules:**
+1. For any Flask/threaded-server feature, smoke the **real** server over a socket before calling it
+   done — test_client passing proves route logic, not thread-safety, streaming, or persistence.
+2. A shared sqlite connection reused across request threads needs `check_same_thread=False` + a lock.
+   Never reach for thread-local connections when `:memory:` must be shared (each connection = its own
+   in-memory DB).
+3. When a plan hands you code, the plan's *test* is the spec: `test_api_stop_unknown_job` expected 404
+   but the plan's `api_stop` returned 200 for unknown jobs (because `is_done` can't tell "unknown"
+   from "finished"). Fixed by adding a real `JobManager.exists()` predicate rather than string-matching
+   the error message — surface the missing state, don't paper over it.
