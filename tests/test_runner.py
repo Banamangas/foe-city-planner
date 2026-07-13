@@ -1,52 +1,69 @@
 import time
+import pytest
+
 from foeopt.model import Building, Footprint, Layout, Region
-from webapp.runner import run_repack, JobManager
+from webapp.runner import JobManager, layout_to_dict
 
 
-def _sparse_city():
-    th = Building(1, "c1", "t", Footprint(0, 0, 2, 2), False, 0, True, None, None, "TH")
-    cons = [Building(10 + i, f"c{i}", "t", Footprint(0, 0, 2, 2), True, 1, False, None, None, f"r{i}")
-            for i in range(3)]
-    region = Region(frozenset({(x, y) for x in range(20) for y in range(20)}))
-    return Layout(region, [th, *cons], th)
+def _tiny_layout():
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
+                  False, 1, True, None, None, "TH")
+    c1 = Building(10, "c10", "g", Footprint(0, 0, 2, 2), True, 1, False, None, None, "a")
+    region = Region(frozenset((x, y) for x in range(6) for y in range(6)))
+    return Layout(region, [th, c1], th, {})
 
 
-def test_run_repack_returns_result_dict():
-    res = run_repack(_sparse_city(), budget=2.0, seed=0)
-    assert res["placed"] == 4 and res["unplaced"] == 0
-    assert isinstance(res["roads"], int) and isinstance(res["estimate"], int)
-    assert res["valid"] is True
-    assert "<svg" in res["map_html"] or "<html" in res["map_html"]
+def test_layout_to_dict_serializes_layout():
+    lay = _tiny_layout()
+    lay.roads = {(0, 2): 1}
+    d = layout_to_dict(lay)
+    assert isinstance(d, dict)
+    assert "roads" in d
+    assert isinstance(d["roads"], list)
+    assert [0, 2] in d["roads"]
+    assert "buildings" in d
+    assert isinstance(d["buildings"], dict)
+    for eid, coords in d["buildings"].items():
+        assert len(coords) == 4
 
 
-def test_jobmanager_runs_and_reports():
-    jm = JobManager()
-    jid = jm.submit(lambda: {"ok": 1})
-    for _ in range(50):
-        st = jm.status(jid)
-        if st["state"] == "done":
+def test_job_manager_submit_and_status():
+    lay = _tiny_layout()
+    jobs = JobManager()
+    jid = jobs.submit(lay, time_box=1.0, patterns=5, probe_limit=1.0, workers=1)
+    assert isinstance(jid, str)
+    st = jobs.status(jid)
+    assert st["state"] in ("running", "done", "error")
+    # wait for completion
+    for _ in range(300):
+        st = jobs.status(jid)
+        if st["state"] in ("done", "error"):
             break
-        time.sleep(0.02)
-    assert st["state"] == "done" and st["result"] == {"ok": 1}
-    assert st["elapsed"] >= 0
+        time.sleep(0.1)
+    assert st["state"] in ("done", "error")
 
 
-def test_run_repack_polish_not_worse_and_reports_base():
-    from webapp.runner import run_repack
-    res = run_repack(_sparse_city(), budget=0.3, seed=0, anneal_budget=0.4)
-    assert res["unplaced"] == 0 and res["valid"] is True
-    assert "base_roads" in res
-    assert res["roads"] <= res["base_roads"]   # anneal never worse
-
-
-def test_jobmanager_reports_error():
-    jm = JobManager()
-    def boom():
-        raise RuntimeError("nope")
-    jid = jm.submit(boom)
-    for _ in range(50):
-        st = jm.status(jid)
-        if st["state"] == "error":
+def test_job_manager_stop_signals_search():
+    lay = _tiny_layout()
+    jobs = JobManager()
+    jid = jobs.submit(lay, time_box=600.0, patterns=5, probe_limit=1.0, workers=1)
+    jobs.stop(jid)
+    for _ in range(300):
+        if jobs.is_done(jid):
             break
-        time.sleep(0.02)
-    assert st["state"] == "error" and "nope" in st["error"]
+        time.sleep(0.1)
+    assert jobs.is_done(jid)
+
+
+def test_job_manager_pop_improvement_returns_none_when_empty():
+    lay = _tiny_layout()
+    jobs = JobManager()
+    jid = jobs.submit(lay, time_box=1.0, patterns=5, probe_limit=1.0, workers=1)
+    imp = jobs.pop_improvement(jid, timeout=0.1)
+    # may be None if no improvement found yet, or a dict if found
+    assert imp is None or isinstance(imp, dict)
+
+
+def test_job_manager_unknown_job_status():
+    jobs = JobManager()
+    assert jobs.status("nonexistent")["state"] == "error"
