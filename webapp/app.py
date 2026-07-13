@@ -126,6 +126,11 @@ def create_app(db_path: str | None = None) -> Flask:
                 else:
                     st = jobs.status(job_id)
                     yield f"event: heartbeat\ndata: {json.dumps(st)}\n\n"
+            while True:
+                imp = jobs.pop_improvement(job_id, timeout=0.05)
+                if imp is None:
+                    break
+                yield f"event: improvement\ndata: {json.dumps(imp)}\n\n"
             final = jobs.result(job_id)
             yield f"event: done\ndata: {json.dumps(final)}\n\n"
         return Response(generate(), mimetype="text/event-stream")
