@@ -8,6 +8,10 @@ output/
 *.pt
 
 
+webapp/cities.db
+frontend/node_modules/
+webapp/dist/
+
 # Personal game-data dumps
 DarkZig-*.txt
 city.txt
