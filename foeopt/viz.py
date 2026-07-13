@@ -123,6 +123,7 @@ def layout_to_view(
 
     return {
         "cell": _CELL,
+        "origin": [min_x, min_y],
         "width": width,
         "height": height,
         "region": region_cells,
