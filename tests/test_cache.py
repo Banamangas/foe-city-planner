@@ -88,3 +88,26 @@ def test_store_city_is_idempotent(cache):
     cache.store_city("city1", payload2, [], 100, 50)
     city = cache.get_city("city1")
     assert city["region_cells"] == 100
+
+
+def test_cache_usable_from_other_thread(cache):
+    """Flask serves each request on a worker thread; the cache (created in the
+    main thread) must be usable from a different thread than it was created in."""
+    import threading
+    cache.store_city("t1", b'{}', [], 10, 5)
+    result = {}
+
+    def worker():
+        try:
+            result["city"] = cache.get_city("t1")
+            cache.store_city("t2", b'{}', [], 20, 10)
+            result["ok"] = True
+        except Exception as exc:  # pragma: no cover - failure path
+            result["error"] = exc
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join()
+    assert result.get("error") is None, result["error"]
+    assert result["city"]["id"] == "t1"
+    assert cache.get_city("t2") is not None
