@@ -5,8 +5,10 @@ import multiprocessing
 import random
 import time
 from dataclasses import dataclass, replace
+from types import SimpleNamespace
 
 from foeopt.model import Building, Footprint, Layout, Region
+from foeopt.bounds import pick_k_start
 
 _ORTHO = ((1, 0), (-1, 0), (0, 1), (0, -1))
 Cell = tuple[int, int]
@@ -404,3 +406,116 @@ def _probe_level(layout, region, consumers, k, rng, params, log, pool=None,
     if not pats:
         return ("INCONCLUSIVE", None)
     return ("INCONCLUSIVE" if saw_nonproof_failure else "INFEASIBLE", None)
+
+
+class RoadsFirstSearch:
+    def __init__(self, layout: Layout, *, time_box: float, patterns: int = 200,
+                 probe_limit: float = 60.0, workers: int = 4,
+                 probe_workers: int = 4, th_anchors: str = "full",
+                 k_start="auto"):
+        self.layout = layout
+        self.time_box = time_box
+        self.patterns = patterns
+        self.probe_limit = probe_limit
+        self.workers = workers
+        self.probe_workers = probe_workers
+        self.th_anchors = th_anchors
+        self.k_start = k_start
+
+    def run(self, on_improvement=None, on_status=None, should_stop=None) -> dict:
+        layout = self.layout
+        region = set(layout.region.cells)
+        consumers = layout.road_needing()
+        rng = random.Random(0)
+        deadline = time.monotonic() + self.time_box
+
+        pool = None
+        if self.workers > 1:
+            pool = multiprocessing.Pool(
+                self.workers,
+                initializer=_worker_init,
+                initargs=(layout, self.probe_limit, self.probe_workers))
+
+        params = SimpleNamespace(
+            patterns=self.patterns,
+            probe_limit=self.probe_limit,
+            probe_workers=self.probe_workers,
+            deadline=deadline,
+            th_anchors=self.th_anchors,
+        )
+
+        results: dict[int, tuple[str, int | None]] = {}
+
+        def _should_stop():
+            if should_stop is not None and should_stop():
+                return True
+            return time.monotonic() >= deadline
+
+        def level(k):
+            if k not in results:
+                results[k] = _probe_level(layout, region, consumers, k, rng,
+                                          params, lambda r: None, pool=pool,
+                                          on_improvement=on_improvement)
+                if on_status is not None:
+                    on_status(k, results[k][0], 0, 0)
+            return results[k]
+
+        try:
+            truncated = False
+
+            if self.k_start == "auto":
+                k = pick_k_start(layout)
+            else:
+                k = self.k_start
+
+            st, _ = level(k)
+            if st != "FEASIBLE":
+                k_max = len(layout.region.cells) - sum(
+                    b.footprint.width * b.footprint.length for b in layout.buildings)
+                while st != "FEASIBLE" and k < k_max:
+                    if _should_stop():
+                        truncated = True
+                        break
+                    k += 4
+                    st, _ = level(k)
+                if st != "FEASIBLE":
+                    return {"verdict": "FAMILY_TOO_WEAK", "walk_complete": not truncated,
+                            "deadline_hit": _should_stop(), "results": results}
+
+            lo_feasible = k
+            while True:
+                if _should_stop():
+                    truncated = True
+                    break
+                nxt = lo_feasible - 4
+                if nxt < 1:
+                    break
+                st, _ = level(nxt)
+                if st == "FEASIBLE":
+                    lo_feasible = nxt
+                else:
+                    break
+
+            lo, hi = lo_feasible - 4, lo_feasible
+            while hi - lo > 1:
+                if _should_stop():
+                    truncated = True
+                    break
+                mid = (lo + hi) // 2
+                st, _ = level(mid)
+                if st == "FEASIBLE":
+                    hi = mid
+                else:
+                    lo = mid
+
+            best = min((r[1] for r in results.values() if r[1] is not None), default=None)
+            unknowns = sum(1 for r in results.values() if r[0] == "INCONCLUSIVE")
+            return {"verdict": "DONE",
+                    "lowest_feasible_k_probed": hi if best is not None else None,
+                    "best_achieved": best, "inconclusive_levels": unknowns,
+                    "walk_complete": not truncated, "deadline_hit": _should_stop(),
+                    "results": results}
+        finally:
+            if pool is not None:
+                pool.close()
+                pool.join()
