@@ -81,3 +81,40 @@ def test_render_html_ampersand_not_escaped():
     assert "Forge & Anvil" in html
     # It must NOT be escaped as &amp;
     assert "Forge &amp; Anvil" not in html
+
+
+def test_layout_to_view_returns_dict_with_required_keys():
+    from foeopt.viz import layout_to_view
+    from foeopt.model import Building, Footprint, Layout, Region
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
+                  False, 1, True, None, None, "TH")
+    b1 = Building(10, "c10", "g", Footprint(3, 0, 2, 2), True, 1, False, None, None, "a")
+    region = Region(frozenset((x, y) for x in range(6) for y in range(6)))
+    lay = Layout(region, [th, b1], th, {(0, 2): 1})
+    view = layout_to_view(lay)
+    assert isinstance(view, dict)
+    assert view["cell"] == 12
+    assert "width" in view and "height" in view
+    assert isinstance(view["region"], list)
+    assert len(view["buildings"]) == 2
+    assert view["buildings"][0]["name"] in ("TH", "a")
+    assert isinstance(view["current_roads"], list)
+    assert view["optimized_roads"] is None
+    assert "palette" in view
+    for key in ("background", "region", "current_road", "optimized_road",
+                "townhall", "road_building", "plain_building", "border"):
+        assert key in view["palette"]
+
+
+def test_layout_to_view_with_optimized_roads():
+    from foeopt.viz import layout_to_view
+    from foeopt.model import Building, Footprint, Layout, Region
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
+                  False, 1, True, None, None, "TH")
+    region = Region(frozenset((x, y) for x in range(6) for y in range(6)))
+    lay = Layout(region, [th], th, {(0, 2): 1})
+    opt = {(3, 0): 1}
+    view = layout_to_view(lay, optimized_roads=opt)
+    assert view["optimized_roads"] is not None
+    assert len(view["optimized_roads"]) == 1
+    assert view["optimized_roads"][0]["level"] == 1
