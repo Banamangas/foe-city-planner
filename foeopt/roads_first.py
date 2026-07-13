@@ -346,3 +346,61 @@ def _run_probe_seq(payload: tuple) -> dict:
         return _run_probe((pat, k, 0))
     finally:
         _WORKER_LAYOUT = None
+
+def _probe_level(layout, region, consumers, k, rng, params, log, pool=None,
+                 on_improvement=None) -> tuple[str, int | None]:
+    th = layout.townhall.footprint
+    th_mode = getattr(params, "th_anchors", "coarse")
+    pats = generate_patterns(region, th.width, th.length, k, rng, params.patterns,
+                             th_mode=th_mode)
+    best_achieved = None
+    saw_nonproof_failure = False
+    order = 0
+
+    def handle_result(result, pat):
+        nonlocal best_achieved, order, saw_nonproof_failure
+        order += 1
+        status = result["status"]
+        achieved = result["achieved"]
+        log({"k": k, "params": pat.params, "status": status,
+             "achieved": achieved, "secs": result["secs"], "order": order})
+        if status == "SAT":
+            vlay = result["layout"]
+            if best_achieved is None or achieved < best_achieved:
+                best_achieved = achieved
+                if on_improvement is not None:
+                    on_improvement(vlay, k, achieved)
+        elif status in ("UNKNOWN", "ROUTE_FAIL", "INVALID", "SAT_FILLER_FAIL", "SAT_ROTATED"):
+            saw_nonproof_failure = True
+        if time.monotonic() > params.deadline:
+            return True
+        return False
+
+    surviving = []
+    for pat in pats:
+        reason = prefilter(pat, region, consumers)
+        if reason is not None:
+            log({"k": k, "params": pat.params, "status": "PREFILTERED",
+                 "reason": reason, "secs": 0.0, "order": 0})
+            continue
+        surviving.append(pat)
+
+    if pool is None:
+        for pat in surviving:
+            result = _run_probe_seq((pat, k, layout, params.probe_limit, params.probe_workers))
+            if handle_result(result, pat):
+                return ("INCONCLUSIVE" if best_achieved is None else "FEASIBLE", best_achieved)
+    else:
+        payloads = [(pat, k, idx) for idx, pat in enumerate(surviving)]
+        for result in pool.imap_unordered(_run_probe, payloads):
+            idx = result["pat_index"]
+            pat = surviving[idx]
+            if handle_result(result, pat):
+                pool.terminate()
+                break
+
+    if best_achieved is not None:
+        return ("FEASIBLE", best_achieved)
+    if not pats:
+        return ("INCONCLUSIVE", None)
+    return ("INCONCLUSIVE" if saw_nonproof_failure else "INFEASIBLE", None)
