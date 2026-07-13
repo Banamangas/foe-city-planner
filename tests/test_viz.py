@@ -118,3 +118,17 @@ def test_layout_to_view_with_optimized_roads():
     assert view["optimized_roads"] is not None
     assert len(view["optimized_roads"]) == 1
     assert view["optimized_roads"][0]["level"] == 1
+
+
+def test_layout_to_view_includes_grid_origin():
+    from foeopt.viz import layout_to_view
+    from foeopt.model import Building, Footprint, Layout, Region
+    th = Building(1, "c1", "main_building", Footprint(3, 5, 2, 2),
+                  False, 1, True, None, None, "TH")
+    region = Region(frozenset((x, y) for x in range(3, 9) for y in range(5, 11)))
+    lay = Layout(region, [th], th, {(3, 7): 1})
+    view = layout_to_view(lay)
+    assert view["origin"] == [3, 5]
+    # base-map buildings stay relative (origin subtracted, times cell)
+    assert view["buildings"][0]["x"] == 0
+    assert view["buildings"][0]["y"] == 0
