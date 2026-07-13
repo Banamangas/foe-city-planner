@@ -105,6 +105,10 @@ class JobManager:
             return True
         return job["state"]["state"] in ("done", "error")
 
+    def exists(self, job_id: str) -> bool:
+        with self._lock:
+            return job_id in self._jobs
+
     def stop(self, job_id: str) -> None:
         with self._lock:
             job = self._jobs.get(job_id)
