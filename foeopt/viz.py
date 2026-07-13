@@ -85,6 +85,63 @@ def render_html(
     return _TEMPLATE.replace("__DATA__", payload)
 
 
+def layout_to_view(
+    layout: Layout,
+    optimized_roads: dict[tuple[int, int], int] | None = None,
+) -> dict:
+    """Return the map data as a plain dict (no HTML template). This is the
+    JSON contract for the React Canvas component — same structure render_html
+    builds internally, but consumed directly by the frontend instead of being
+    stringified into an iframe."""
+    min_x, min_y, max_x, max_y = _bounds(layout)
+    width = (max_x - min_x + 1) * _CELL
+    height = (max_y - min_y + 1) * _CELL
+
+    def px(x: int, y: int) -> tuple[int, int]:
+        return (x - min_x) * _CELL, (y - min_y) * _CELL
+
+    region_cells = [px(x, y) for (x, y) in sorted(layout.region.cells)]
+    buildings = []
+    for b in layout.buildings:
+        bx, by = px(b.footprint.x, b.footprint.y)
+        buildings.append({
+            "x": bx, "y": by,
+            "w": b.footprint.width * _CELL,
+            "h": b.footprint.length * _CELL,
+            "name": b.name,
+            "size": f"{b.footprint.width}x{b.footprint.length}",
+            "needs_road": b.needs_road,
+            "townhall": b.is_townhall,
+        })
+
+    def road_list(roads):
+        out = []
+        for (x, y), lvl in roads.items():
+            rx, ry = px(x, y)
+            out.append({"x": rx, "y": ry, "level": lvl})
+        return out
+
+    return {
+        "cell": _CELL,
+        "width": width,
+        "height": height,
+        "region": region_cells,
+        "buildings": buildings,
+        "current_roads": road_list(layout.roads),
+        "optimized_roads": road_list(optimized_roads) if optimized_roads else None,
+        "palette": {
+            "background": COLOR_BACKGROUND,
+            "region": COLOR_REGION,
+            "current_road": COLOR_CURRENT_ROAD,
+            "optimized_road": COLOR_OPTIMIZED_ROAD,
+            "townhall": COLOR_TOWNHALL,
+            "road_building": COLOR_ROAD_BUILDING,
+            "plain_building": COLOR_PLAIN_BUILDING,
+            "border": COLOR_BUILDING_BORDER,
+        },
+    }
+
+
 def render_comparison(current: Layout, optimized: Layout) -> str:
     # shared bounds over both layouts so the two views align
     cx0, cy0, cx1, cy1 = _bounds(current)
