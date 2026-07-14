@@ -15,8 +15,11 @@ frontend/vite.config.js
 frontend/vite.config.d.ts
 webapp/dist/
 
-# Personal game-data dumps
+# Personal game-data dumps (large; kept out of the repo)
 DarkZig-*.txt
 city.txt
 *.json.bak
 *.log
+darkzig.json
+city-user-data-foe-helper.json
+CityMap-Born-FR*.json

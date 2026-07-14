@@ -1,3 +1,5 @@
+import pytest
+
 from foeopt.build import build_layout
 from foeopt.packer import repack
 from foeopt.report import road_estimate
@@ -61,9 +63,12 @@ def test_layout_lns_writes_comparison_html(tmp_path, monkeypatch, repo_root):
     that's an expected outcome here, not a test failure -- the thing under
     test is that the comparison HTML gets written regardless."""
     from foeopt.cli import main
+    helper = repo_root / "city-user-data-foe-helper.json"
+    if not helper.exists():
+        pytest.skip("city-user-data-foe-helper.json not present")
     monkeypatch.chdir(tmp_path)  # output/lns lands under tmp_path
     rc = main(["layout", str(repo_root / "city-user-data.json"),
-               str(repo_root / "city-user-data-foe-helper.json"),
+               str(helper),
                "--budget", "2", "--anneal-budget", "1", "--lns", "2",
                "-o", str(tmp_path / "layout.html")])
     assert rc in (0, 1)

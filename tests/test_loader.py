@@ -7,6 +7,13 @@ from foeopt.validate import is_valid
 REPO = __import__("pathlib").Path(__file__).resolve().parent.parent
 
 
+def _require(name):
+    p = REPO / name
+    if not p.exists():
+        pytest.skip(f"{name} not present (large data file, gitignored)")
+    return p
+
+
 def test_read_json_plain(tmp_path):
     p = tmp_path / "plain.json"
     p.write_text(json.dumps({"a": 1, "b": [2, 3]}), encoding="utf-8")
@@ -129,7 +136,7 @@ def test_build_combined_old_schema_connected_not_adjacent_to_road():
 
 def test_load_layout_split_old_matches_build_layout():
     layout = load_layout(str(REPO / "city-user-data.json"),
-                         str(REPO / "city-user-data-foe-helper.json"))
+                         str(_require("city-user-data-foe-helper.json")))
     assert len(layout.buildings) == 314
     assert len(layout.roads) == 142
     assert len(layout.road_needing()) == 82
@@ -141,14 +148,14 @@ def test_load_layout_split_old_requires_helper():
 
 
 def test_load_layout_combined_old_city_txt():
-    layout = load_layout(str(REPO / "city.txt"))
+    layout = load_layout(str(_require("city.txt")))
     assert len(layout.buildings) == 88
     assert len(layout.roads) == 92
     assert is_valid(layout)
 
 
 def test_load_layout_combined_new_darkzig():
-    layout = load_layout(str(REPO / "darkzig.json"))
+    layout = load_layout(str(_require("darkzig.json")))
     assert len(layout.buildings) == 224
     assert len(layout.roads) == 250
     assert len(layout.road_needing()) == 63
@@ -167,9 +174,9 @@ def test_route_output_unchanged_after_prune_speedup():
     """Regression guard: the cached-border prune must yield the same minimal
     road counts as before (darkzig 236, sample 142)."""
     from foeopt.router import route
-    assert len(route(load_layout(str(REPO / "darkzig.json")))) == 236
+    assert len(route(load_layout(str(_require("darkzig.json"))))) == 236
     assert len(route(load_layout(str(REPO / "city-user-data.json"),
-                                 str(REPO / "city-user-data-foe-helper.json")))) == 142
+                                 str(_require("city-user-data-foe-helper.json"))))) == 142
 
 
 def test_load_layout_from_dict_combined_format():

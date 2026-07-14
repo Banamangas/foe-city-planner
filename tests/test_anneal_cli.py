@@ -1,5 +1,7 @@
 import pathlib
 
+import pytest
+
 from foeopt.anneal import anneal
 from foeopt.build import build_layout
 from foeopt.loader import load_layout
@@ -22,7 +24,10 @@ def test_anneal_real_city_valid_and_not_worse(city_data, helper_data):
 
 def test_anneal_darkzig_valid_and_not_worse():
     repo = pathlib.Path(__file__).resolve().parent.parent
-    current = load_layout(str(repo / "darkzig.json"))
+    dz = repo / "darkzig.json"
+    if not dz.exists():
+        pytest.skip("darkzig.json not present")
+    current = load_layout(str(dz))
     res = anneal(current, seed=0, budget_seconds=3.0, max_iters=10_000)
     assert is_valid(res.layout)
     assert len(res.layout.roads) <= len(current.roads)   # never worse than the player's 250
