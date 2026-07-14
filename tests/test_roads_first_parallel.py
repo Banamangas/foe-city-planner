@@ -193,10 +193,10 @@ def test_k_start_auto_resolves_to_pick_k_start_value(monkeypatch):
     from foeopt.loader import load_layout
     from foeopt.bounds import pick_k_start
 
-    lay = load_layout("darkzig.json")  # assumes cwd is repo root; skip if absent
     import pathlib
     if not pathlib.Path("darkzig.json").exists():
         pytest.skip("darkzig.json not present")
+    lay = load_layout("darkzig.json")  # assumes cwd is repo root
 
     captured_k = []
     def spy_probe_level(layout, region, consumers, k, rng, args, log, pool=None,
