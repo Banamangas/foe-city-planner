@@ -1,7 +1,21 @@
 import json
 
+import pytest
+
 from foeopt.model import Building, Footprint, Layout, Region
 from foeopt.corpus import CorpusWriter, load_manifest, load_instances, reconstruct
+
+
+def test_rejects_a_different_city_in_the_same_dir(tmp_path):
+    CorpusWriter(tmp_path, _tiny_layout()).close()
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
+                  False, 1, True, None, None, "TH")
+    c1 = Building(10, "c10", "g", Footprint(0, 0, 1, 1), True, 2, False, None, None, "hut")
+    c2 = Building(11, "c11", "g", Footprint(0, 0, 1, 1), True, 1, False, None, None, "hut2")
+    region = Region(frozenset((x, y) for x in range(5) for y in range(5)))
+    with pytest.raises(ValueError):
+        CorpusWriter(tmp_path, Layout(region, [th, c1, c2], th, {}))
+    CorpusWriter(tmp_path, _tiny_layout()).close()   # same city re-open appends fine
 
 
 def _tiny_layout():

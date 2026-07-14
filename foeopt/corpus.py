@@ -30,7 +30,14 @@ class CorpusWriter:
                      for b in layout.road_needing()]
         region = sorted([x, y] for (x, y) in layout.region.cells)
         self.city_id = _city_id(region, buildings)
-        (self.dir / "manifest.json").write_text(
+        manifest_path = self.dir / "manifest.json"
+        if manifest_path.exists():
+            existing = json.loads(manifest_path.read_text(encoding="utf-8")).get("city_id")
+            if existing != self.city_id:
+                raise ValueError(
+                    f"{self.dir} already holds a different city ({existing} != "
+                    f"{self.city_id}); use one corpus dir per city")
+        manifest_path.write_text(
             json.dumps({"city_id": self.city_id, "region": region,
                         "buildings": buildings}),
             encoding="utf-8")
