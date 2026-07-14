@@ -34,8 +34,10 @@ def test_bound_le_true_optimum_on_tiny_instance():
 
 
 def test_bounds_below_known_achievable_on_user_city(repo_root):
-    lay = load_layout(str(repo_root / "city-user-data.json"),
-                      str(repo_root / "city-user-data-foe-helper.json"))
+    helper = repo_root / "city-user-data-foe-helper.json"
+    if not helper.exists():
+        pytest.skip("city-user-data-foe-helper.json not present")
+    lay = load_layout(str(repo_root / "city-user-data.json"), str(helper))
     assert report_bounds(lay)["max"] <= 142      # expert-real road count
 
 
@@ -87,8 +89,10 @@ def test_pick_k_start_on_darkzig(repo_root):
 def test_pick_k_start_on_user_city(repo_root):
     """user city: region=4224, building_area=4079, k_max=145, sigma_half=157.0.
     k_start = min(145, ceil(157)+8) = min(145, 165) = 145 (clamped to k_max)."""
-    lay = load_layout(str(repo_root / "city-user-data.json"),
-                      str(repo_root / "city-user-data-foe-helper.json"))
+    helper = repo_root / "city-user-data-foe-helper.json"
+    if not helper.exists():
+        pytest.skip("city-user-data-foe-helper.json not present")
+    lay = load_layout(str(repo_root / "city-user-data.json"), str(helper))
     assert pick_k_start(lay) == 145
 
 
