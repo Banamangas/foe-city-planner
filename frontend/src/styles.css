@@ -41,6 +41,9 @@ select, input:not([type]), input[type="text"] { width: 100%; }
 .brow.clickable:hover { background: #222; }
 .citymap { flex: 1; display: flex; flex-direction: column; }
 .citymap-toolbar { display: flex; gap: 14px; align-items: center; padding: 8px 12px; background: #1b1b1b; border-bottom: 1px solid #2a2a2a; font-size: 12px; }
+.switch { display: inline-flex; border: 1px solid #3a3a3a; border-radius: 4px; overflow: hidden; }
+.switch button { border: none; border-radius: 0; background: #262626; padding: 4px 12px; }
+.switch button.on { background: #2980b9; color: #fff; }
 .citymap-canvas-wrap { position: relative; flex: 1; overflow: hidden; }
 .citymap-canvas-wrap canvas { display: block; width: 100%; height: 100%; cursor: grab; }
 .citymap-tip {
