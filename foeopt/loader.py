@@ -92,6 +92,23 @@ def _build_combined(data: dict) -> Layout:
     return Layout(region=region, buildings=buildings, townhall=townhall, roads=roads)
 
 
+def load_layout_from_dict(data: dict, helper_data: dict | None = None) -> Layout:
+    """Build a Layout from an in-memory dict (slim or full combined format).
+
+    Same logic as load_layout but avoids a filesystem round-trip — the API
+    receives the slim payload as JSON in the request body, not as a file path.
+    """
+    if "entities" in data:
+        if helper_data is None:
+            raise ValueError(
+                "this city file is the split format; a helper file is required"
+            )
+        return build_layout(data, helper_data)
+    if "CityMapData" in data:
+        return _build_combined(data)
+    raise ValueError("unrecognized city file format")
+
+
 def load_layout(city_path: str, helper_path: str | None = None) -> Layout:
     data = read_json(city_path)
     if "entities" in data:

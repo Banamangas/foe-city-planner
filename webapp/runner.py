@@ -1,71 +1,22 @@
 from __future__ import annotations
 
+import queue
 import threading
 import time
 import uuid
-from concurrent.futures import ProcessPoolExecutor
 
-from foeopt.anneal import anneal
 from foeopt.model import Layout
-from foeopt.packer import PackResult, repack
-from foeopt.report import road_estimate
-from foeopt.router import route
-from foeopt.validate import is_valid
-from foeopt.viz import render_html
+from foeopt.roads_first import RoadsFirstSearch
 
 
-def _result(layout: Layout, packed) -> dict:
-    lay = packed.layout
-    placed_all = len(packed.unplaced) == 0
+def layout_to_dict(layout: Layout) -> dict:
+    """Serialize a validated Layout to the compact dict format for SSE/API."""
     return {
-        "placed": len(lay.buildings),
-        "unplaced": len(packed.unplaced),
-        "roads": len(lay.roads),
-        "estimate": road_estimate(layout),
-        "valid": bool(placed_all and is_valid(lay)),
-        "map_html": render_html(lay),
+        "roads": [list(r) for r in sorted(layout.roads.keys())],
+        "buildings": {str(b.entity_id): [b.footprint.x, b.footprint.y,
+                                         b.footprint.width, b.footprint.length]
+                      for b in layout.buildings},
     }
-
-
-def _anneal_base(layout: Layout, packed: PackResult, anneal_budget: float, seed: int):
-    """Return a PackResult refined by annealing (or the base unchanged)."""
-    if anneal_budget <= 0:
-        return packed, len(packed.layout.roads)
-    base_roads = len(packed.layout.roads)
-    refined = anneal(packed.layout, budget_seconds=anneal_budget, seed=seed)
-    final = Layout(layout.region, refined.layout.buildings,
-                   refined.layout.townhall, route(refined.layout))
-    return PackResult(final, packed.unplaced, packed.trials), base_roads
-
-
-def run_repack(layout: Layout, *, budget: float, seed: int, anneal_budget: float = 0.0) -> dict:
-    packed, base_roads = _anneal_base(layout, repack(layout, budget_seconds=budget, seed=seed),
-                                      anneal_budget, seed)
-    d = _result(layout, packed)
-    d["base_roads"] = base_roads
-    return d
-
-
-def _sweep_one(args):
-    layout, budget, seed = args
-    r = repack(layout, budget_seconds=budget, seed=seed)
-    return seed, len(r.layout.roads), len(r.unplaced), r
-
-
-def run_sweep(layout: Layout, *, budget: float, seeds: int, workers: int,
-              anneal_budget: float = 0.0) -> dict:
-    tasks = [(layout, budget, s) for s in range(seeds)]
-    results = []
-    with ProcessPoolExecutor(max_workers=max(1, workers)) as ex:
-        for r in ex.map(_sweep_one, tasks):
-            results.append(r)
-    ok = [r for r in results if r[2] == 0]
-    winner = min(ok, key=lambda r: r[1]) if ok else min(results, key=lambda r: (r[2], r[1]))
-    # the sweep already explored seeds to pick the best base; polish it with a fixed seed
-    packed, base_roads = _anneal_base(layout, winner[3], anneal_budget, 0)
-    d = _result(layout, packed)
-    d["base_roads"] = base_roads
-    return d
 
 
 class JobManager:
@@ -73,30 +24,100 @@ class JobManager:
         self._jobs: dict[str, dict] = {}
         self._lock = threading.Lock()
 
-    def submit(self, fn) -> str:
+    def submit(self, layout: Layout, *, time_box: float, patterns: int = 200,
+               probe_limit: float = 60.0, workers: int = 4,
+               probe_workers: int = 4, th_anchors: str = "full",
+               k_start="auto") -> str:
         job_id = uuid.uuid4().hex
+        stop_event = threading.Event()
+        improvements: queue.Queue = queue.Queue()
+        state = {"state": "running", "start": time.monotonic(),
+                 "result": None, "error": None}
         with self._lock:
-            self._jobs[job_id] = {"state": "running", "start": time.monotonic(),
-                                  "result": None, "error": None}
+            self._jobs[job_id] = {
+                "state": state,
+                "stop_event": stop_event,
+                "improvements": improvements,
+            }
+
+        def on_improvement(best_layout, k, achieved):
+            improvements.put({
+                "k": k, "achieved": achieved,
+                **layout_to_dict(best_layout),
+            })
+
+        def on_status(k, level_status, probes_done, probes_total):
+            pass
+
+        def should_stop():
+            return stop_event.is_set()
 
         def worker():
             try:
-                res = fn()
-                self._set(job_id, state="done", result=res)
-            except Exception as exc:  # surfaced to the UI
-                self._set(job_id, state="error", error=str(exc))
+                search = RoadsFirstSearch(
+                    layout, time_box=time_box, patterns=patterns,
+                    probe_limit=probe_limit, workers=workers,
+                    probe_workers=probe_workers, th_anchors=th_anchors,
+                    k_start=k_start,
+                )
+                res = search.run(on_improvement=on_improvement,
+                                 on_status=on_status,
+                                 should_stop=should_stop)
+                state["state"] = "done"
+                state["result"] = res
+            except Exception as exc:
+                state["state"] = "error"
+                state["error"] = str(exc)
 
         threading.Thread(target=worker, daemon=True).start()
         return job_id
 
-    def _set(self, job_id, **kw):
+    def pop_improvement(self, job_id: str, timeout: float = 0.1) -> dict | None:
         with self._lock:
-            self._jobs[job_id].update(kw)
+            job = self._jobs.get(job_id)
+        if job is None:
+            return None
+        try:
+            return job["improvements"].get(timeout=timeout)
+        except queue.Empty:
+            return None
 
     def status(self, job_id: str) -> dict:
         with self._lock:
-            j = self._jobs.get(job_id)
-            if j is None:
-                return {"state": "error", "elapsed": 0, "error": "unknown job"}
-            return {"state": j["state"], "elapsed": round(time.monotonic() - j["start"], 1),
-                    "result": j["result"], "error": j["error"]}
+            job = self._jobs.get(job_id)
+        if job is None:
+            return {"state": "error", "elapsed": 0, "error": "unknown job"}
+        return {"state": job["state"]["state"],
+                "elapsed": round(time.monotonic() - job["state"]["start"], 1),
+                "error": job["state"]["error"]}
+
+    def result(self, job_id: str) -> dict | None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+        if job is None:
+            return None
+        return job["state"]["result"]
+
+    def is_done(self, job_id: str) -> bool:
+        with self._lock:
+            job = self._jobs.get(job_id)
+        if job is None:
+            return True
+        return job["state"]["state"] in ("done", "error")
+
+    def exists(self, job_id: str) -> bool:
+        with self._lock:
+            return job_id in self._jobs
+
+    def stop(self, job_id: str) -> None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+        if job is not None:
+            job["stop_event"].set()
+
+    def elapsed(self, job_id: str) -> float:
+        with self._lock:
+            job = self._jobs.get(job_id)
+        if job is None:
+            return 0.0
+        return time.monotonic() - job["state"]["start"]
