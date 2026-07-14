@@ -444,7 +444,7 @@ class RoadsFirstSearch:
                 initializer=_worker_init,
                 initargs=(layout, self.probe_limit, self.probe_workers))
 
-        corpus = CorpusWriter(self.corpus_dir, layout) if self.corpus_dir else None
+        corpus = None
 
         params = SimpleNamespace(
             patterns=self.patterns,
@@ -472,6 +472,8 @@ class RoadsFirstSearch:
             return results[k]
 
         try:
+            if self.corpus_dir:
+                corpus = CorpusWriter(self.corpus_dir, layout)
             truncated = False
 
             if self.k_start == "auto":
