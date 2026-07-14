@@ -4,6 +4,7 @@ import { improvementToView } from "../api";
 
 type Optimized = { roads: RoadView[]; buildings: BuildingView[]; k: number; achieved: number };
 type Job = { id: string; state: "running" | "done" | "idle"; elapsed: number };
+type ViewMode = "current" | "optimized";
 
 type CityState = {
   city: LoadResponse | null;
@@ -11,14 +12,12 @@ type CityState = {
   optimized: Optimized | null;
   optimizedRaw: Improvement | null;
   job: Job | null;
-  showCurrent: boolean;
-  showOptimized: boolean;
+  viewMode: ViewMode;
   setCity: (resp: LoadResponse) => void;
   applyImprovement: (imp: Improvement) => void;
   clearOptimized: () => void;
   setJob: (job: Job | null) => void;
-  toggleCurrent: () => void;
-  toggleOptimized: () => void;
+  setViewMode: (mode: ViewMode) => void;
   reset: () => void;
 };
 
@@ -28,8 +27,7 @@ export const useCityStore = create<CityState>((set, get) => ({
   optimized: null,
   optimizedRaw: null,
   job: null,
-  showCurrent: true,
-  showOptimized: true,
+  viewMode: "current",
   setCity: (resp) =>
     set({
       city: resp,
@@ -37,6 +35,7 @@ export const useCityStore = create<CityState>((set, get) => ({
       optimized: null,
       optimizedRaw: null,
       job: null,
+      viewMode: "current",
     }),
   applyImprovement: (imp) => {
     const city = get().city;
@@ -48,16 +47,15 @@ export const useCityStore = create<CityState>((set, get) => ({
     set({
       optimized: { roads: optimized_roads, buildings, k: imp.k, achieved: imp.achieved },
       optimizedRaw: imp,
-      showOptimized: true,
+      viewMode: "optimized",
     });
   },
-  clearOptimized: () => set({ optimized: null, optimizedRaw: null }),
+  clearOptimized: () => set({ optimized: null, optimizedRaw: null, viewMode: "current" }),
   setJob: (job) => set({ job }),
-  toggleCurrent: () => set((s) => ({ showCurrent: !s.showCurrent })),
-  toggleOptimized: () => set((s) => ({ showOptimized: !s.showOptimized })),
+  setViewMode: (mode) => set({ viewMode: mode }),
   reset: () =>
     set({
       city: null, summaryById: new Map(), optimized: null, optimizedRaw: null,
-      job: null, showCurrent: true, showOptimized: true,
+      job: null, viewMode: "current",
     }),
 }));
