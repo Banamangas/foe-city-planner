@@ -170,3 +170,17 @@ def test_route_output_unchanged_after_prune_speedup():
     assert len(route(load_layout(str(REPO / "darkzig.json")))) == 236
     assert len(route(load_layout(str(REPO / "city-user-data.json"),
                                  str(REPO / "city-user-data-foe-helper.json")))) == 142
+
+
+def test_load_layout_from_dict_combined_format():
+    import json
+    import pathlib
+    from foeopt.loader import load_layout_from_dict
+    p = pathlib.Path("darkzig.json")
+    if not p.exists():
+        pytest.skip("darkzig.json not present")
+    data = json.loads(p.read_text())
+    layout = load_layout_from_dict(data)
+    assert len(layout.buildings) > 0
+    assert layout.townhall is not None
+    assert len(layout.region.cells) > 0

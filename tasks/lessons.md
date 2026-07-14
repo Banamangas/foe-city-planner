@@ -490,3 +490,456 @@ per the pre-committed rule (no tuning marathon; revisiting needs new evidence).
    `--lns` when overhead cells > X" heuristic could be a Track D item if the
    project reaches productionization. See `output/lns/<stamp>/` HTML folders
    for visual before/after inspection of the accepted corridor rewrites.
+
+## Dependency policy: gated solver extras (2026-07-06)
+**Rule:** any solver-dependent method that passes its pre-registered A/B gate is productionized as a
+`[solver]` optional extra in pyproject.toml (stdlib core keeps working without it — same pattern as the
+existing `rl` extra), rather than being penalized for the dependency. Experiments keep using
+`uv run --with <lib>` throwaway scripts; `foeopt/` core stays pure-stdlib.
+**Why:** a full audit (2026-07-06) found the stdlib constraint cost exactly one measured road across the
+project's history (attempt #7's 157-vs-158 LNS+CP-SAT, rejected as "not worth the dependency") — every
+other dead track died on evidence about the problem, not on library access. But methods were carrying an
+unspoken extra bar. Pre-committing the promotion rule removes the distortion without giving up the
+zero-dependency core install.
+
+## Roads-first "127" RETRACTED — invalid, buildings were rotated (2026-07-07)
+**The 127-road result below is INVALID and the WIN is withdrawn.** The roads-first CP-SAT model gave each
+non-square consumer an orientation variable and placed **19 of the 33 non-square consumers ROTATED**
+(width/length swapped vs their canonical footprint). **FoE buildings cannot rotate** (hard game
+constraint, user-confirmed), so the layout is illegal. The "independent verification" below checked the
+wrong invariant: `route()`=127 / `is_valid` / 0-unsatisfied are all true but NONE of them look at
+orientation — `is_valid` has no canonical reference and never did.
+**Root cause & the real lesson:** verification must check the invariant that *matters*, not the ones that
+are easy. Every check I ran passed because none examined orientation. Fixed 2026-07-07:
+`foeopt/validate.py` gained `rotated_buildings(layout, canonical_dims(loaded))` (is_valid stays
+orientation-blind by necessity — a bare Layout has no canonical reference, so NEW placement methods must
+call the guard explicitly); rotation removed from `scripts/exp_roads_first.py` and `foeopt/lns.py`
+(the pre-existing packer/anneal/router never rotated — they use same-footprint position moves, so all
+prior 250→158→153 results are unaffected). The de-rotated search must be re-run for an honest legal
+number ~~which will be HIGHER than 127 (19 buildings lose a degree of freedom) and may land above 153~~
+— **prediction was wrong, see the 2026-07-07 de-rotated entry below: actual result is 106, LOWER than
+127.** The reasoning (same k is tighter without rotation) was correct in isolation but missed that the
+prior run was truncated at 2 k-levels by the 120s probe-limit; tuning the limit to 30s unlocked 12
+k-levels (down to k=117), and the lower-k probes more than compensated for the lost rotation degree of
+freedom. Lesson: don't predict a re-run's number from a single factor when the run configuration also
+changes.
+**Rule:** never write placement code that tries both `(w,l)` and `(l,w)`; verify every new placement
+method with `rotated_buildings` against the loaded canonical dims. The rest of this entry is kept for
+the record but its 127/WIN conclusion is void.
+
+## Roads-first feasibility search (2026-07-06) — [see RETRACTION above; 127 is invalid]
+
+**Headline result: 127 roads on darkzig, independently verified.** `output/roads-first/best-k148-a127.json`
+(pattern k=148, comb+TH-stub family) was re-derived from scratch outside the probe harness: all 224
+buildings placed, all 63 consumers 0-unsatisfied, `route()` returns exactly 127 (matches the 127-entry
+`roads` array in the JSON), `is_valid` True, no overlaps. This is a proven achievable count, not a claim.
+
+**Gate arithmetic (spec §2.1, `docs/superpowers/specs/2026-07-06-roads-first-feasibility-design.md` §2):**
+best achieved = 127 ≤ 148 → **WIN**. Recomputed independently from `output/roads-first/probes.jsonl`
+(348 lines, not trusted from the run summary):
+
+| k | SAT | UNSAT | UNKNOWN | best achieved | solve-time note |
+|---|---|---|---|---|---|
+| 152 | 54 | 45 | 93 | **128** | SAT mean 9.4s/max 100.5s; UNSAT mean 2.2s/max 48.4s; UNKNOWN pinned at ~120.5-121.3s (probe limit) — 11815.5s (3.28h) of the budget spent at this level |
+| 148 | 41 | 36 | 79 | **127** | SAT mean 5.5s/max 20.1s; UNSAT mean 1.1s/max 2.0s; UNKNOWN pinned at ~120.5-120.6s — 9785.4s (2.72h) of the budget spent at this level |
+| **total** | **95** | **81** | **172** | — | overall SAT mean 7.7s (max 100.5); UNSAT mean 1.7s (max 48.4); UNKNOWN mean 120.5s (all hit the 120s probe-limit, i.e. truly inconclusive, not slow-SAT/UNSAT) |
+
+Sum of `secs` across all 348 probes = 21600.9s = 6.0002h (the full 6h box, confirming no probe went
+unlogged). The 172 UNKNOWNs alone consumed 20727.3s = 5.758h ≈ 5.7h of that 6h — this is the key
+operational finding, not a footnote.
+
+**Verdict: DONE, walk_complete = FALSE, deadline_hit = TRUE.** Per the pre-committed k-search (spec §2.2:
+start at 152, step −4 while feasible, bisect the gap), only k=152 and k=148 were ever probed before the
+6h deadline; nothing below k=148 was attempted. **127 is a validated achievable count, not a proven
+floor.** The true within-family floor for the comb+TH-stub pattern is very likely lower than 127 — the
+search was truncated by wall-clock, not by exhausting the family. Do not read "WIN" as "127 is optimal";
+read it as "127 already clears the win bar with most of the k-space unexplored."
+
+**Operational finding: the 120s per-probe UNKNOWN limit ate the budget.** 172/348 probes (49%) timed out
+without CP-SAT reaching SAT or UNSAT, burning 5.7h of 6h while only advancing two k-levels. SAT and UNSAT
+probes are both fast (means 7.7s and 1.7s) — the cost is entirely in probes CP-SAT can't resolve either
+way within the limit. A follow-up run should tune the probe-limit (shorter, to sample more k-levels per
+hour, accepting more UNKNOWNs per level) or the model/solver hints (better bounds, symmetry breaking, a
+different search strategy) before spending more wall-clock on this exact configuration.
+
+**Mechanism reading — why roads-first beats every prior method on this project.** Every earlier structural
+attempt (four constructive lane/hybrid packers, CP-SAT lane composition, LNS+CP-SAT, RL M2-M4) died on one
+of two couplings: greedy inner placement that can't find the overhang/corner-contact assignments a real
+optimum needs, or joint placement+routing that blew CP-SAT's ~11×11 window. Roads-first (the user's own
+framing) breaks both at once by fixing the road network *before* placement: with the skeleton fixed per
+probe, the inner problem is pure 2D rectangle packing with an adjacency side-constraint and zero
+connectivity variables — well inside CP-SAT's reach as an exact feasibility check. Because the inner step
+is exact rather than greedy, it can find the same overhang/corner placements that let the user's own
+142-road city route at 2.02 average cell-sharing, which is exactly the trick no prior constructive
+heuristic in this project ever reproduced.
+
+**Strategic implication.** 127 is the first method in this project's history to beat the previous
+all-time-best of 153 (this week's polish arm) and the long-standing local-method floor of 158 — by a
+decisive margin, with most of the search space still unexplored below k=148. It also sits well above the
+Σ(min-side)/2 estimate of 114 (not a bound — assumes perfect double-row tiling, geometrically unreachable
+per the 2026-06-23 entry), so there is room for the k-walk to keep improving without approaching that
+estimate. Per the 2026-07-06 gated-solver-extras policy, this is a search-time result only: `ortools`
+stays a throwaway `uv run --with` dependency, `foeopt/` core is unchanged, and productionizing the pattern
+search (continuing the k-walk past 148, wiring it into `polish`/webapp) is a separate, later spec.
+Artifacts: `output/roads-first/best-k148-a127.json` / `.html` (the winning layout) and the full
+`output/roads-first/best-k*.json` / `.html` set (every improving incumbent found during the walk).
+
+## Roads-first de-rotated re-run — 106 roads, verified LEGAL, gate WIN (2026-07-07)
+
+Re-ran the roads-first CP-SAT feasibility search with the rotation fix in place (`scripts/exp_roads_first.py`
+canonical-footprint-only probe + `rotated_buildings` defence-in-depth guard in `validate()`). This is the
+honest legal number the RETRACTION demanded; it replaces the void 127 above.
+
+**Configuration change that mattered:** `--probe-limit 30` (down from the prior 120s default), per this
+file's own 2026-07-06 operational finding ("tune the probe-limit shorter to sample more k-levels per hour").
+The prior 120s run reached only 2 k-levels in 6h (49% UNKNOWN, 5.7h burned at the limit). The de-rotated
+smoke run (20 patterns × 20s, 10 min) already returned a verified-legal 123 and showed de-rotated SAT
+probes resolve fast (mean 3.0s, max 13.6s) — so 30s catches ~all SATs while giving ~3x the k-coverage.
+
+**Headline result: 106 roads on darkzig, independently verified LEGAL.** `output/roads-first/best-k118-a106.json`
+(pattern k=118, comb+TH-stub family) was re-derived from scratch outside the probe harness:
+- 224/224 buildings placed; 0 overlapping cells; 0 cells out of region.
+- `route()` returns exactly 106 (matches the 106-entry `roads` array, matches `achieved`).
+- `is_valid` True, 0 unsatisfied consumers.
+- **`rotated_buildings(cand, canonical_dims(loaded))` = 0** — the invariant the prior "verification" never
+  checked. Every non-square consumer is in its canonical `(width, length)` orientation.
+
+**Gate arithmetic (spec §2.1): best achieved = 106 ≤ 148 → decisive WIN.** 106 also beats: the void 127
+(−21), the prior all-time best 153 (−47), the long-standing local-method floor 158 (−52), and the
+Σ(min-side)/2 estimate of 114 (−8 — and 114 was never a bound, just a double-row-tiling estimate the
+2026-06-23 entry called "geometrically unreachable for any packer"; 106 clears it via the stubs/junctions
+mechanism where a single road cell serves 3 buildings, exactly as the user's own 142-road city does at
+avg load 2.02).
+
+**Independent recomputation from `output/roads-first/probes.jsonl` (2189 lines, not trusted from the run
+summary):**
+
+| k | SAT | UNSAT | UNKNOWN | filler-fail | best achieved | level secs | mins |
+|---|---|---|---|---|---|---|---|
+| 152 | 49 | 92 | 50 | 1 | 127 | 1707.8 | 28.5 |
+| 148 | 42 | 94 | 56 | 0 | 128 | 1916.3 | 31.9 |
+| 144 | 37 | 102 | 53 | 0 | 121 | 1788.7 | 29.8 |
+| 140 | 31 | 111 | 49 | 1 | 119 | 1739.3 | 29.0 |
+| 136 | 28 | 115 | 49 | 0 | 116 | 1782.1 | 29.7 |
+| 132 | 15 | 116 | 61 | 0 | 118 | 2036.3 | 33.9 |
+| 128 | 10 | 120 | 62 | 0 | 118 | 2016.3 | 33.6 |
+| 124 | 8 | 124 | 60 | 0 | 113 | 1982.2 | 33.0 |
+| 120 | 7 | 129 | 56 | 0 | 107 | 1947.1 | 32.5 |
+| 118 | 2 | 127 | 63 | 0 | **106** | 2015.1 | 33.6 |
+| 117 | 1 | 53 | 23 | 0 | 112 | 734.0 | 12.2 |
+| 116 | 0 | 132 | 60 | 0 | — (INCONCLUSIVE) | 1892.0 | 31.5 |
+| **total** | **230** | **1315** | **642** | **2** | **106** | **21557.2** | **359.3** |
+
+Overall: SAT mean 4.75s (max 28.9s — all resolved within the 30s limit, confirming the probe-limit tuning);
+UNSAT mean 0.76s (max 29.4s); UNKNOWN mean 30.31s (all hit the 30s limit). `sum_secs = 21557.2s = 5.988h`
+(the full 6h box, confirms no unlogged probe). UNKNOWN sum_secs = 19460.9s = 5.406h (**90.3% of the budget**)
+— still the dominant cost even at 30s; the shorter limit just made each UNKNOWN 4x cheaper, buying 12
+k-levels instead of 2.
+
+**k-walk trace (spec §2.2: start 152, step −4 while feasible, bisect the gap):** 152→148→144→140→136→132→
+128→124→120 all FEASIBLE → 116 INCONCLUSIVE (0 SAT, 132 UNSAT, 60 UNKNOWN) → bisect 116↔120 → 118 FEASIBLE
+(106) → bisect 116↔118 → 117 FEASIBLE (112) → deadline. `walk_complete = TRUE` (the integer bisection
+converged: 117 lowest proven-feasible k, 116 INCONCLUSIVE adjacent), `deadline_hit = TRUE`. **106 is a
+validated achievable count, not a proven floor** — k=116's 60 UNKNOWNs mean it may be feasible with more
+probe time, and even at 117 only 1 of 77 probes SAT'd (the family is sparse there). The true within-family
+floor for the comb+TH-stub pattern is very likely at or below 106; do not read 106 as optimal.
+
+**Why 106 is at k=118, not at the lowest feasible k (117→112).** Lower k = tighter road skeleton = fewer
+patterns SAT (230 SAT total, but only 1 at k=117, 2 at k=118, 7 at k=120). The best-achieved-at-k does not
+monotonically decrease with k — there's a sweet spot (k=118 here) where enough patterns still SAT for one
+to route-prune aggressively. Below that, SATs get too rare to find a low-achieved one; above it, the
+skeleton has more roads to prune but the starting count is higher. The k-walk records the best across ALL
+levels, so 106 stands regardless.
+
+**Probe-limit tuning verdict (the 2026-07-06 operational finding, acted on):** 30s was the right call.
+Every SAT resolved within 30s (max 28.9s), so no achievable layout was missed by the shorter limit, and
+the 4x-cheaper UNKNOWNs bought 12 k-levels of coverage (vs the prior 120s run's 2 levels) — which is the
+entire reason 106 (at k=118) was reachable at all. The prior run's 127 was at k=148; it never probed below
+148. **Rule reaffirmed:** when the operational finding says tune a bottleneck, tune it before re-running.
+
+**Strategic implication.** 106 is the first method in this project's history to beat the Σ/2 estimate
+(114) and the local-method floor (158) simultaneously, by a wide margin, with a verified-legal layout.
+Roads-first (fix the skeleton, then exact-pack) is the project's winning structural idea — the same one
+that beat 153 with the invalid 127, now confirmed legal. Per the 2026-07-06 gated-solver-extras policy,
+this is a search-time result: `ortools` stays a throwaway `uv run --with` dependency, `foeopt/` core is
+unchanged, and productionizing (wiring the k-walk into `polish`/webapp, tuning for lower k or a tighter
+family) is a separate, later spec. Artifacts: `output/roads-first/best-k118-a106.json`/`.html` (winning
+layout) and the full `best-k*.json`/`.html` set. The void 127 artifacts are in
+`output/roads-first/invalid-rotated-2026-07-06/`; smoke artifacts in
+`output/roads-first/smoke-derotated-artifacts/`.
+
+## Roads-first parallel re-run — 104 roads in ~2h wall-clock, gate WIN (2026-07-07)
+
+Parallelized the throwaway CP-SAT feasibility search via `multiprocessing.Pool` (spec
+`docs/superpowers/specs/2026-07-07-roads-first-parallel-search-design.md`, plan
+`docs/superpowers/plans/2026-07-07-roads-first-parallel-search.md`). Default config:
+`--workers 4 --probe-workers 4` = 4 concurrent probes × 4 CP-SAT portfolio workers = 16
+cores. The k-walk stays sequential (each level is a barrier); only the 200 patterns within
+a level dispatch concurrently via `imap_unordered`. Verification (`route()`/`is_valid`/
+`rotated_buildings`) stays in-worker and deterministic — every saved layout remains
+independently verifiable-legal. `--workers 1 --probe-workers 1` reproduces the sequential
+run exactly.
+
+**Headline result: 104 roads on darkzig, independently verified LEGAL, in ~2h wall-clock
+(vs the sequential 6h).** `output/roads-first/best-k116-a104.json` re-derived from scratch:
+224/224 placed, 0 overlaps, 0 out-of-region, `route()`=104 matches, `is_valid` True,
+0 unsatisfied, `rotated_buildings`=0. 104 beats the sequential 106 (−2), the prior
+all-time best 153 (−49), the local-method floor 158 (−54), and the Σ/2 estimate 114 (−10).
+Gate (spec §2.1): 104 ≤ 148 → decisive WIN (already cleared by 106; this extends it).
+
+**k-walk converged before the deadline:** `walk_complete=TRUE`, `deadline_hit=FALSE` —
+the bisection finished at k=115 (INCONCLUSIVE) / k=116 (FEASIBLE, 1 SAT → 104) in ~2h,
+leaving ~4h of the 6h box unspent. The sequential run hit the deadline at k=117
+(`walk_complete=TRUE` there too, but only after the full 6h). 13 k-levels probed (152→112
+in steps of −4, then bisection at 115/114/113-equivalent density).
+
+**Throughput (spec §9 must): ~4x.** 2496 probes in ~2h wall-clock (cumulative probe-time
+25505s = 7.085h across 4 workers → 3.9x parallel efficiency). The sequential baseline did
+2189 probes in 5.988h wall-clock (6.1 probes/min wall); the parallel run did 2496 probes
+in ~2h (~20.8 probes/min wall). This is the reliable, mechanical win — exactly as predicted.
+
+**UNKNOWN rate (spec §9 nice-to-have, NOT a gate): unchanged.** 731/2496 = 29.3% UNKNOWN,
+statistically identical to the sequential baseline's 642/2189 = 29.3%. The 4-worker CP-SAT
+portfolio did NOT meaningfully flip UNKNOWNs to SAT/UNSAT — the UNKNOWN probes are genuinely
+hard (the model is loose at low k), and 4 parallel search strategies don't resolve them
+within the 30s probe-limit any better than 1 does. The portfolio win was empirical and
+unpromised; the throughput win is what delivered the result. **Lesson: when the operational
+finding says the bottleneck is UNKNOWN timeouts, the reliable fix is more k-level coverage
+via throughput, not portfolio depth.** UNKNOWNs still consumed 87.7% of cumulative
+probe-time — but at 4x cheaper per wall-clock minute, the run reached 13 levels (incl.
+bisection) instead of 12, and finished 3x faster.
+
+**Why 104 (at k=116) and not lower.** The k-walk converged: 116 is the lowest
+proven-feasible k (1 SAT out of 192 probes there); 112/114/115 all INCONCLUSIVE (0 SAT,
+~60 UNKNOWN each — may be feasible with more probe time, but the family is sparse there).
+104 is a validated achievable count, not a proven floor — the true within-family floor is
+very likely at or below 104. The parallel run's early completion means a follow-up could
+spend the remaining ~4h probing harder at k=112–115 (longer probe-limit, more patterns) to
+try to flip those INCONCLUSIVE levels to FEASIBLE. That is a separate later spec per the
+gated-solver-extras policy.
+
+**Per-level table (independently recomputed from `probes.jsonl`, 2496 lines):**
+
+| k | SAT | UNSAT | UNKNOWN | filler | best |
+|---|---|---|---|---|---|
+| 152 | 49 | 92 | 50 | 1 | 127 |
+| 148 | 42 | 94 | 55 | 1 | 126 |
+| 144 | 36 | 104 | 52 | 0 | 121 |
+| 140 | 32 | 110 | 49 | 1 | 119 |
+| 136 | 27 | 116 | 49 | 0 | 117 |
+| 132 | 17 | 114 | 61 | 0 | 115 |
+| 128 | 11 | 119 | 62 | 0 | 118 |
+| 124 | 9 | 124 | 59 | 0 | 113 |
+| 120 | 3 | 128 | 61 | 0 | 112 |
+| 116 | 1 | 133 | 58 | 0 | **104** |
+| 115 | 0 | 133 | 59 | 0 | — (INCONCLUSIVE) |
+| 114 | 0 | 132 | 60 | 0 | — (INCONCLUSIVE) |
+| 112 | 0 | 136 | 56 | 0 | — (INCONCLUSIVE) |
+| **total** | **227** | **1535** | **731** | **3** | **104** |
+
+SAT mean 6.09s (max 29.9s — all resolved within the 30s limit); UNSAT mean 1.14s; UNKNOWN
+mean 30.61s (all hit the 30s limit). `sum_secs` = 25505s = 7.085h cumulative (4 workers ×
+~2h wall = ~8h, matching).
+
+**Code change:** pure-Python `multiprocessing` in the throwaway `scripts/exp_roads_first.py`
+only — no new dependency, no change to `foeopt/` core (per the gated-solver-extras policy).
+New CLI: `--workers N` (default 4), `--probe-workers M` (default 4). Worker initializer
+sends the read-only layout once per worker (not per task). `pool.terminate()` on deadline-hit
+(worst-case overrun = 0, not `probe_limit` — the final-review fix). Selftest asserts
+parallel-equivalence (`par_statuses == seq_statuses` at `--workers 2 --probe-workers 1`).
+4 unit tests + selftest all pass; `--workers 1 --probe-workers 1` reproduces the sequential
+run exactly. Full implementation: 5 commits on `feat/roads-first-parallel` (d023632..0cd9346),
+all per-task reviews + final whole-branch review clean (2 Important findings from final
+review — deadline-drain overrun + ortools test gate — both fixed).
+
+**Strategic implication.** The parallel search delivers the same verified-legal road count
+(104, beating the sequential 106) in 1/3 the wall-clock, with the k-walk converging early
+and ~4h of budget unspent. Roads-first remains the project's winning structural idea; the
+parallelism makes it practical to iterate on (a 2h run instead of 6h). The remaining
+~4h of budget and the INCONCLUSIVE k=112–115 levels point at the next experiment: spend
+more probe-time per pattern at the tightest k-levels (longer `--probe-limit`, more
+`--patterns`) to try to flip INCONCLUSIVE to FEASIBLE and push below 104. Productionization
+(wiring into `polish`/webapp) remains a separate later spec. Artifacts:
+`output/roads-first/best-k116-a104.json`/`.html` and the full `best-k*.json`/`.html` set;
+sequential baseline preserved in `output/roads-first/sequential-baseline-2026-07-07/`.
+
+## Pattern-family ceiling correction + full-TH-sampling test (2026-07-07)
+
+**Correction of an earlier misdiagnosis.** After the parallel run delivered 104, a targeted
+re-run (`--k-start 116 --probe-limit 60 --patterns 400`) was launched to test whether longer
+probe-limits / more patterns at the tight k-levels could flip INCONCLUSIVE→FEASIBLE and push
+below 104. Two findings reshaped the understanding:
+
+1. **`--patterns 400` was a no-op.** At k=116 *and* k=120 the generator yielded exactly 192
+   patterns — same as every k from 108–152. Initial diagnosis blamed the tight-k exact-k
+   discard; that was **wrong**. The real cause: `th_anchor_candidates` is a *deliberate coarse
+   heuristic* (~8 TH positions: 4 corner+offset variants + 2 mid-edge), and the parameter grid
+   (8 TH × 4 sides × 5 spacings × 2 modes × 2 stubs = 640 combinations) dedupes to ~192
+   distinct skeletons. The 192 is an **artifact of the 8-TH sampling**, not a constraint of the
+   comb family or of low k. Measured: 0 exact-k discards at k=120; the ceiling is dedup.
+   **Lesson: measure before reasoning from code shape.** I gave a confident low-k-supply
+   explanation that was empirically false; a 30-line instrumented run would have caught it.
+
+2. **The 104 was portfolio luck, not a robustly reachable result.** The targeted re-run
+   probed all 192 patterns at k=116 and got **0 SAT** (132 UNSAT, 60 UNKNOWN) — vs the
+   parallel run's 1/192 SAT (→ 104). Same family, fully sampled; the difference is CP-SAT
+   portfolio non-determinism (`--probe-workers 4` runs 4 parallel search strategies; whether
+   the one hard SAT at k=116 is found is a coin flip). Spec §6 flagged this as the cost of
+   relaxing search determinism; the targeted run is the first measurement of it. **The robust
+   floor is ~k=118** (108–110 roads): k=117 SAT at 110, k=118 SAT at 110, k=120 SAT at 108.
+   k=116's 104 stands as a validated achievable count (independently re-verified LEGAL on
+   2026-07-07) but NOT as a reproducible one — report it as "achievable under portfolio
+   luck," not "the floor."
+
+**Full-TH-sampling test.** Added `--th-anchors {coarse,full}` flag
+(`scripts/exp_roads_first.py:th_anchor_candidates`). `full` enumerates every (x,y) where the
+TH footprint fits in-region — **2162 positions on darkzig** vs ~8 coarse. Pattern counts:
+
+| k | coarse | full |
+|---|---|---|
+| 120 | 192 | 54,806 |
+| 116 | 192 | 54,995 |
+
+A ~285x increase in pattern diversity — the comb family was nowhere near exhausted; the TH
+sampling was the bottleneck. Quick probe test (`--th-anchors full --k-start 112 --patterns 200
+--probe-limit 30 --time-box 1800`, 4 workers): **k=116 confirmed FEASIBLE at 106** (vs 0 SAT
+coarse), and **k=112 found a SAT at 105 in just 16 probes** — an INCONCLUSIVE level in the
+coarse run (0 SAT, 136 UNSAT, 56 UNKNOWN) flipped to FEASIBLE immediately. Best **105,
+independently re-verified LEGAL** (224/224 placed, `route()`=105 matches, `is_valid` True, 0
+unsatisfied, `rotated_buildings`=0, 0 overlaps, 0 out-of-region).
+
+**This is the highest-leverage diversity lever found in this project.** It's a one-flag change
+to a throwaway script (no `foeopt/` change, no new dep), and it flips the "comb family is
+exhausted at 192" diagnosis into "the comb family has 55k instances; we were sampling 0.3% of
+it." The verified 105 (109% road efficiency) is a new all-time best for a *robustly reachable*
+result (the 104 was luck). Productionization and the richer-pattern-family spec (lanes/stubs)
+both build on this.
+
+## Road-efficiency metric + CP-SAT feasibility insight (2026-07-07)
+
+**Road efficiency = Σ(short sides of road-needing buildings)/2 / roads, as a %.** 100% = every
+road cell serves the double-row ideal (2 buildings); >100% = some road cells serve 3
+(stubs/junctions), beating the Σ/2 estimate. darkzig: 63 consumers, Σ/2 = 114.5.
+
+| run | roads | eff% |
+|---|---|---|
+| sequential baseline (106) | 106 | 108.0% |
+| parallel baseline (104, portfolio luck) | 104 | 110.1% |
+| targeted robust floor (108) | 108 | 106.0% |
+| full-TH k=112 (105, verified) | 105 | 109.0% |
+
+**Every recent roads-first result clears 100% efficiency — unprecedented for this game.**
+The user reports prior tools (one tried years ago) achieved 70–90% and usually had many
+unplaced. Roads-first + CP-SAT placement consistently beats the Σ/2 double-row-tiling
+estimate via the stubs/junctions mechanism (a single road cell serving 3 buildings), which the
+exact placer finds but no greedy constructor in this project ever reproduced.
+
+**CP-SAT returns the *first* feasible placement, not the best.** The probe is a feasibility
+problem (`AddNoOverlap2D` + anchor constraints, no objective). Whether CP-SAT finds SAT in
+3.2s or 30.3s, it stops at the first placement satisfying all constraints — the `secs` reflects
+search difficulty, not result quality. The road count comes from `route()` running on *that
+specific placement*; a different valid placement on the same skeleton could route lower. So:
+- A SAT at 30.3s (borderline, near the probe-limit) is a **ceiling** on what that skeleton can
+  achieve, not the floor. The same skeleton might yield fewer roads with a different placement.
+- A 30.4s UNKNOWN is a skeleton CP-SAT couldn't resolve either way in the limit — might be
+  placeable with more time, might not.
+**Lever identified but not built:** add an *objective* to the CP-SAT model (minimize something
+correlated with post-`route()` road count — e.g. maximize shared road-cell adjacency). Then
+longer probe-time directly lowers the achieved count rather than just flipping UNKNOWNs. This
+is a model change, separate spec. For R&D, not production (longer probes hurt user latency).
+
+**Pool dispatch is queue-based, not batch-based.** `imap_unordered` workers pull the next task
+the moment they finish — no per-task waiting. A 4s SAT worker runs ~7 probes while a 30s
+UNKNOWN worker runs 1. The only idle is at the **level barrier** (last slow task → other 3
+workers idle ~20-30s) — a small tax, measured at 3.9x effective parallelism vs 4x theoretical.
+The rejected Approach 2 (speculative next-k) would eliminate this; not worth the complexity
+now (the boundary idle is ~5-10 min over 13 levels).
+
+## Productionization analysis + RL verdict (2026-07-07)
+
+The user wants to productionize roads-first; 2h/6h search time is fine for R&D but no user will
+wait it. Analysis of how to make it fast for users, roughly in leverage order:
+
+1. **Time-boxed search with graceful degradation (core).** Run the k-walk with a user-facing
+   budget (60–120s, not 6h), return the best achieved layout. The data shows strong layouts
+   come early (k=152→127 in ~30 min sequential; first SAT at k=116 in ~60s with full-TH
+   parallel). A 120s budget lands in k=130–140 territory → ~120–130 roads → ~85–95% efficiency,
+   still far better than the old 70–90% tools. Promise a time bound, return the incumbent.
+2. **Warm-start from the classical pipeline (high leverage).** The project already has a fast
+   classical pipeline (repack + anneal polish → 158 roads in seconds, 0-unplaced). Productionize
+   roads-first as a *polish step on top of the classical result*, not a from-scratch search:
+   run classical (seconds) → 158, then roads-first `--k-start 158` walk-down with 60–120s budget
+   → ~125–135 roads, return whichever is better. User gets a good layout in ~2 min total; roads-
+   first only spends time improving. Slots in beside the existing `polish`/`improve` CLI modes.
+3. **Smarter k-start from a lower bound.** Today the walk starts at 152 (arbitrary) and steps
+   down. With the adjacency bound (`foeopt/bounds.py::bound_adjacency`=21) and Σ/2 (114), start
+   at ~130 (just below the classical 158) and step down — skip the easy high-k levels where
+   nothing is learned. The targeted run proved this: `--k-start 116` saved ~1.5h.
+4. **Any-time / incremental results.** Surface the incumbent layout to the user as it improves
+   (the webapp already renders HTML). A user watching 140→130→120 over 60s feels progress; a
+   60s spinner feels like nothing. UX lever, not algorithmic, but changes perceived performance.
+5. **Cache the pattern family.** `generate_patterns --th-anchors full` takes noticeable time to
+   enumerate 55k patterns. Precompute/memoize per region shape for a productionized tool.
+
+**Does NOT help productionization:** longer probe-limits (60–90s, helps R&D optima, hurts user
+latency); more patterns (400+, more thorough, slower); objective-augmented CP-SAT (better
+placements, more solve time). All are R&D levers.
+
+**Production recipe:** time-boxed (60–120s) + warm-started from the classical pipeline + smart
+k-start + any-time UX. That gets a user from 158 → ~125 roads in ~2 min — a ~21% improvement on
+the project's own best fast method, at ~110%+ efficiency. Unprecedented for the game.
+
+**RL verdict: NOT revived as the main bet.** Roads-first + CP-SAT is the main bet now and it
+works. But the findings open a **narrow, well-defined RL role** for later consideration:
+- **RL as skeleton chooser, CP-SAT as placer.** Train a policy to *select a road skeleton* (the
+  high-level decision: TH position + side + spacing + mode + stubs — discrete, low-dimensional),
+  then use the exact placer to fill buildings around it. The policy never places a building, so
+  the M2–M4 `unroutable` failure mode (placement at dense fill) disappears by construction.
+- **The roads-first probe *is* the labeler.** Run the probe on 55k patterns → 55k (skeleton →
+  achieved_roads) labels → train a policy to predict low-achieving skeletons. This is the BC/
+  DAgger setup C3 proposed, but with a much cleaner labeler than "repack outputs" (which capped
+  quality at ~169).
+- **Hesitations:** (a) CP-SAT is slow per label (~8h to label 55k patterns once on 16 cores;
+  DAgger iterates); (b) the policy would inherit the pattern generator's biases — needs the
+  richer lane/stub family first (the same next-spec identified 2026-07-02); (c) the productionized
+  time-boxed search might be fast enough that RL's marginal value is small — "last 30%" latency
+  optimization, not "make it work."
+**RL stays off the table for now.** Revisit only if (1) the time-boxed CP-SAT search ships and
+60–120s latency is still a user complaint, AND (2) the richer lane/stub pattern family has
+shipped (RL needs it to escape the comb bias). The M2–M4 placement-RL track stays archived.
+
+**Recommended next specs, in order:**
+1. **Productionization spec (Track D)** — time-boxed roads-first, warm-started from classical,
+   any-time UX. Delivers user value; the findings give it a clear recipe.
+2. **Richer pattern family spec** — expand TH sampling (proven: 55k patterns, flips INCONCLUSIVE
+   to FEASIBLE, verified 105) + add lane/stub topologies (to represent the expert's structure
+   and push below 105). R&D track that feeds back into #1 (better patterns → better user results
+   in the same time budget).
+
+## Green tests ≠ working server: cross-thread SQLite in the Flask API (2026-07-13)
+**Bug:** `webapp/cache.py::CityCache` opened one `sqlite3.connect(db_path)` in the main thread and
+reused that connection across all requests. Flask's dev/prod server handles each request on a
+**worker thread**, and sqlite3 forbids using a connection from a thread other than the one that
+created it → the very first real `/api/load` returned a 400 `"SQLite objects created in a thread
+can only be used in that same thread"`. **The full pytest suite (274 tests) was green** because
+Flask's `test_client` runs the handler in the *same* thread as the test — so no test ever crossed
+a thread boundary, and the entire cache layer looked correct.
+**How it was caught:** driving the *real* server end-to-end (start `make_server`, POST over a real
+socket), not the test_client — exactly the CLAUDE.md "verify the real flow, not just tests" rule.
+The test_client is not a server; it never exercises threading, real SSE streaming, or an on-disk DB.
+**Fix:** `sqlite3.connect(db_path, check_same_thread=False)` + a `threading.Lock` guarding every DB
+method. `check_same_thread=False` allows cross-thread use of the one shared connection (required so a
+`:memory:` DB stays shared — thread-local connections would give each thread its *own empty*
+in-memory DB); the lock serializes access so there's no concurrent-transaction corruption. Fine for
+this app's traffic. Added a cross-thread regression test (`test_cache_usable_from_other_thread`)
+that runs get/store from a spawned thread — it reproduces the ProgrammingError before the fix.
+**Rules:**
+1. For any Flask/threaded-server feature, smoke the **real** server over a socket before calling it
+   done — test_client passing proves route logic, not thread-safety, streaming, or persistence.
+2. A shared sqlite connection reused across request threads needs `check_same_thread=False` + a lock.
+   Never reach for thread-local connections when `:memory:` must be shared (each connection = its own
+   in-memory DB).
+3. When a plan hands you code, the plan's *test* is the spec: `test_api_stop_unknown_job` expected 404
+   but the plan's `api_stop` returned 200 for unknown jobs (because `is_done` can't tell "unknown"
+   from "finished"). Fixed by adding a real `JobManager.exists()` predicate rather than string-matching
+   the error message — surface the missing state, don't paper over it.
