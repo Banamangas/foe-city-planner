@@ -157,6 +157,7 @@ def main(argv=None):
     p.add_argument("--smoke", action="store_true")
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--probe-workers", type=int, default=4)
+    p.add_argument("--corpus", default=None, metavar="DIR")
     args = p.parse_args(argv)
     if args.smoke:
         args.patterns = 20
@@ -216,6 +217,7 @@ def main(argv=None):
         probe_workers=args.probe_workers,
         th_anchors=args.th_anchors,
         k_start=args.k_start,
+        corpus_dir=args.corpus,
     ).run(on_improvement=on_improvement, on_status=on_status)
     print(json.dumps({k: v for k, v in res.items() if k != "results"}, indent=1))
     per_level = {k: v[0] + (f" achieved={v[1]}" if v[1] is not None else "")

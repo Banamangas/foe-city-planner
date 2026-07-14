@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 from foeopt.model import Building, Footprint, Layout, Region
 from foeopt.bounds import pick_k_start
+from foeopt.corpus import CorpusWriter
 
 _ORTHO = ((1, 0), (-1, 0), (0, 1), (0, -1))
 Cell = tuple[int, int]
@@ -353,7 +354,7 @@ def _run_probe_seq(payload: tuple) -> dict:
         _WORKER_LAYOUT = None
 
 def _probe_level(layout, region, consumers, k, rng, params, log, pool=None,
-                 on_improvement=None) -> tuple[str, int | None]:
+                 on_improvement=None, corpus=None) -> tuple[str, int | None]:
     th = layout.townhall.footprint
     th_mode = getattr(params, "th_anchors", "coarse")
     pats = generate_patterns(region, th.width, th.length, k, rng, params.patterns,
@@ -369,6 +370,9 @@ def _probe_level(layout, region, consumers, k, rng, params, log, pool=None,
         achieved = result["achieved"]
         log({"k": k, "params": pat.params, "status": status,
              "achieved": achieved, "secs": result["secs"], "order": order})
+        if corpus is not None:
+            corpus.record(k=k, roads=pat.roads, th=pat.th, status=status,
+                          secs=result["secs"], pos=result.get("pos"))
         if status == "SAT":
             vlay = result["layout"]
             if best_achieved is None or achieved < best_achieved:
@@ -415,7 +419,7 @@ class RoadsFirstSearch:
     def __init__(self, layout: Layout, *, time_box: float, patterns: int = 200,
                  probe_limit: float = 60.0, workers: int = 4,
                  probe_workers: int = 4, th_anchors: str = "full",
-                 k_start="auto"):
+                 k_start="auto", corpus_dir=None):
         self.layout = layout
         self.time_box = time_box
         self.patterns = patterns
@@ -424,6 +428,7 @@ class RoadsFirstSearch:
         self.probe_workers = probe_workers
         self.th_anchors = th_anchors
         self.k_start = k_start
+        self.corpus_dir = corpus_dir
 
     def run(self, on_improvement=None, on_status=None, should_stop=None) -> dict:
         layout = self.layout
@@ -438,6 +443,8 @@ class RoadsFirstSearch:
                 self.workers,
                 initializer=_worker_init,
                 initargs=(layout, self.probe_limit, self.probe_workers))
+
+        corpus = CorpusWriter(self.corpus_dir, layout) if self.corpus_dir else None
 
         params = SimpleNamespace(
             patterns=self.patterns,
@@ -458,7 +465,8 @@ class RoadsFirstSearch:
             if k not in results:
                 results[k] = _probe_level(layout, region, consumers, k, rng,
                                           params, lambda r: None, pool=pool,
-                                          on_improvement=on_improvement)
+                                          on_improvement=on_improvement,
+                                          corpus=corpus)
                 if on_status is not None:
                     on_status(k, results[k][0], 0, 0)
             return results[k]
@@ -519,6 +527,8 @@ class RoadsFirstSearch:
                     "walk_complete": not truncated, "deadline_hit": _should_stop(),
                     "results": results}
         finally:
+            if corpus is not None:
+                corpus.close()
             if pool is not None:
                 pool.close()
                 pool.join()
