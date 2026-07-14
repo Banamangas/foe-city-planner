@@ -6,23 +6,33 @@ import type { BuildingView } from "../types";
 export function CityMap() {
   const city = useCityStore((s) => s.city);
   const optimized = useCityStore((s) => s.optimized);
-  const showCurrent = useCityStore((s) => s.showCurrent);
-  const showOptimized = useCityStore((s) => s.showOptimized);
-  const toggleCurrent = useCityStore((s) => s.toggleCurrent);
-  const toggleOptimized = useCityStore((s) => s.toggleOptimized);
+  const viewMode = useCityStore((s) => s.viewMode);
+  const setViewMode = useCityStore((s) => s.setViewMode);
 
+  const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [size, setSize] = useState({ w: 900, h: 640 });
   const [t, setT] = useState<Transform>({ offsetX: 0, offsetY: 0, scale: 1 });
   const [tip, setTip] = useState<{ x: number; y: number; b: BuildingView } | null>(null);
   const drag = useRef<{ x: number; y: number } | null>(null);
 
   const view = city?.map_view ?? null;
+  const showOpt = viewMode === "optimized" && optimized !== null;
+
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const ro = new ResizeObserver(() => {
+      setSize({ w: wrap.clientWidth, h: wrap.clientHeight });
+    });
+    ro.observe(wrap);
+    return () => ro.disconnect();
+  }, []);
 
   const fit = useCallback(() => {
-    const cv = canvasRef.current;
-    if (!cv || !view) return;
-    setT(fitTransform(view, cv.width, cv.height));
-  }, [view]);
+    if (!view) return;
+    setT(fitTransform(view, size.w, size.h));
+  }, [view, size]);
 
   useEffect(() => { fit(); }, [fit]);
 
@@ -40,16 +50,15 @@ export function CityMap() {
     ctx.fillStyle = p.region;
     for (const [x, y] of view.region) ctx.fillRect(x, y, cell, cell);
 
-    if (showCurrent) {
+    if (showOpt && optimized) {
+      ctx.fillStyle = p.optimized_road;
+      for (const r of optimized.roads) ctx.fillRect(r.x, r.y, cell, cell);
+    } else {
       ctx.fillStyle = p.current_road;
       for (const r of view.current_roads) ctx.fillRect(r.x, r.y, cell, cell);
     }
-    if (showOptimized && optimized) {
-      ctx.fillStyle = p.optimized_road;
-      for (const r of optimized.roads) ctx.fillRect(r.x, r.y, cell, cell);
-    }
 
-    const buildings = showOptimized && optimized ? optimized.buildings : view.buildings;
+    const buildings = showOpt && optimized ? optimized.buildings : view.buildings;
     ctx.lineWidth = 1;
     ctx.strokeStyle = p.border;
     for (const b of buildings) {
@@ -57,7 +66,7 @@ export function CityMap() {
       ctx.fillRect(b.x, b.y, b.w, b.h);
       ctx.strokeRect(b.x, b.y, b.w, b.h);
     }
-  }, [view, t, optimized, showCurrent, showOptimized]);
+  }, [view, t, size, optimized, showOpt]);
 
   useEffect(() => {
     const cv = canvasRef.current;
@@ -92,7 +101,7 @@ export function CityMap() {
     const rect = canvasRef.current!.getBoundingClientRect();
     const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
     const { gx, gy } = screenToGrid(sx, sy, t, view.cell, view.origin);
-    const buildings = showOptimized && optimized ? optimized.buildings : view.buildings;
+    const buildings = showOpt && optimized ? optimized.buildings : view.buildings;
     const b = buildingAt(gx, gy, buildings, view.origin, view.cell);
     setTip(b ? { x: sx, y: sy, b } : null);
   };
@@ -100,15 +109,21 @@ export function CityMap() {
   return (
     <div className="citymap">
       <div className="citymap-toolbar">
-        <label><input type="checkbox" checked={showCurrent} onChange={toggleCurrent} /> Current roads</label>
-        <label><input type="checkbox" checked={showOptimized} onChange={toggleOptimized} /> Optimized roads</label>
+        {optimized && (
+          <div className="switch">
+            <button className={viewMode === "current" ? "on" : ""}
+              onClick={() => setViewMode("current")}>Current</button>
+            <button className={viewMode === "optimized" ? "on" : ""}
+              onClick={() => setViewMode("optimized")}>Optimized</button>
+          </div>
+        )}
         <button onClick={fit}>Fit</button>
       </div>
-      <div className="citymap-canvas-wrap">
+      <div className="citymap-canvas-wrap" ref={wrapRef}>
         <canvas
           ref={canvasRef}
-          width={900}
-          height={640}
+          width={size.w}
+          height={size.h}
           onMouseDown={onMouseDown}
           onMouseUp={onMouseUp}
           onMouseLeave={() => { drag.current = null; setTip(null); }}

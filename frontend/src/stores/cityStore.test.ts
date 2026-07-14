@@ -24,7 +24,7 @@ describe("cityStore", () => {
     const s = useCityStore.getState();
     expect(s.city?.city_id).toBe("c1");
     expect(s.summaryById.get("E1")?.name).toBe("Armory");
-    expect(s.showCurrent).toBe(true);
+    expect(s.viewMode).toBe("current");
   });
 
   it("applyImprovement converts and stores optimized layout", () => {
@@ -35,7 +35,7 @@ describe("cityStore", () => {
     expect(s.optimized?.achieved).toBe(7);
     expect(s.optimized?.roads[0]).toEqual({ x: 12, y: 12, level: 1 });
     expect(s.optimized?.buildings[0].name).toBe("Armory");
-    expect(s.showOptimized).toBe(true);
+    expect(s.viewMode).toBe("optimized");
   });
 
   it("reset clears everything", () => {
