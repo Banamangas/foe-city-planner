@@ -329,13 +329,16 @@ def _run_probe(payload: tuple) -> dict:
     secs = round(time.monotonic() - t0, 1)
     if st != "SAT":
         return {"k": k, "params": pat.params, "status": st,
-                "achieved": None, "secs": secs, "layout": None, "pat_index": pat_index}
+                "achieved": None, "secs": secs, "layout": None,
+                "pat_index": pat_index, "pos": None}
     vstat, vlay, achieved = validate(layout, pat, pos)
     if vstat == "OK":
         return {"k": k, "params": pat.params, "status": "SAT",
-                "achieved": achieved, "secs": secs, "layout": vlay, "pat_index": pat_index}
+                "achieved": achieved, "secs": secs, "layout": vlay,
+                "pat_index": pat_index, "pos": pos}
     return {"k": k, "params": pat.params, "status": vstat,
-            "achieved": None, "secs": secs, "layout": None, "pat_index": pat_index}
+            "achieved": None, "secs": secs, "layout": None,
+            "pat_index": pat_index, "pos": pos}
 
 
 def _run_probe_seq(payload: tuple) -> dict:
