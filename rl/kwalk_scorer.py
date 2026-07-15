@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import numpy as np
-
 from rl.kwalk_classifier import load, predict_proba
 from rl.kwalk_data import encode_instance
 
