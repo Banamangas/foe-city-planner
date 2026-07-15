@@ -23,7 +23,7 @@ def test_search_on_improvement_fires_on_sat(monkeypatch):
     fake_layout_result = SimpleNamespace(roads={(0, 2)}, buildings=[])
 
     def fake_probe_level(layout, region, consumers, k, rng, params, log, pool=None,
-                         on_improvement=None, corpus=None):
+                         on_improvement=None, corpus=None, scorer=None, score_threshold=None):
         if on_improvement is not None:
             on_improvement(fake_layout_result, k, k)
         return ("FEASIBLE", k)
@@ -49,7 +49,7 @@ def test_search_should_stop_interrupts(monkeypatch):
     stop_flag = {"calls": 0}
 
     def fake_probe_level(layout, region, consumers, k, rng, params, log, pool=None,
-                         on_improvement=None, corpus=None):
+                         on_improvement=None, corpus=None, scorer=None, score_threshold=None):
         return ("FEASIBLE", k)
 
     monkeypatch.setattr(mod, "_probe_level", fake_probe_level)
@@ -71,7 +71,7 @@ def test_search_on_status_fires_after_level(monkeypatch):
     statuses = []
 
     def fake_probe_level(layout, region, consumers, k, rng, params, log, pool=None,
-                         on_improvement=None, corpus=None):
+                         on_improvement=None, corpus=None, scorer=None, score_threshold=None):
         return ("FEASIBLE", k)
 
     monkeypatch.setattr(mod, "_probe_level", fake_probe_level)
@@ -93,7 +93,7 @@ def test_search_k_start_auto_resolves(monkeypatch):
     captured_k = []
 
     def fake_probe_level(layout, region, consumers, k, rng, params, log, pool=None,
-                         on_improvement=None, corpus=None):
+                         on_improvement=None, corpus=None, scorer=None, score_threshold=None):
         captured_k.append(k)
         return ("FEASIBLE", 200)
 
@@ -111,7 +111,7 @@ def test_search_family_too_weak(monkeypatch):
     lay = _tiny_layout()
 
     def fake_probe_level(layout, region, consumers, k, rng, params, log, pool=None,
-                         on_improvement=None, corpus=None):
+                         on_improvement=None, corpus=None, scorer=None, score_threshold=None):
         return ("INFEASIBLE", None)
 
     monkeypatch.setattr(mod, "_probe_level", fake_probe_level)
