@@ -1,7 +1,16 @@
 # Track C-bis: Learned Acceleration of the Roads-First k-Walk
 
 **Date**: 2026-07-14
-**Status**: Draft — decisions resolved (2026-07-15); for review, not yet greenlit for implementation
+**Status**: **ARCHIVED (2026-07-15)** — experimentally closed. Stage 0 (data engine) and Stage 1
+(feasibility CNN + scheduler) were built and gated; Stage 1 scheduling gave **zero** end-to-end
+k-walk benefit despite a strong held-out AUC (0.999), and the Stage 1.5 UNKNOWN autopsy found **no
+feasible-but-hard SAT** at the frontier (0 SAT / 4 UNSAT / 4 UNKNOWN), so Stage 2 (CP-SAT warm-start)
+was not justified. Conclusion: the darkzig frontier (~k=110, ~102–106 validated roads) is a
+**pattern-family limit**, not an ordering or SAT-proving-speed limit — ML is not the lever here. The
+remaining lever to go lower is skeleton **topology** (a separate non-ML track), or more compute.
+Assets kept on main: the Stage-0 corpus engine (`foeopt/corpus.py`, opt-in `--corpus`), the feasibility
+CNN (`rl/kwalk_*`), and the opt-in scorer hook. Full write-up: `tasks/lessons.md` (2026-07-15
+entries). The staged design below is preserved as the record of the bet and why it was gated.
 
 ## Goal
 
