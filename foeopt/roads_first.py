@@ -354,7 +354,7 @@ def _run_probe_seq(payload: tuple) -> dict:
         _WORKER_LAYOUT = None
 
 def _probe_level(layout, region, consumers, k, rng, params, log, pool=None,
-                 on_improvement=None, corpus=None) -> tuple[str, int | None]:
+                 on_improvement=None, corpus=None, scorer=None, score_threshold=None) -> tuple[str, int | None]:
     th = layout.townhall.footprint
     th_mode = getattr(params, "th_anchors", "coarse")
     pats = generate_patterns(region, th.width, th.length, k, rng, params.patterns,
@@ -394,6 +394,13 @@ def _probe_level(layout, region, consumers, k, rng, params, log, pool=None,
             continue
         surviving.append(pat)
 
+    if scorer is not None and surviving:
+        scored = [(scorer(pat), pat) for pat in surviving]
+        if score_threshold is not None:
+            scored = [sp for sp in scored if sp[0] >= score_threshold]
+        scored.sort(key=lambda sp: sp[0], reverse=True)
+        surviving = [pat for _, pat in scored]
+
     if pool is None:
         for pat in surviving:
             result = _run_probe_seq((pat, k, layout, params.probe_limit, params.probe_workers))
@@ -419,7 +426,7 @@ class RoadsFirstSearch:
     def __init__(self, layout: Layout, *, time_box: float, patterns: int = 200,
                  probe_limit: float = 60.0, workers: int = 4,
                  probe_workers: int = 4, th_anchors: str = "full",
-                 k_start="auto", corpus_dir=None):
+                 k_start="auto", corpus_dir=None, scorer=None, score_threshold=None):
         self.layout = layout
         self.time_box = time_box
         self.patterns = patterns
@@ -429,6 +436,8 @@ class RoadsFirstSearch:
         self.th_anchors = th_anchors
         self.k_start = k_start
         self.corpus_dir = corpus_dir
+        self.scorer = scorer
+        self.score_threshold = score_threshold
 
     def run(self, on_improvement=None, on_status=None, should_stop=None) -> dict:
         layout = self.layout
@@ -465,8 +474,8 @@ class RoadsFirstSearch:
             if k not in results:
                 results[k] = _probe_level(layout, region, consumers, k, rng,
                                           params, lambda r: None, pool=pool,
-                                          on_improvement=on_improvement,
-                                          corpus=corpus)
+                                          on_improvement=on_improvement, corpus=corpus,
+                                          scorer=self.scorer, score_threshold=self.score_threshold)
                 if on_status is not None:
                     on_status(k, results[k][0], 0, 0)
             return results[k]
