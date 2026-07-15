@@ -943,3 +943,30 @@ that runs get/store from a spawned thread — it reproduces the ProgrammingError
    but the plan's `api_stop` returned 200 for unknown jobs (because `is_done` can't tell "unknown"
    from "finished"). Fixed by adding a real `JobManager.exists()` predicate rather than string-matching
    the error message — surface the missing state, don't paper over it.
+
+## Track C-bis Stage 1: CNN feasibility scheduling has strong AUC but ZERO end-to-end walk benefit (2026-07-15)
+**Setup:** Stage 0 corpus (darkzig 1459 + FR16 800 probes; only 42 SAT positives / 1062 labeled).
+Trained a small feasibility CNN `(region, skeleton, buildings) -> P(SAT)` and used it to rank/prune
+patterns in the roads-first k-walk (opt-in `scorer`, CP-SAT still decides).
+**AUC half of G1: PASS, convincingly.** Held-out ROC-AUC **0.999**; and crucially the *within-k-level*
+AUC (strips the trivial "SAT lives at higher k" correlation, = the scheduler's real job) is mean
+**0.987** across 9 levels. Scorer produces varied discriminative P(SAT) (0.00-0.99 within a level), not
+a no-op. So despite only 42 positives, there is real learnable feasibility structure.
+**End-to-end half of G1: FAIL (null result).** Baseline vs CNN-guided k-walk on darkzig, 30 min each,
+equal config: **identical** — both reached lowest feasible k=111, best_achieved=**102 roads**, both
+deadline-limited at the same frontier. The guidance moved nothing.
+**Why (the load-bearing lesson):** the k-walk frontier is **decision-limited, not ordering-limited.**
+During the easy descent (123->119->115->111) SATs are plentiful so probe order doesn't matter; below
+k=111 the walk stalls on **slow UNKNOWN probes CP-SAT cannot decide within the probe-limit**, and
+reordering cannot make a hard probe decidable. The scorer even correctly assigns high P(SAT) to some
+sub-111 patterns, but CP-SAT still can't prove them fast enough. **A good ranking of a level's patterns
+does not help when the barrier is per-probe SAT-proving time, not which pattern you try first.**
+**Consequences:** (1) Stage 1 (scheduling) is NOT the lever to beat the baseline; the trained model is a
+paid-for asset (good classifier) but doesn't move the walk alone. (2) This is exactly what Stage 1.5
+(UNKNOWN autopsy) exists to diagnose: re-solve the frontier UNKNOWNs (sub-111) under a large budget --
+if any are actually SAT (feasible-but-hard), **Stage 2 (CP-SAT warm-start from the model's placement)**
+is the real lever; if all UNSAT, the pattern family caps out and the fix is better topologies, not ML.
+(3) Offline AUC is necessary but NOT sufficient -- always run the end-to-end gate; a classifier that
+ranks well can still deliver zero system-level benefit when the bottleneck is elsewhere.
+**Aside:** both arms reached 102 validated roads in 30 min (below the earlier 106 benchmark) -- a config
+effect (th-anchors full, patterns 200, probe-limit 30), not the CNN's doing.
