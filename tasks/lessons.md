@@ -970,3 +970,28 @@ is the real lever; if all UNSAT, the pattern family caps out and the fix is bett
 ranks well can still deliver zero system-level benefit when the bottleneck is elsewhere.
 **Aside:** both arms reached 102 validated roads in 30 min (below the earlier 106 benchmark) -- a config
 effect (th-anchors full, patterns 200, probe-limit 30), not the CNN's doing.
+
+## Track C-bis Stage 1.5: UNKNOWN autopsy finds no feasible-but-hard frontier -> Stage 2 not justified (2026-07-15)
+**Experiment (`scripts/kwalk_autopsy.py`):** re-solved 8 frontier UNKNOWN patterns (4 at k=107, 4 at
+k=109 -- the sub-feasible darkzig levels where the k-walk found no SAT; feasible frontier was
+k=110/111) at **900s + 12 workers each**, vs the original 30s that produced the UNKNOWNs.
+**Result: 0 SAT / 4 UNSAT / 4 UNKNOWN.**
+**Read:** achievable SATs historically solve fast (~29s max), so a genuinely-feasible k=107/109
+skeleton would very likely be found in 15min x 12 workers. 0/8 SAT + 4 *proven* infeasible is a
+discouraging signal for the "feasible-but-hard" thesis -> leans **CASE 2 (pattern family caps out
+near k~110-111)**, i.e. the lever is better skeleton *topologies*, not a CP-SAT warm-start. The 4
+UNKNOWNs leave residual uncertainty, but there is **no SAT to warm-start toward**, so **Stage 2
+(warm-start) is not justified on this evidence.**
+**Track C-bis conclusion (Stage 1 null + Stage 1.5 no-go):** the ML-as-k-walk-accelerator thesis does
+not pan out on darkzig. The frontier (~k=110, ~102-106 validated roads) is a **pattern-family limit**,
+not a scheduling limit (Stage 1: ranking gave 0 benefit) nor a SAT-proving-speed limit (Stage 1.5: no
+feasible-but-hard SAT to accelerate). Paid-for assets kept: the Stage-0 corpus engine, the feasibility
+CNN (a genuinely good classifier, held-out AUC 0.999), and the opt-in scorer hook. **The remaining
+lever to go below ~102 roads is pattern topology (lane/stub skeleton generators -- a separate, non-ML
+track), or much more k-walk compute.** Before fully closing, a larger autopsy (more patterns / bigger
+budget) could firm up the 4 UNKNOWNs, but 0/8 SAT is already a fairly strong negative.
+**Meta-lesson:** a classifier with excellent offline AUC delivered zero system benefit AND its target
+sub-problem turned out not to be the bottleneck -- validate the *bottleneck* (autopsy) before, not
+after, building the ML pipeline. Here Stage 0 (data engine) + a cheap Stage 1.5 autopsy would have been
+a smarter first move than Stage 1 (train+scheduler) in hindsight; the staged gates still caught it
+cheaply, which is the point of measure-first.
