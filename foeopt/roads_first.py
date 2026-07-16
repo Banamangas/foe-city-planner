@@ -246,9 +246,15 @@ def _add_symmetry_breaking(m, cand, xs, ys) -> None:
             m.Add(ys[a] <= ys[b_idx]).OnlyEnforceIf(eq)
 
 
+def _nearest_opt(opts: list[tuple[int, int]], target: tuple[int, int]) -> tuple[int, int]:
+    tx, ty = target
+    return min(opts, key=lambda o: abs(o[0] - tx) + abs(o[1] - ty))
+
+
 def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
           *, probe_limit: float, probe_workers: int = 1,
-          symmetry_breaking: bool = False) -> tuple[str, dict | None]:
+          symmetry_breaking: bool = False,
+          hints: dict[int, tuple[int, int]] | None = None) -> tuple[str, dict | None]:
     from ortools.sat.python import cp_model
 
     th_cells = set(pattern.th.cells())
@@ -271,6 +277,10 @@ def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
         xiv.append(m.NewFixedSizeIntervalVar(x, w0, f"xi{i}"))
         yiv.append(m.NewFixedSizeIntervalVar(y, l0, f"yi{i}"))
         xs.append(x); ys.append(y)
+        if hints is not None and b.entity_id in hints:
+            hx, hy = _nearest_opt(opts, hints[b.entity_id])
+            m.AddHint(x, hx)
+            m.AddHint(y, hy)
     m.AddNoOverlap2D(xiv, yiv)
     if symmetry_breaking:
         _add_symmetry_breaking(m, cand, xs, ys)
@@ -334,15 +344,18 @@ _WORKER_LAYOUT: Layout | None = None
 _WORKER_PROBE_LIMIT: float = 30.0
 _WORKER_PROBE_WORKERS: int = 1
 _WORKER_SYMMETRY_BREAKING: bool = False
+_WORKER_HINTS: dict[int, tuple[int, int]] | None = None
 
 
 def _worker_init(layout: Layout, probe_limit: float, probe_workers: int,
-                 symmetry_breaking: bool = False) -> None:
-    global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS, _WORKER_SYMMETRY_BREAKING
+                 symmetry_breaking: bool = False, hints=None) -> None:
+    global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS
+    global _WORKER_SYMMETRY_BREAKING, _WORKER_HINTS
     _WORKER_LAYOUT = layout
     _WORKER_PROBE_LIMIT = probe_limit
     _WORKER_PROBE_WORKERS = probe_workers
     _WORKER_SYMMETRY_BREAKING = symmetry_breaking
+    _WORKER_HINTS = hints
 
 
 def _run_probe(payload: tuple) -> dict:
@@ -354,7 +367,8 @@ def _run_probe(payload: tuple) -> dict:
     st, pos = probe(pat, region, consumers,
                    probe_limit=_WORKER_PROBE_LIMIT,
                    probe_workers=_WORKER_PROBE_WORKERS,
-                   symmetry_breaking=_WORKER_SYMMETRY_BREAKING)
+                   symmetry_breaking=_WORKER_SYMMETRY_BREAKING,
+                   hints=_WORKER_HINTS)
     secs = round(time.monotonic() - t0, 1)
     if st != "SAT":
         return {"k": k, "params": pat.params, "status": st,
@@ -371,12 +385,14 @@ def _run_probe(payload: tuple) -> dict:
 
 
 def _run_probe_seq(payload: tuple) -> dict:
-    global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS, _WORKER_SYMMETRY_BREAKING
+    global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS
+    global _WORKER_SYMMETRY_BREAKING, _WORKER_HINTS
     pat, k, layout, probe_limit, probe_workers, *rest = payload
     _WORKER_LAYOUT = layout
     _WORKER_PROBE_LIMIT = probe_limit
     _WORKER_PROBE_WORKERS = probe_workers
     _WORKER_SYMMETRY_BREAKING = rest[0] if rest else False
+    _WORKER_HINTS = rest[1] if len(rest) > 1 else None
     try:
         return _run_probe((pat, k, 0))
     finally:
@@ -433,7 +449,8 @@ def _probe_level(layout, region, consumers, k, rng, params, log, pool=None,
     if pool is None:
         for pat in surviving:
             result = _run_probe_seq((pat, k, layout, params.probe_limit, params.probe_workers,
-                                     getattr(params, "symmetry_breaking", False)))
+                                     getattr(params, "symmetry_breaking", False),
+                                     getattr(params, "hints", None)))
             if handle_result(result, pat):
                 return ("INCONCLUSIVE" if best_achieved is None else "FEASIBLE", best_achieved)
     else:
@@ -457,7 +474,7 @@ class RoadsFirstSearch:
                  probe_limit: float = 60.0, workers: int = 4,
                  probe_workers: int = 4, th_anchors: str = "full",
                  k_start="auto", corpus_dir=None, scorer=None, score_threshold=None,
-                 symmetry_breaking: bool = False):
+                 symmetry_breaking: bool = False, hint_layout: Layout | None = None):
         self.layout = layout
         self.time_box = time_box
         self.patterns = patterns
@@ -470,6 +487,8 @@ class RoadsFirstSearch:
         self.scorer = scorer
         self.score_threshold = score_threshold
         self.symmetry_breaking = symmetry_breaking
+        self.hints = ({b.entity_id: (b.footprint.x, b.footprint.y) for b in hint_layout.buildings}
+                     if hint_layout is not None else None)
 
     def run(self, on_improvement=None, on_status=None, should_stop=None) -> dict:
         layout = self.layout
@@ -483,7 +502,8 @@ class RoadsFirstSearch:
             pool = multiprocessing.Pool(
                 self.workers,
                 initializer=_worker_init,
-                initargs=(layout, self.probe_limit, self.probe_workers, self.symmetry_breaking))
+                initargs=(layout, self.probe_limit, self.probe_workers,
+                         self.symmetry_breaking, self.hints))
 
         corpus = None
 
@@ -494,6 +514,7 @@ class RoadsFirstSearch:
             deadline=deadline,
             th_anchors=self.th_anchors,
             symmetry_breaking=self.symmetry_breaking,
+            hints=self.hints,
         )
 
         results: dict[int, tuple[str, int | None]] = {}

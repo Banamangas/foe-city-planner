@@ -1079,3 +1079,54 @@ now with a CP-SAT-specific instance: don't fight the presolve. Idea #2 (warm-sta
 classical packer) is now the top remaining cheap-tier candidate; unlike this idea it doesn't add
 constraints, it seeds the search, so it isn't subject to the same presolve-interference risk.
 Artifacts: `output/kwalk/symbreak.log`, `output/kwalk/symbreak-2.log`.
+
+## next-things-to-try #2: CP-SAT warm-start hints from the classical packer also make the k-walk WORSE, reproducibly (2026-07-16)
+**Setup:** idea #2 hypothesized that hinting `probe()`'s CP-SAT model with the classical repack
+packer's building positions (via `AddHint`) could turn slow frontier UNKNOWNs into fast SAT/UNSAT,
+without adding any constraints (so, unlike idea #3's symmetry breaking, not subject to a presolve-
+interference risk). Implemented `hints=` in `foeopt/roads_first.py`: for each consumer with an
+entity_id present in the hint map, `AddHint`s its (x, y) vars to the *nearest valid anchor* in that
+building's `opts` for the current pattern (`_nearest_opt`, Manhattan distance) -- never an out-of-
+domain value, so the hint is always locally consistent even though it may not be collision-free
+globally. Threaded through the same worker-global/`RoadsFirstSearch`/CLI plumbing as idea #3
+(`hint_layout=` constructs the entity_id->(x,y) map once from a `Layout`; `--warm-start`
+[`--warm-start-budget`, default 30s] on both CLI scripts calls `foeopt.packer.repack()` once and feeds
+its output layout in). Added 2 tests (hint status-preservation across patterns incl. an out-of-region
+hint that must snap via `_nearest_opt`, not crash; `_nearest_opt` unit test) -- full suite (303 tests)
+and roads-first `--selftest` green before measuring.
+**Smoke-tested first** (2min budget): ran clean, no crash, valid JSON.
+**A/B result (equal *total* wall-clock: 30s repack + 1770s walk = 1800s, matching the 1800s baseline;
+2 runs to check reproducibility): reproducibly WORSE**, same pattern as idea #3.
+| arm | lowest_feasible_k | best_achieved | inconclusive |
+|---|---|---|---|
+| baseline (no hints) | 111 | **102** | 0 |
+| warm-start, run 1 | 117 | **109** | 1 (k=115 INCONCLUSIVE) |
+| warm-start, run 2 (repeat) | 117 | **109** | 1 (k=115 INCONCLUSIVE) |
+Both warm-start runs landed on the exact same k-sequence and numbers -- reproducible, not noise. Two
+k-levels earlier stall than baseline and best_achieved regresses by 7 roads (worse than idea #3's
+regression).
+**Mechanism check:** timed 6 individual probes at k=115 on/off in isolation -- again **no per-probe
+slowdown visible** (UNSAT resolves in <0.5-1.1s either way, UNKNOWN pinned at the 15s cap either way;
+if anything the hinted UNSAT probes were marginally *faster*). The likely explanation is the **quality
+of the hint source, not solver mechanics**: `repack()` alone (no anneal polish -- the polish step is
+what the project's other results get to the 158-road local-method floor from) landed **199 roads** in
+a 15s diagnostic call here, i.e. the hinted building positions come from a layout with far more slack
+and a completely different road topology than what a ~102-118-road roads-first pattern needs. The hint
+therefore doesn't point CP-SAT toward a good region of the search space for the *tight* skeletons the
+k-walk is actually probing at the frontier -- it points toward a loose, road-inefficient one, and
+`AddHint`'s repair-from-hint search machinery spends effort reconciling that irrelevant starting point
+instead of searching freely. Consistent with idea #3's reading: bolting external structure onto CP-SAT
+without accounting for how it interacts with the solver's own search strategy is not free.
+**Verdict: closed, stays opt-in/off.** `hints=` kept in `foeopt/roads_first.py` as tested, correct,
+zero-cost-when-off infrastructure (same policy as `symmetry_breaking=`/`reach.py`/`--lns`), but not a
+win as tested. **Not retested with an annealed/polished hint source (~158 roads, closer in quality to
+the k-walk's own frontier) -- that's a plausible but unmeasured follow-up, out of scope for this A/B
+since idea #2 as written specified "the existing repack/greedy packer layout".**
+**Consequence for the backlog:** all three of the cheap-tier ideas (#1 pruning, #2 warm-start, #3
+symmetry breaking) are now closed, all negative, all pointing at the same wall: the k-walk frontier is
+gated by raw CP-SAT proving time on hard patterns, and none of these levers (reordering, culling,
+constraining, seeding) move that needle on darkzig. The medium-tier idea #5 (lane/stub topology
+generator -- attacking the *pattern family* itself, not the solver) is now the strongest remaining
+candidate, per the same "pattern-family limit, not a scheduling/solver limit" conclusion Track C-bis
+Stage 1.5 already reached from a different angle. Artifacts: `output/kwalk/warmstart.log`,
+`output/kwalk/warmstart-2.log`.
