@@ -995,3 +995,43 @@ sub-problem turned out not to be the bottleneck -- validate the *bottleneck* (au
 after, building the ML pipeline. Here Stage 0 (data engine) + a cheap Stage 1.5 autopsy would have been
 a smarter first move than Stage 1 (train+scheduler) in hindsight; the staged gates still caught it
 cheaply, which is the point of measure-first.
+
+## next-things-to-try #1: prune-mode k-walk (score-threshold) extends descent depth but does not improve best_achieved (2026-07-16)
+**Setup:** `next-things-to-try.md` idea #1 flagged that the Track C-bis G1 gate only tested the CNN
+scorer in **rank-only** mode (reordering); the scorer hook also supports **pruning**
+(`--score-threshold`, patterns scoring below the threshold are dropped from the probe queue entirely,
+not just reordered) and that lever had never been measured. Swept `--score-threshold 0.1/0.2/0.3/0.4`
+on darkzig, 30min/arm (`scripts/prune_sweep.sh`), equal wall-clock, same config as the existing G1
+baseline (patterns=200, probe-limit=30, workers=6, probe-workers=2, th-anchors=full); reused the
+existing `output/kwalk/baseline.log` (30min, no scorer) rather than re-running it.
+**Smoke-tested first** (2min budget, threshold 0.3): ran clean, valid JSON, no crash -- proceeded to
+the full sweep.
+**Result:**
+| arm | lowest_feasible_k probed | best_achieved | inconclusive | walk_complete |
+|---|---|---|---|---|
+| baseline | 111 | 102 | 0 | false |
+| threshold 0.1 | 109 | 102 | 1 | false |
+| threshold 0.2 | 110 | 102 | 2 | true |
+| threshold 0.3 | 110 | 102 | 2 | true |
+| threshold 0.4 | 110 | 102 | 2 | true |
+Per-k-level sequences (`output/kwalk/prune-{t}.log`) show no false negatives: every k baseline found
+FEASIBLE (123/119/115/111) stayed FEASIBLE under every pruning threshold -- the mechanism is safe, the
+threshold range 0.1-0.4 never mis-drops a truly-feasible pattern down to INFEASIBLE. Thresholds 0.2-0.4
+gave **identical** k-sequences and outcomes (reproducible, not noise), so no repeat-seed runs were
+needed to confirm.
+**Pruning does free real budget** -- baseline never got past k=111 in 30min; 0.2-0.4 completed the
+entire bisection to k=110 (`walk_complete=true`) and 0.1 reached k=109, one level deeper than baseline.
+**But `best_achieved` stayed pinned at 102 in every arm, including baseline.** The extra k-levels
+reached by pruning were either INCONCLUSIVE or a SAT that didn't beat the existing 102. **Verdict: no
+gain from pruning at these thresholds** -- same root cause as the Stage-1 G1 null result
+(2026-07-15 entry): the k-walk frontier is **decision-limited, not ordering/volume-limited**. Cutting
+the number of patterns probed per level (pruning) lets the walk visit more k-levels within the time
+box, but the binding constraint is whether CP-SAT can *prove* SAT/UNSAT on a hard pattern within the
+30s probe-limit -- pruning doesn't make a single hard probe decidable faster, it just reaches more
+locked doors sooner. Reordering (Stage 1) and now culling (this test) are both volume/order levers on
+a problem that's gated by per-probe solve time.
+**Consequence for the backlog:** idea #1 is closed, no gain. This sharpens the priority of idea #3
+(symmetry breaking in the CP-SAT probe -- directly targets per-probe SAT/UNSAT proving time, the actual
+bottleneck both this test and Stage 1.5 point at) and idea #2 (warm-start hints) over further
+scheduling-side tweaks. Artifacts: `output/kwalk/prune-0.1.log` .. `prune-0.4.log`,
+`scripts/prune_sweep.sh`.
