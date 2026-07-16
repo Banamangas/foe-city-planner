@@ -1130,3 +1130,72 @@ generator -- attacking the *pattern family* itself, not the solver) is now the s
 candidate, per the same "pattern-family limit, not a scheduling/solver limit" conclusion Track C-bis
 Stage 1.5 already reached from a different angle. Artifacts: `output/kwalk/warmstart.log`,
 `output/kwalk/warmstart-2.log`.
+
+## next-things-to-try #5: lane/stub topology generator also regresses the k-walk (2026-07-16)
+**Setup:** with all three cheap-tier solver-side levers closed negative, idea #5 targeted the
+pattern *family* itself: the comb generator's short, budget-proportional teeth off one trunk
+can't represent the user's real city's straight double-loaded lanes + near-zero-overhead trunk
+(5/142 cells) + TH stubs. Added `generate_lane_patterns()` to `foeopt/roads_first.py` as a second
+family, matching `generate_patterns()`'s signature so it drops into the same k-walk/CP-SAT/
+validate pipeline unchanged (opt-in `pattern_family=`/`--pattern-family {comb,lane}`, default
+`comb`). Reuses `th_anchor_candidates`/`_trunk`/`_stub_cells`; unlike the comb family (which
+commits `budget//2` cells to trunk regardless of need), the trunk is built *minimally* -- only
+spanning from the TH-adjacent anchor cell out to the furthest lane seed on each side -- directly
+encoding the "almost no overhead" finding. Lanes grow as full straight runs (not single-step
+teeth) from seeds spaced at a `pitch` (5-11) along that trunk.
+**Found and fixed a real bug before any timed run:** `_trunk()`'s returned cell list has the
+TH-adjacent anchor cell at index 0 only when the TH sits at a region corner -- for TH placements
+away from a corner (confirmed empirically on darkzig: anchor at index 23 of 52 for a mid-region
+TH), the anchor sits in the *middle* of the list. A naive `trunk[:n]` prefix (which is what the
+comb family already does, and works there mainly because its trunk_len -- `budget//2` -- is
+usually large enough to reach past the anchor by luck) would silently produce a **disconnected**
+lane pattern for non-corner TH placements. Fixed by explicitly computing the anchor's index and
+slicing symmetrically around it (`_th_anchor_cell()` + `trunk_raw[lo:hi+1]`). Caught via a
+dedicated regression test (`test_generate_lane_patterns_th_off_corner_anchor_mid_trunk`) plus a
+direct `_check_pattern` sweep across k=8/20/40 before any CP-SAT time was spent -- all patterns
+connected, exact-k, in-region.
+**Also found a monkeypatch-breaking bug during testing:** the first implementation dispatched
+families via a module-level `_PATTERN_GENERATORS = {"comb": generate_patterns, ...}` dict built
+once at import time, which silently broke two pre-existing tests
+(`test_probe_level_records_each_probe`, `test_scorer_orders_and_prunes_patterns`) that
+monkeypatch `rf.generate_patterns` directly -- the dict had already captured the original
+function object, so patching the module attribute had no effect on dispatch. Fixed by resolving
+the family via a plain function (`_pattern_generator(family)`) that does a live name lookup
+against module globals on every call, restoring monkeypatch-ability. Full suite green (310
+tests) before any timed run.
+**Sanity pass** (`--dump-patterns`, no CP-SAT time): lane family produces a healthy, comparable
+pattern count to comb across the whole relevant k range (152 vs comb's 192 at k=60-150, both
+100% prefilter survival) -- not degenerate, not near-empty.
+**Smoke-tested first** (2min budget): ran clean, no crash, valid JSON.
+**A/B result (equal 1800s wall-clock, 2 runs): reproducibly WORSE**, same direction as ideas
+#2/#3, though (unlike those) not bit-identical across the two runs:
+| arm | lowest_feasible_k | best_achieved |
+|---|---|---|
+| baseline (comb) | 111 | **102** |
+| lane family, run 1 | 115 | **109** |
+| lane family, run 2 (repeat) | 115 | **112** |
+Both lane-family runs plateau at k=115 (never reaching k=111 or below) -- a full k-level worse
+than baseline in both runs, with `best_achieved` 7-10 roads worse. The exact `best_achieved`
+differed between runs (109 vs 112, unlike ideas #1-3's bit-identical repeats) -- explained below.
+**Mechanism check (this time a clear signal, unlike ideas #2/#3's inconclusive per-probe timing):**
+timed 6 individual probes at k=115 for each family in isolation. **Comb: 4/6 fast UNSAT (0.7-1.6s),
+2/6 UNKNOWN (10s cap). Lane: 6/6 UNKNOWN (10s cap) -- zero fast resolutions.** The lane family's
+long straight corridors with wide parallel building rows create geometrically harder
+`NoOverlap2D` decision problems for CP-SAT than the comb's shorter, more locally-constrained
+teeth -- even though the lane topology is structurally closer to the user's real (efficient) city,
+it is *harder for the solver to arbitrate*, which starves the walk of the fast SAT/UNSAT
+resolutions it needs to make k-walk progress within a fixed probe-limit. This also explains the
+run-to-run variance: with almost every probe pinned at the timeout, which few probes happen to
+finish (parallel-pool race) has an outsized effect on the result, unlike the comb family where
+most probes resolve fast and the outcome is dominated by exhaustive coverage rather than luck.
+**Verdict: closed, stays opt-in/off.** `pattern_family=`/`generate_lane_patterns()` kept as
+tested, correct (including a real connectivity bug fixed pre-flight), zero-cost-when-unused
+infrastructure -- not a win as implemented. **This closes all four next-things-to-try levers
+tried so far (pruning, warm-start, symmetry breaking, lane topology), all negative, and sharpens
+the diagnosis further: it is not enough for a richer topology to structurally resemble the
+expert city -- it must also be easy for CP-SAT to *decide* quickly, and the two pull in opposite
+directions here (wider/straighter geometry -> harder packing subproblems).** A follow-up (not
+built) worth flagging for later: a *hybrid* family (short comb teeth near the frontier /
+hard-to-decide region, full lanes only where slack is generous) might recover the lane family's
+structural advantage without its solver-hardness cost -- unmeasured, out of scope for this A/B.
+Artifacts: `output/kwalk/lanefamily.log`, `output/kwalk/lanefamily-2.log`.
