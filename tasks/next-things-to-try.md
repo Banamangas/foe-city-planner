@@ -95,6 +95,28 @@ noted under #5 are the least-explored remaining directions.
    building set; only the road skeleton differs. Explore CP-SAT assumptions / clause reuse to
    amortize solving across a level's patterns.
 
+## Follow-ups raised during the work above
+
+10. ~~**Stub priority hint (biggest buildings next to TH stubs).**~~ **TESTED 2026-07-17 —
+    mixed, family-dependent, closed.** User question after #5: does the model require the
+    *biggest* buildings next to TH stubs, matching the expert-city heuristic? No — `probe()`
+    has no objective, so CP-SAT seats whatever fits first regardless of size. Diagnostic found
+    real headroom (existing solved layouts sometimes seat area-1/area-4 buildings on precious
+    load-3 stub cells). Implemented `stub_priority=`/`--stub-priority` — `AddHint`s the largest
+    buildings (top-3 per TH-flank stub cell present in the pattern, family-agnostic) toward
+    their own valid stub-adjacent anchor options. A/B'd both families (30min/arm x2 each):
+    **hurts comb** (production default) by 3 roads, reproducibly (102→105 both runs) — do not
+    flip default there. **Helps and stabilizes lane** — 108/108 (reproduced exactly) vs the
+    lane baseline's own variable 109/112 — though lane+stub_priority (108) still trails plain
+    comb (102) outright. Per-probe SAT/UNSAT/UNKNOWN status was unchanged in a mechanism check
+    (consistent with the correctness tests) — the shift in `best_achieved` likely comes from
+    the hint changing *which* feasible placement CP-SAT finds (and thus what `route()` computes
+    from it), not from changing decidability. Standing pattern across this session's levers:
+    added hints/constraints help only when the underlying search is already struggling (lane,
+    6/6 UNKNOWN per idea #5's mechanism check) and hurt when it's already efficient (comb,
+    mostly fast UNSAT). Full numbers: `tasks/lessons.md` 2026-07-17 entry. Kept opt-in/off
+    everywhere; revisit only if the lane family itself is picked back up.
+
 ## Kept assets that these can reuse
 - Stage-0 corpus engine (`foeopt/corpus.py`, opt-in `--corpus`) — labeled instances for eval.
 - Feasibility CNN (`rl/kwalk_*`, AUC 0.999) + opt-in scorer hook — for idea #1 (pruning).

@@ -86,6 +86,78 @@ def test_nearest_opt_picks_closest_by_manhattan_distance():
     assert _nearest_opt(opts, (0, 1)) == (0, 0)
 
 
+def test_th_stub_cells_in_pattern_detects_flank_cells():
+    from foeopt.roads_first import _th_stub_cells_in_pattern
+    th = Footprint(2, 2, 2, 2)  # occupies (2,2)-(3,3)
+    # the 4 candidate flank cells are (1,2),(4,2),(1,3),(4,3); only 2 present
+    roads = frozenset({(1, 2), (4, 3), (9, 9)})
+    cells = _th_stub_cells_in_pattern(th, roads)
+    assert set(cells) == {(1, 2), (4, 3)}
+
+
+def test_th_stub_cells_in_pattern_empty_when_absent():
+    from foeopt.roads_first import _th_stub_cells_in_pattern
+    th = Footprint(2, 2, 2, 2)
+    assert _th_stub_cells_in_pattern(th, frozenset({(9, 9)})) == []
+
+
+def test_stub_priority_hints_caps_at_three_biggest_per_stub():
+    """With more than 3 buildings able to touch a stub cell, only the 3
+    largest by area get hinted -- matching the load-3 ceiling a stub cell
+    can actually serve, and biasing toward the user's heuristic (biggest
+    buildings next to the stub)."""
+    from foeopt.roads_first import _stub_priority_hints
+    th = Footprint(2, 2, 2, 2)
+    stub_cell = (1, 2)
+    pat = Pattern(th=th, roads=frozenset({stub_cell}), params={})
+    # each placed at (2,2) so its left-edge top-row border cell is (1,2)
+    sizes = [(1, 1), (2, 1), (1, 2), (2, 2), (3, 3), (4, 4)]  # areas 1,2,2,4,9,16
+    buildings = [Building(i + 1, f"c{i}", "g", Footprint(0, 0, w, l),
+                          True, 1, False, None, None, f"b{i}")
+                for i, (w, l) in enumerate(sizes)]
+    cand = [(b, [(2, 2)]) for b in buildings]
+    hints = _stub_priority_hints(pat, cand)
+    # indices 3,4,5 are areas 4,9,16 -- the 3 largest
+    assert set(hints.keys()) == {3, 4, 5}
+    assert all(xy == (2, 2) for xy in hints.values())
+
+
+def test_stub_priority_hints_empty_when_no_stub_cells():
+    from foeopt.roads_first import _stub_priority_hints
+    th = Footprint(2, 2, 2, 2)
+    pat = Pattern(th=th, roads=frozenset({(9, 9)}), params={})
+    big = Building(1, "c1", "g", Footprint(0, 0, 4, 4), True, 1, False, None, None, "big")
+    assert _stub_priority_hints(pat, [(big, [(2, 2)])]) == {}
+
+
+def test_stub_priority_preserves_status_across_patterns():
+    """stub_priority must never turn a SAT pattern into UNSAT (or vice
+    versa) -- AddHint only biases search, it isn't a hard constraint."""
+    pytest.importorskip("ortools")
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
+                  False, 1, True, None, None, "TH")
+    consumers = [
+        Building(10 + i, f"c1{i}", "g", Footprint(0, 0, 2, 2), True, 1, False, None, None, "a")
+        for i in range(3)
+    ]
+    region = Region(frozenset((x, y) for x in range(8) for y in range(8)))
+    region_set = set(region.cells)
+    rng = random.Random(0)
+    checked = 0
+    for pat in generate_patterns(region_set, 2, 2, 2, rng, 30):
+        if prefilter(pat, region_set, consumers) is not None:
+            continue
+        st_off, _ = probe(pat, region_set, consumers, probe_limit=10.0,
+                          stub_priority=False)
+        st_on, _ = probe(pat, region_set, consumers, probe_limit=10.0,
+                         stub_priority=True)
+        assert st_on == st_off, (
+            f"stub_priority changed status for pattern {pat.params}: "
+            f"off={st_off} on={st_on}")
+        checked += 1
+    assert checked >= 3, f"expected several surviving patterns to check, got {checked}"
+
+
 def test_validate_returns_ok_on_simple_satisfiable():
     """End-to-end: a 6x6 region with TH + 1 consumer at k=1 should validate OK
     when probe finds a SAT placement. Requires ortools."""

@@ -339,10 +339,58 @@ def _nearest_opt(opts: list[tuple[int, int]], target: tuple[int, int]) -> tuple[
     return min(opts, key=lambda o: abs(o[0] - tx) + abs(o[1] - ty))
 
 
+def _th_stub_cells_in_pattern(th: Footprint, roads) -> list[Cell]:
+    """Which of the 4 candidate TH-flank cells (left/right x top/bottom row
+    of the TH footprint -- the two the user's expert city stubs off of,
+    each reaching load-3 "for free" via the TH edge) are actually road
+    cells in this pattern. Works for any pattern regardless of which
+    generator produced it or whether it used an explicit stub mechanism --
+    it just looks at the final road-cell set."""
+    out = []
+    for row in (th.y, th.y + th.length - 1):
+        for x in (th.x - 1, th.x + th.width):
+            c = (x, row)
+            if c in roads:
+                out.append(c)
+    return out
+
+
+def _stub_priority_hints(pattern: Pattern,
+                         cand: list[tuple[Building, list[tuple[int, int]]]]
+                         ) -> dict[int, tuple[int, int]]:
+    """Bias the largest buildings toward the TH-flank stub cells present in
+    this pattern -- up to 3 buildings per cell, matching the load-3 ceiling
+    a stub cell can serve. CP-SAT has no objective in this model, so without
+    a nudge it seats whichever building happens to fit there first,
+    regardless of size (memory/foe-layout-heuristics: the expert city
+    deliberately puts ~3 big buildings next to each TH stub)."""
+    stub_cells = _th_stub_cells_in_pattern(pattern.th, pattern.roads)
+    if not stub_cells:
+        return {}
+    hints: dict[int, tuple[int, int]] = {}
+    used: set[int] = set()
+    for c in stub_cells:
+        touching = []
+        for i, (b, opts) in enumerate(cand):
+            if i in used:
+                continue
+            w, l = b.footprint.width, b.footprint.length
+            for (x, y) in opts:
+                if c in Footprint(x, y, w, l).border_cells():
+                    touching.append((w * l, i, (x, y)))
+                    break
+        touching.sort(key=lambda t: t[0], reverse=True)
+        for _area, i, xy in touching[:3]:
+            hints[i] = xy
+            used.add(i)
+    return hints
+
+
 def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
           *, probe_limit: float, probe_workers: int = 1,
           symmetry_breaking: bool = False,
-          hints: dict[int, tuple[int, int]] | None = None) -> tuple[str, dict | None]:
+          hints: dict[int, tuple[int, int]] | None = None,
+          stub_priority: bool = False) -> tuple[str, dict | None]:
     from ortools.sat.python import cp_model
 
     th_cells = set(pattern.th.cells())
@@ -353,6 +401,8 @@ def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
         if not opts:
             return ("UNSAT", None)
         cand.append((b, opts))
+
+    stub_hints = _stub_priority_hints(pattern, cand) if stub_priority else {}
 
     m = cp_model.CpModel()
     x0b, y0b, x1b, y1b = _bbox(region)
@@ -367,6 +417,10 @@ def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
         xs.append(x); ys.append(y)
         if hints is not None and b.entity_id in hints:
             hx, hy = _nearest_opt(opts, hints[b.entity_id])
+            m.AddHint(x, hx)
+            m.AddHint(y, hy)
+        elif i in stub_hints:
+            hx, hy = stub_hints[i]
             m.AddHint(x, hx)
             m.AddHint(y, hy)
     m.AddNoOverlap2D(xiv, yiv)
@@ -433,17 +487,20 @@ _WORKER_PROBE_LIMIT: float = 30.0
 _WORKER_PROBE_WORKERS: int = 1
 _WORKER_SYMMETRY_BREAKING: bool = False
 _WORKER_HINTS: dict[int, tuple[int, int]] | None = None
+_WORKER_STUB_PRIORITY: bool = False
 
 
 def _worker_init(layout: Layout, probe_limit: float, probe_workers: int,
-                 symmetry_breaking: bool = False, hints=None) -> None:
+                 symmetry_breaking: bool = False, hints=None,
+                 stub_priority: bool = False) -> None:
     global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS
-    global _WORKER_SYMMETRY_BREAKING, _WORKER_HINTS
+    global _WORKER_SYMMETRY_BREAKING, _WORKER_HINTS, _WORKER_STUB_PRIORITY
     _WORKER_LAYOUT = layout
     _WORKER_PROBE_LIMIT = probe_limit
     _WORKER_PROBE_WORKERS = probe_workers
     _WORKER_SYMMETRY_BREAKING = symmetry_breaking
     _WORKER_HINTS = hints
+    _WORKER_STUB_PRIORITY = stub_priority
 
 
 def _run_probe(payload: tuple) -> dict:
@@ -456,7 +513,8 @@ def _run_probe(payload: tuple) -> dict:
                    probe_limit=_WORKER_PROBE_LIMIT,
                    probe_workers=_WORKER_PROBE_WORKERS,
                    symmetry_breaking=_WORKER_SYMMETRY_BREAKING,
-                   hints=_WORKER_HINTS)
+                   hints=_WORKER_HINTS,
+                   stub_priority=_WORKER_STUB_PRIORITY)
     secs = round(time.monotonic() - t0, 1)
     if st != "SAT":
         return {"k": k, "params": pat.params, "status": st,
@@ -474,13 +532,14 @@ def _run_probe(payload: tuple) -> dict:
 
 def _run_probe_seq(payload: tuple) -> dict:
     global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS
-    global _WORKER_SYMMETRY_BREAKING, _WORKER_HINTS
+    global _WORKER_SYMMETRY_BREAKING, _WORKER_HINTS, _WORKER_STUB_PRIORITY
     pat, k, layout, probe_limit, probe_workers, *rest = payload
     _WORKER_LAYOUT = layout
     _WORKER_PROBE_LIMIT = probe_limit
     _WORKER_PROBE_WORKERS = probe_workers
     _WORKER_SYMMETRY_BREAKING = rest[0] if rest else False
     _WORKER_HINTS = rest[1] if len(rest) > 1 else None
+    _WORKER_STUB_PRIORITY = rest[2] if len(rest) > 2 else False
     try:
         return _run_probe((pat, k, 0))
     finally:
@@ -539,7 +598,8 @@ def _probe_level(layout, region, consumers, k, rng, params, log, pool=None,
         for pat in surviving:
             result = _run_probe_seq((pat, k, layout, params.probe_limit, params.probe_workers,
                                      getattr(params, "symmetry_breaking", False),
-                                     getattr(params, "hints", None)))
+                                     getattr(params, "hints", None),
+                                     getattr(params, "stub_priority", False)))
             if handle_result(result, pat):
                 return ("INCONCLUSIVE" if best_achieved is None else "FEASIBLE", best_achieved)
     else:
@@ -564,7 +624,7 @@ class RoadsFirstSearch:
                  probe_workers: int = 4, th_anchors: str = "full",
                  k_start="auto", corpus_dir=None, scorer=None, score_threshold=None,
                  symmetry_breaking: bool = False, hint_layout: Layout | None = None,
-                 pattern_family: str = "comb"):
+                 pattern_family: str = "comb", stub_priority: bool = False):
         self.layout = layout
         self.time_box = time_box
         self.patterns = patterns
@@ -580,6 +640,7 @@ class RoadsFirstSearch:
         self.hints = ({b.entity_id: (b.footprint.x, b.footprint.y) for b in hint_layout.buildings}
                      if hint_layout is not None else None)
         self.pattern_family = pattern_family
+        self.stub_priority = stub_priority
 
     def run(self, on_improvement=None, on_status=None, should_stop=None) -> dict:
         layout = self.layout
@@ -594,7 +655,7 @@ class RoadsFirstSearch:
                 self.workers,
                 initializer=_worker_init,
                 initargs=(layout, self.probe_limit, self.probe_workers,
-                         self.symmetry_breaking, self.hints))
+                         self.symmetry_breaking, self.hints, self.stub_priority))
 
         corpus = None
 
@@ -607,6 +668,7 @@ class RoadsFirstSearch:
             symmetry_breaking=self.symmetry_breaking,
             hints=self.hints,
             pattern_family=self.pattern_family,
+            stub_priority=self.stub_priority,
         )
 
         results: dict[int, tuple[str, int | None]] = {}
