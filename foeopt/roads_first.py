@@ -225,8 +225,30 @@ def _anchor_candidates(b: Building, region: set[Cell], blocked: set[Cell],
     return out
 
 
+def _add_symmetry_breaking(m, cand, xs, ys) -> None:
+    """Buildings sharing a footprint size are interchangeable in this model
+    (_anchor_candidates only looks at width/length), so the solver otherwise
+    explores every permutation of them as distinct symmetric solutions. Chain
+    a lexicographic (x, y) <= ordering across each size-group to collapse
+    that permutation symmetry to one representative assignment."""
+    groups: dict[tuple[int, int], list[int]] = {}
+    for i, (b, _) in enumerate(cand):
+        groups.setdefault((b.footprint.width, b.footprint.length), []).append(i)
+    for members in groups.values():
+        for a, b_idx in zip(members, members[1:]):
+            lt = m.NewBoolVar(f"symlt{a}_{b_idx}")
+            eq = m.NewBoolVar(f"symeq{a}_{b_idx}")
+            m.Add(xs[a] < xs[b_idx]).OnlyEnforceIf(lt)
+            m.Add(xs[a] >= xs[b_idx]).OnlyEnforceIf(lt.Not())
+            m.Add(xs[a] == xs[b_idx]).OnlyEnforceIf(eq)
+            m.Add(xs[a] != xs[b_idx]).OnlyEnforceIf(eq.Not())
+            m.AddBoolOr([lt, eq])
+            m.Add(ys[a] <= ys[b_idx]).OnlyEnforceIf(eq)
+
+
 def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
-          *, probe_limit: float, probe_workers: int = 1) -> tuple[str, dict | None]:
+          *, probe_limit: float, probe_workers: int = 1,
+          symmetry_breaking: bool = False) -> tuple[str, dict | None]:
     from ortools.sat.python import cp_model
 
     th_cells = set(pattern.th.cells())
@@ -250,6 +272,8 @@ def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
         yiv.append(m.NewFixedSizeIntervalVar(y, l0, f"yi{i}"))
         xs.append(x); ys.append(y)
     m.AddNoOverlap2D(xiv, yiv)
+    if symmetry_breaking:
+        _add_symmetry_breaking(m, cand, xs, ys)
 
     solver = cp_model.CpSolver()
     solver.parameters.num_search_workers = probe_workers
@@ -309,13 +333,16 @@ def validate(layout_src: Layout, pattern: Pattern,
 _WORKER_LAYOUT: Layout | None = None
 _WORKER_PROBE_LIMIT: float = 30.0
 _WORKER_PROBE_WORKERS: int = 1
+_WORKER_SYMMETRY_BREAKING: bool = False
 
 
-def _worker_init(layout: Layout, probe_limit: float, probe_workers: int) -> None:
-    global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS
+def _worker_init(layout: Layout, probe_limit: float, probe_workers: int,
+                 symmetry_breaking: bool = False) -> None:
+    global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS, _WORKER_SYMMETRY_BREAKING
     _WORKER_LAYOUT = layout
     _WORKER_PROBE_LIMIT = probe_limit
     _WORKER_PROBE_WORKERS = probe_workers
+    _WORKER_SYMMETRY_BREAKING = symmetry_breaking
 
 
 def _run_probe(payload: tuple) -> dict:
@@ -326,7 +353,8 @@ def _run_probe(payload: tuple) -> dict:
     t0 = time.monotonic()
     st, pos = probe(pat, region, consumers,
                    probe_limit=_WORKER_PROBE_LIMIT,
-                   probe_workers=_WORKER_PROBE_WORKERS)
+                   probe_workers=_WORKER_PROBE_WORKERS,
+                   symmetry_breaking=_WORKER_SYMMETRY_BREAKING)
     secs = round(time.monotonic() - t0, 1)
     if st != "SAT":
         return {"k": k, "params": pat.params, "status": st,
@@ -343,11 +371,12 @@ def _run_probe(payload: tuple) -> dict:
 
 
 def _run_probe_seq(payload: tuple) -> dict:
-    global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS
-    pat, k, layout, probe_limit, probe_workers = payload
+    global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS, _WORKER_SYMMETRY_BREAKING
+    pat, k, layout, probe_limit, probe_workers, *rest = payload
     _WORKER_LAYOUT = layout
     _WORKER_PROBE_LIMIT = probe_limit
     _WORKER_PROBE_WORKERS = probe_workers
+    _WORKER_SYMMETRY_BREAKING = rest[0] if rest else False
     try:
         return _run_probe((pat, k, 0))
     finally:
@@ -403,7 +432,8 @@ def _probe_level(layout, region, consumers, k, rng, params, log, pool=None,
 
     if pool is None:
         for pat in surviving:
-            result = _run_probe_seq((pat, k, layout, params.probe_limit, params.probe_workers))
+            result = _run_probe_seq((pat, k, layout, params.probe_limit, params.probe_workers,
+                                     getattr(params, "symmetry_breaking", False)))
             if handle_result(result, pat):
                 return ("INCONCLUSIVE" if best_achieved is None else "FEASIBLE", best_achieved)
     else:
@@ -426,7 +456,8 @@ class RoadsFirstSearch:
     def __init__(self, layout: Layout, *, time_box: float, patterns: int = 200,
                  probe_limit: float = 60.0, workers: int = 4,
                  probe_workers: int = 4, th_anchors: str = "full",
-                 k_start="auto", corpus_dir=None, scorer=None, score_threshold=None):
+                 k_start="auto", corpus_dir=None, scorer=None, score_threshold=None,
+                 symmetry_breaking: bool = False):
         self.layout = layout
         self.time_box = time_box
         self.patterns = patterns
@@ -438,6 +469,7 @@ class RoadsFirstSearch:
         self.corpus_dir = corpus_dir
         self.scorer = scorer
         self.score_threshold = score_threshold
+        self.symmetry_breaking = symmetry_breaking
 
     def run(self, on_improvement=None, on_status=None, should_stop=None) -> dict:
         layout = self.layout
@@ -451,7 +483,7 @@ class RoadsFirstSearch:
             pool = multiprocessing.Pool(
                 self.workers,
                 initializer=_worker_init,
-                initargs=(layout, self.probe_limit, self.probe_workers))
+                initargs=(layout, self.probe_limit, self.probe_workers, self.symmetry_breaking))
 
         corpus = None
 
@@ -461,6 +493,7 @@ class RoadsFirstSearch:
             probe_workers=self.probe_workers,
             deadline=deadline,
             th_anchors=self.th_anchors,
+            symmetry_breaking=self.symmetry_breaking,
         )
 
         results: dict[int, tuple[str, int | None]] = {}

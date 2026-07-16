@@ -171,8 +171,8 @@ def test_run_probe_payload_uses_worker_global_not_embedded_layout(monkeypatch):
         # Fake probe so we don't need ortools.
         monkeypatch = pytest.MonkeyPatch()
         monkeypatch.setattr(mod, "probe",
-                            lambda pattern, region, consumers, *, probe_limit, probe_workers=1:
-                            ("UNSAT", None))
+                            lambda pattern, region, consumers, *, probe_limit, probe_workers=1,
+                            symmetry_breaking=False: ("UNSAT", None))
         try:
             result = mod._run_probe((pat, 1, 0))  # 3-tuple: pat, k, pat_index
         finally:

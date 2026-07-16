@@ -49,6 +49,7 @@ def _walk(args):
         probe_limit=args.probe_limit, workers=args.workers,
         probe_workers=args.probe_workers, th_anchors=args.th_anchors,
         scorer=scorer, score_threshold=args.score_threshold,
+        symmetry_breaking=args.symmetry_breaking,
     ).run(on_status=lambda k, s, *_: print(f"  k={k}: {s}", flush=True))
     print(json.dumps({k: v for k, v in res.items() if k != "results"}, indent=1))
     return 0
@@ -73,6 +74,7 @@ def main(argv=None):
     w.add_argument("--workers", type=int, default=6)
     w.add_argument("--probe-workers", type=int, default=2)
     w.add_argument("--th-anchors", choices=("coarse", "full"), default="full")
+    w.add_argument("--symmetry-breaking", action="store_true")
     w.set_defaults(fn=_walk)
     args = p.parse_args(argv)
     return args.fn(args)

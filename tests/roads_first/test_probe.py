@@ -19,6 +19,37 @@ def test_probe_returns_unsat_when_no_anchors():
     assert pos is None
 
 
+def test_symmetry_breaking_preserves_status_across_patterns():
+    """symmetry_breaking must never turn a SAT pattern into UNSAT (or vice
+    versa) -- it only orders interchangeable same-size buildings, it must not
+    change feasibility. Uses 3 identical 2x2 consumers so the lex-chain
+    constraint actually engages (group size > 1), and checks every surviving
+    pattern at k=2, not just one."""
+    pytest.importorskip("ortools")
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
+                  False, 1, True, None, None, "TH")
+    consumers = [
+        Building(10 + i, f"c1{i}", "g", Footprint(0, 0, 2, 2), True, 1, False, None, None, "a")
+        for i in range(3)
+    ]
+    region = Region(frozenset((x, y) for x in range(8) for y in range(8)))
+    region_set = set(region.cells)
+    rng = random.Random(0)
+    checked = 0
+    for pat in generate_patterns(region_set, 2, 2, 2, rng, 30):
+        if prefilter(pat, region_set, consumers) is not None:
+            continue
+        st_off, _ = probe(pat, region_set, consumers, probe_limit=10.0,
+                          symmetry_breaking=False)
+        st_on, _ = probe(pat, region_set, consumers, probe_limit=10.0,
+                         symmetry_breaking=True)
+        assert st_on == st_off, (
+            f"symmetry_breaking changed status for pattern {pat.params}: "
+            f"off={st_off} on={st_on}")
+        checked += 1
+    assert checked >= 3, f"expected several surviving patterns to check, got {checked}"
+
+
 def test_validate_returns_ok_on_simple_satisfiable():
     """End-to-end: a 6x6 region with TH + 1 consumer at k=1 should validate OK
     when probe finds a SAT placement. Requires ortools."""

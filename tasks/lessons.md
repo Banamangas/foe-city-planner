@@ -1035,3 +1035,47 @@ a problem that's gated by per-probe solve time.
 bottleneck both this test and Stage 1.5 point at) and idea #2 (warm-start hints) over further
 scheduling-side tweaks. Artifacts: `output/kwalk/prune-0.1.log` .. `prune-0.4.log`,
 `scripts/prune_sweep.sh`.
+
+## next-things-to-try #3: CP-SAT symmetry breaking makes the k-walk WORSE, reproducibly (2026-07-16)
+**Setup:** idea #3 hypothesized that darkzig's heavy footprint symmetry (13x 2x2, 7x 4x4, 6x 6x4, ...
+-- 63 consumers, 21 distinct sizes, 42 "chainable" same-size pairs) wastes CP-SAT time on permutation-
+symmetric assignments, since `probe()`'s model has no per-building distinction beyond footprint size
+(`_anchor_candidates` only reads `width`/`length`). Implemented `symmetry_breaking=` (opt-in, default
+off) in `foeopt/roads_first.py`: for each footprint-size group, chain a lexicographic `(x, y) <=`
+ordering across consecutive members via boolean channeling (`_add_symmetry_breaking`, 2 bool vars + 6
+constraints per adjacent pair). Threaded through `_run_probe`/`_run_probe_seq`/`_worker_init`/
+`RoadsFirstSearch`/CLI (`--symmetry-breaking` on both `exp_roads_first.py` and `kwalk_gate.py`), all
+backward-compatible (existing 3-/5-tuple worker-payload call sites still work via defaults). Added
+`test_symmetry_breaking_preserves_status_across_patterns` (checks SAT/UNSAT/UNKNOWN status is identical
+on/off across every surviving pattern in a toy 3-identical-building case) plus the full suite (301
+tests) and the roads-first `--selftest` (`parallel_equiv=True`) all green before measuring.
+**Smoke-tested first** (2min budget): ran clean, no crash, valid JSON.
+**A/B result (30min/arm, equal wall-clock, same config as the idea-#1 baseline): reproducibly WORSE.**
+| arm | lowest_feasible_k | best_achieved | inconclusive |
+|---|---|---|---|
+| baseline (no symmetry breaking) | 111 | **102** | 0 |
+| symmetry-breaking, run 1 | 115 | **105** | 1 (k=111 INCONCLUSIVE) |
+| symmetry-breaking, run 2 (repeat) | 115 | **105** | 1 (k=111 INCONCLUSIVE) |
+Both symmetry-breaking runs landed on the exact same k-sequence and numbers -- reproducible, not pool-
+scheduling noise. The walk stalls a full level earlier than baseline and best_achieved regresses by 3
+roads.
+**Mechanism check:** timed 6 individual probes at k=115 on/off in isolation (2 UNSAT resolving in
+<1s either way, 2 more UNSAT in ~0.75s either way, 2 UNKNOWN pinned at the 15s cap either way) --
+**no per-probe slowdown visible on this small sample**, so the 30min regression isn't simple "each
+probe takes longer" overhead on the patterns sampled. Most likely explanation (not directly measured):
+cumulative per-probe *model-construction* cost (84 extra bool vars + ~250 extra constraints built in
+Python on literally every probe, including the ~1300+ fast UNSAT ones from the idea-#1 baseline run)
+adds up across the ~2000+ probes run in 30min, and/or the added constraints interfere with CP-SAT's own
+automatic symmetry detection during presolve (a built-in feature) rather than complementing it --
+manually-added redundant symmetry-breaking constraints are a known way to *slow down* a modern CP-SAT
+solver that already detects and exploits this exact kind of interchangeable-item symmetry itself.
+**Verdict: closed, stays opt-in/off.** `symmetry_breaking=` kept in `foeopt/roads_first.py` as tested,
+correct, zero-cost-when-off infrastructure (same policy as `reach.py`/`--lns`/`--safe-placements`), but
+the reproducible measurement rules it out as a win. **Lesson for the backlog:** "manually add textbook
+symmetry breaking" is not free against a solver (CP-SAT) that already does this automatically in
+presolve -- measure before assuming a classic OR technique transfers, same standing pattern as
+"expert heuristics bolted onto the greedy constructor lose an equal-wall-clock A/B" (2026-07-06 entry),
+now with a CP-SAT-specific instance: don't fight the presolve. Idea #2 (warm-start hints from the
+classical packer) is now the top remaining cheap-tier candidate; unlike this idea it doesn't add
+constraints, it seeds the search, so it isn't subject to the same presolve-interference risk.
+Artifacts: `output/kwalk/symbreak.log`, `output/kwalk/symbreak-2.log`.

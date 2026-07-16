@@ -29,11 +29,15 @@ non-deterministic), and validate the *bottleneck* before building.
    road-inefficiently) via `AddHint`. A valid hint can turn slow frontier UNKNOWNs into fast
    SAT/UNSAT — attacking the decision-limit directly, cheaply.
 
-3. **Symmetry breaking in the CP-SAT probe (likely the biggest per-probe speedup).** darkzig
-   has huge footprint symmetry (25× 4×4, 13× 6×4, …). Identical-size buildings are
-   interchangeable, so the solver wastes time on symmetric assignments. Add lexicographic
-   ordering constraints among same-size buildings (order by (x,y)). Speeds **both** SAT and
-   UNSAT proofs — directly targets the UNKNOWN frontier that blocks going lower.
+3. ~~**Symmetry breaking in the CP-SAT probe.**~~ **TESTED 2026-07-16 — reproducibly WORSE,
+   closed.** Implemented lexicographic (x,y) ordering across same-footprint-size building
+   groups (`--symmetry-breaking`, opt-in, off by default). A/B'd 30min/arm x2 (reproduced
+   exactly both times): baseline k=111/102 roads vs symmetry-breaking k=115/105 roads — a full
+   k-level and 3 roads worse. Per-probe timing on a small sample showed no obvious slowdown, so
+   likely cumulative model-construction overhead across thousands of probes and/or interference
+   with CP-SAT's own automatic presolve symmetry detection, not a fundamentally bad idea badly
+   executed. Full numbers: `tasks/lessons.md` 2026-07-16 entry. Kept as tested, correct,
+   zero-cost-when-off infrastructure; not a win.
 
 4. **Stronger UNSAT prefilter.** Most probes are UNSAT and cost real solve time. Add a cheap
    pre-check that proves infeasibility without CP-SAT — e.g. road-adjacency capacity (each
