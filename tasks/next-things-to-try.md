@@ -12,14 +12,16 @@ non-deterministic), and validate the *bottleneck* before building.
 
 ## Cheapest — reuse existing infra (hours)
 
-1. **Prune-mode guided walk (UNTESTED — do this first).** The G1 comparison ran the scorer
-   in **rank-only** mode (`score_threshold=None`), which only reorders — useless when the
-   descent's SATs are plentiful. The scorer hook already supports **pruning**. Try
-   `kwalk_gate.py walk darkzig.json --scorer output/kwalk/cnn.pt --score-threshold 0.2`
-   (sweep 0.1–0.4). The CNN (held-out AUC 0.999) confidently flags hopeless patterns;
-   *skipping* them removes the many slow UNSAT/UNKNOWN probes and frees budget for promising
-   ones — a different lever than ranking, and never measured. Risk: a false-negative prunes a
-   feasible pattern; keep the threshold conservative and A/B vs baseline.
+1. ~~**Prune-mode guided walk.**~~ **TESTED 2026-07-16 — no gain, closed.** Swept
+   `--score-threshold` 0.1/0.2/0.3/0.4 vs baseline, 30min/arm, equal wall-clock. Mechanism is
+   safe (no false-negative INFEASIBLE at any threshold) and does free budget — pruned arms
+   reached k=109/110 vs baseline's k=111 within the same 30min — but `best_achieved` stayed
+   pinned at 102 roads in every arm, baseline included. Same root cause as the Stage 1 G1 null
+   result: the k-walk frontier is decision-limited (per-probe SAT-proving time), not
+   ordering/volume-limited, so visiting more k-levels faster doesn't help if the deeper levels
+   are still undecidable within the probe-limit. Full numbers: `tasks/lessons.md` 2026-07-16
+   entry. Sharpens priority toward #3 (symmetry breaking — attacks proving time directly) and
+   #2 (warm-start).
 
 2. **Non-ML CP-SAT warm-start from the classical packer.** Stage 2's warm-start was killed
    for lack of a SAT target, but you don't need ML: seed CP-SAT's building positions in
