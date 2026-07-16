@@ -51,8 +51,8 @@ def test_run_probe_payload_uses_worker_global_not_embedded_layout(monkeypatch):
         pats = list(mod.generate_patterns(set(region.cells), 2, 2, 1, random.Random(0), 5))
         pat = next(p for p in pats if mod.prefilter(p, set(region.cells), [c1]) is None)
         monkeypatch.setattr(mod, "probe",
-                            lambda pattern, region, consumers, *, probe_limit, probe_workers=1:
-                            ("UNSAT", None))
+                            lambda pattern, region, consumers, *, probe_limit, probe_workers=1,
+                            symmetry_breaking=False: ("UNSAT", None))
         result = mod._run_probe((pat, 1, 0))
         assert result["pat_index"] == 0
         assert result["k"] == 1
