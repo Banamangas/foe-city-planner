@@ -10,6 +10,12 @@ See `tasks/lessons.md` (2026-07-15). Ideas below, **cheapest first**. Discipline
 change vs baseline at **equal wall-clock, 0-unplaced, ≥ a few seeds** (the pool is
 non-deterministic), and validate the *bottleneck* before building.
 
+**Update 2026-07-16:** all three cheap-tier scheduling/solver-side ideas (#1 pruning, #2
+warm-start, #3 symmetry breaking) are now tested and closed, all negative — none moved the
+CP-SAT proving-time bottleneck. #4 (UNSAT prefilter) is the last untested cheap-tier idea; #5
+(lane/stub topology, medium tier) is the strongest remaining candidate since it attacks the
+pattern-family limit directly rather than the solver.
+
 ## Cheapest — reuse existing infra (hours)
 
 1. ~~**Prune-mode guided walk.**~~ **TESTED 2026-07-16 — no gain, closed.** Swept
@@ -23,11 +29,17 @@ non-deterministic), and validate the *bottleneck* before building.
    entry. Sharpens priority toward #3 (symmetry breaking — attacks proving time directly) and
    #2 (warm-start).
 
-2. **Non-ML CP-SAT warm-start from the classical packer.** Stage 2's warm-start was killed
-   for lack of a SAT target, but you don't need ML: seed CP-SAT's building positions in
-   `probe()` with the existing repack/greedy packer layout (it places all buildings, just
-   road-inefficiently) via `AddHint`. A valid hint can turn slow frontier UNKNOWNs into fast
-   SAT/UNSAT — attacking the decision-limit directly, cheaply.
+2. ~~**Non-ML CP-SAT warm-start from the classical packer.**~~ **TESTED 2026-07-16 —
+   reproducibly WORSE, closed.** Implemented `hints=`/`--warm-start` (`AddHint` snapped to the
+   nearest valid anchor per building, via `foeopt.packer.repack()`'s output layout). A/B'd at
+   equal *total* wall-clock (30s repack + 1770s walk = 1800s) x2 (reproduced exactly both
+   times): baseline k=111/102 roads vs warm-start k=117/109 roads — two k-levels and 7 roads
+   worse, the largest regression of the three cheap-tier ideas. Likely cause: `repack()` alone
+   (no anneal polish) landed 199 roads in a diagnostic run — the hint source is a much looser,
+   differently-structured layout than the ~102-118-road skeletons the k-walk actually probes,
+   so the hint misdirects rather than helps. Not retested with a polished (~158-road) hint
+   source — unmeasured follow-up, out of scope for this A/B. Full numbers: `tasks/lessons.md`
+   2026-07-16 entry.
 
 3. ~~**Symmetry breaking in the CP-SAT probe.**~~ **TESTED 2026-07-16 — reproducibly WORSE,
    closed.** Implemented lexicographic (x,y) ordering across same-footprint-size building

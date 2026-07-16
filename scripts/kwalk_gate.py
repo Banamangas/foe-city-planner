@@ -44,12 +44,16 @@ def _walk(args):
     if args.scorer:
         from rl.kwalk_scorer import PatternScorer
         scorer = PatternScorer(args.scorer, layout)
+    hint_layout = None
+    if args.warm_start:
+        from foeopt.packer import repack
+        hint_layout = repack(layout, budget_seconds=args.warm_start_budget).layout
     res = RoadsFirstSearch(
         layout, time_box=args.time_box, patterns=args.patterns,
         probe_limit=args.probe_limit, workers=args.workers,
         probe_workers=args.probe_workers, th_anchors=args.th_anchors,
         scorer=scorer, score_threshold=args.score_threshold,
-        symmetry_breaking=args.symmetry_breaking,
+        symmetry_breaking=args.symmetry_breaking, hint_layout=hint_layout,
     ).run(on_status=lambda k, s, *_: print(f"  k={k}: {s}", flush=True))
     print(json.dumps({k: v for k, v in res.items() if k != "results"}, indent=1))
     return 0
@@ -75,6 +79,8 @@ def main(argv=None):
     w.add_argument("--probe-workers", type=int, default=2)
     w.add_argument("--th-anchors", choices=("coarse", "full"), default="full")
     w.add_argument("--symmetry-breaking", action="store_true")
+    w.add_argument("--warm-start", action="store_true")
+    w.add_argument("--warm-start-budget", type=float, default=30.0)
     w.set_defaults(fn=_walk)
     args = p.parse_args(argv)
     return args.fn(args)

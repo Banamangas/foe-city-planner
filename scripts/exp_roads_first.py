@@ -159,6 +159,8 @@ def main(argv=None):
     p.add_argument("--probe-workers", type=int, default=4)
     p.add_argument("--corpus", default=None, metavar="DIR")
     p.add_argument("--symmetry-breaking", action="store_true")
+    p.add_argument("--warm-start", action="store_true")
+    p.add_argument("--warm-start-budget", type=float, default=30.0)
     args = p.parse_args(argv)
     if args.smoke:
         args.patterns = 20
@@ -192,6 +194,11 @@ def main(argv=None):
     out_dir = pathlib.Path("output/roads-first")
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    hint_layout = None
+    if args.warm_start:
+        from foeopt.packer import repack
+        hint_layout = repack(layout, budget_seconds=args.warm_start_budget).layout
+
     def on_status(k, status, _, _2):
         print(f"  k={k}: {status}", flush=True)
 
@@ -220,6 +227,7 @@ def main(argv=None):
         k_start=args.k_start,
         corpus_dir=args.corpus,
         symmetry_breaking=args.symmetry_breaking,
+        hint_layout=hint_layout,
     ).run(on_improvement=on_improvement, on_status=on_status)
     print(json.dumps({k: v for k, v in res.items() if k != "results"}, indent=1))
     per_level = {k: v[0] + (f" achieved={v[1]}" if v[1] is not None else "")
