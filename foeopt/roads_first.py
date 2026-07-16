@@ -172,6 +172,94 @@ def generate_patterns(region: set[Cell], tw: int, tl: int, k: int,
     return out[:max_patterns]
 
 
+def _th_anchor_cell(th: Footprint, side: str) -> Cell:
+    if side == "top":
+        return (th.x, th.y - 1)
+    if side == "bottom":
+        return (th.x, th.y + th.length)
+    if side == "left":
+        return (th.x - 1, th.y)
+    return (th.x + th.width, th.y)
+
+
+def generate_lane_patterns(region: set[Cell], tw: int, tl: int, k: int,
+                           rng: random.Random, max_patterns: int,
+                           th_mode: str = "coarse") -> list[Pattern]:
+    """Parallel double-loaded-lane family: unlike generate_patterns's comb
+    (single trunk consuming budget//2 regardless of need, short teeth), this
+    grows a *minimal* trunk -- only as long as needed to connect the TH to
+    the lane seeds on both sides of it along the trunk line -- then grows
+    full straight lanes from each seed, mirroring the user's hand-built
+    city's near-zero trunk overhead (memory/foe-layout-heuristics: 5
+    non-double-row cells out of 142)."""
+    out: list[Pattern] = []
+    seen: set[frozenset[Cell]] = set()
+    for th in th_anchor_candidates(region, tw, tl, mode=th_mode):
+        th_cells = th.cells()
+        reg = region
+        for side in ("top", "bottom", "left", "right"):
+            trunk_raw = [c for c in _trunk(reg, th, side) if c not in th_cells]
+            if not trunk_raw:
+                continue
+            anchor = _th_anchor_cell(th, side)
+            if anchor not in trunk_raw:
+                continue
+            anchor_idx = trunk_raw.index(anchor)
+            horiz = trunk_raw[0][1] == trunk_raw[-1][1]
+            for pitch in (5, 6, 7, 8, 9, 10, 11):
+                for use_stubs in (False, True):
+                    roads: set[Cell] = set()
+                    stubs = _stub_cells(reg, th, roads) if use_stubs else []
+                    budget = k - len(stubs)
+                    if budget < 1:
+                        continue
+                    pos_idxs = list(range(anchor_idx + pitch, len(trunk_raw), pitch))
+                    neg_idxs = list(range(anchor_idx - pitch, -1, -pitch))
+                    seed_idxs = sorted(pos_idxs + neg_idxs)
+                    if not seed_idxs:
+                        continue
+                    lo, hi = min(seed_idxs + [anchor_idx]), max(seed_idxs + [anchor_idx])
+                    trunk_used = trunk_raw[lo:hi + 1]
+                    roads |= set(trunk_used)
+                    remaining = budget - len(trunk_used)
+                    if remaining < 0:
+                        continue
+                    seeds = [trunk_raw[i] for i in seed_idxs]
+                    cand_dirs = [(0, -1), (0, 1)] if horiz else [(-1, 0), (1, 0)]
+                    fronts = [(s, d, 1) for s in seeds for d in cand_dirs]
+                    grown = True
+                    while remaining > 0 and grown:
+                        grown = False
+                        for j, (s, d, dist) in enumerate(fronts):
+                            if remaining == 0:
+                                break
+                            c = (s[0] + d[0] * dist, s[1] + d[1] * dist)
+                            if c in reg and c not in roads and c not in th_cells:
+                                roads.add(c)
+                                fronts[j] = (s, d, dist + 1)
+                                remaining -= 1
+                                grown = True
+                    if remaining != 0:
+                        continue
+                    roads |= set(stubs)
+                    key = frozenset(roads)
+                    if len(key) != k or key in seen:
+                        continue
+                    seen.add(key)
+                    out.append(Pattern(th=th, roads=key, params={
+                        "th": (th.x, th.y), "side": side, "pitch": pitch,
+                        "stubs": use_stubs, "trunk_len": len(trunk_used), "k": k}))
+    rng.shuffle(out)
+    return out[:max_patterns]
+
+
+def _pattern_generator(family: str):
+    # Resolved dynamically (not a frozen dict built at import time) so tests
+    # that monkeypatch module-level generate_patterns/generate_lane_patterns
+    # still take effect here.
+    return generate_lane_patterns if family == "lane" else generate_patterns
+
+
 def prefilter(pattern: Pattern, region: set[Cell],
               consumers: list[Building]) -> str | None:
     th_cells = pattern.th.cells()
@@ -402,8 +490,9 @@ def _probe_level(layout, region, consumers, k, rng, params, log, pool=None,
                  on_improvement=None, corpus=None, scorer=None, score_threshold=None) -> tuple[str, int | None]:
     th = layout.townhall.footprint
     th_mode = getattr(params, "th_anchors", "coarse")
-    pats = generate_patterns(region, th.width, th.length, k, rng, params.patterns,
-                             th_mode=th_mode)
+    gen_fn = _pattern_generator(getattr(params, "pattern_family", "comb"))
+    pats = gen_fn(region, th.width, th.length, k, rng, params.patterns,
+                  th_mode=th_mode)
     best_achieved = None
     saw_nonproof_failure = False
     order = 0
@@ -474,7 +563,8 @@ class RoadsFirstSearch:
                  probe_limit: float = 60.0, workers: int = 4,
                  probe_workers: int = 4, th_anchors: str = "full",
                  k_start="auto", corpus_dir=None, scorer=None, score_threshold=None,
-                 symmetry_breaking: bool = False, hint_layout: Layout | None = None):
+                 symmetry_breaking: bool = False, hint_layout: Layout | None = None,
+                 pattern_family: str = "comb"):
         self.layout = layout
         self.time_box = time_box
         self.patterns = patterns
@@ -489,6 +579,7 @@ class RoadsFirstSearch:
         self.symmetry_breaking = symmetry_breaking
         self.hints = ({b.entity_id: (b.footprint.x, b.footprint.y) for b in hint_layout.buildings}
                      if hint_layout is not None else None)
+        self.pattern_family = pattern_family
 
     def run(self, on_improvement=None, on_status=None, should_stop=None) -> dict:
         layout = self.layout
@@ -515,6 +606,7 @@ class RoadsFirstSearch:
             th_anchors=self.th_anchors,
             symmetry_breaking=self.symmetry_breaking,
             hints=self.hints,
+            pattern_family=self.pattern_family,
         )
 
         results: dict[int, tuple[str, int | None]] = {}

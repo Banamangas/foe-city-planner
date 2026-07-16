@@ -106,6 +106,44 @@ def test_search_k_start_auto_resolves(monkeypatch):
     assert captured_k[0] == expected
 
 
+def test_search_pattern_family_propagates_to_params(monkeypatch):
+    """RoadsFirstSearch(pattern_family='lane') must reach _probe_level via
+    params.pattern_family -- the actual dispatch lives in _probe_level, this
+    just confirms the constructor kwarg makes it all the way through run()."""
+    lay = _tiny_layout()
+    captured = []
+
+    def fake_probe_level(layout, region, consumers, k, rng, params, log, pool=None,
+                         on_improvement=None, corpus=None, scorer=None, score_threshold=None):
+        captured.append(getattr(params, "pattern_family", "MISSING"))
+        return ("FEASIBLE", k)
+
+    monkeypatch.setattr(mod, "_probe_level", fake_probe_level)
+    search = mod.RoadsFirstSearch(lay, time_box=1.0, patterns=5, probe_limit=1.0,
+                                  workers=1, th_anchors="coarse", k_start=1,
+                                  pattern_family="lane")
+    search.run()
+    assert captured, "no _probe_level calls captured"
+    assert all(c == "lane" for c in captured)
+
+
+def test_search_pattern_family_defaults_to_comb(monkeypatch):
+    lay = _tiny_layout()
+    captured = []
+
+    def fake_probe_level(layout, region, consumers, k, rng, params, log, pool=None,
+                         on_improvement=None, corpus=None, scorer=None, score_threshold=None):
+        captured.append(getattr(params, "pattern_family", "MISSING"))
+        return ("FEASIBLE", k)
+
+    monkeypatch.setattr(mod, "_probe_level", fake_probe_level)
+    search = mod.RoadsFirstSearch(lay, time_box=1.0, patterns=5, probe_limit=1.0,
+                                  workers=1, th_anchors="coarse", k_start=1)
+    search.run()
+    assert captured, "no _probe_level calls captured"
+    assert all(c == "comb" for c in captured)
+
+
 def test_search_family_too_weak(monkeypatch):
     """When all levels are INFEASIBLE and fallback exhausts, verdict=FAMILY_TOO_WEAK."""
     lay = _tiny_layout()

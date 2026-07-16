@@ -54,6 +54,7 @@ def _walk(args):
         probe_workers=args.probe_workers, th_anchors=args.th_anchors,
         scorer=scorer, score_threshold=args.score_threshold,
         symmetry_breaking=args.symmetry_breaking, hint_layout=hint_layout,
+        pattern_family=args.pattern_family,
     ).run(on_status=lambda k, s, *_: print(f"  k={k}: {s}", flush=True))
     print(json.dumps({k: v for k, v in res.items() if k != "results"}, indent=1))
     return 0
@@ -81,6 +82,7 @@ def main(argv=None):
     w.add_argument("--symmetry-breaking", action="store_true")
     w.add_argument("--warm-start", action="store_true")
     w.add_argument("--warm-start-budget", type=float, default=30.0)
+    w.add_argument("--pattern-family", choices=("comb", "lane"), default="comb")
     w.set_defaults(fn=_walk)
     args = p.parse_args(argv)
     return args.fn(args)

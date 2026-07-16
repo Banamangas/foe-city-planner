@@ -10,11 +10,12 @@ See `tasks/lessons.md` (2026-07-15). Ideas below, **cheapest first**. Discipline
 change vs baseline at **equal wall-clock, 0-unplaced, ≥ a few seeds** (the pool is
 non-deterministic), and validate the *bottleneck* before building.
 
-**Update 2026-07-16:** all three cheap-tier scheduling/solver-side ideas (#1 pruning, #2
-warm-start, #3 symmetry breaking) are now tested and closed, all negative — none moved the
-CP-SAT proving-time bottleneck. #4 (UNSAT prefilter) is the last untested cheap-tier idea; #5
-(lane/stub topology, medium tier) is the strongest remaining candidate since it attacks the
-pattern-family limit directly rather than the solver.
+**Update 2026-07-16:** four ideas tested and closed, all negative — #1 pruning, #2 warm-start,
+#3 symmetry breaking (none moved the CP-SAT proving-time bottleneck), and #5 lane/stub topology
+(structurally closer to the expert city, but its geometry is *harder* for CP-SAT to decide,
+netting worse results despite the better topology). #4 (UNSAT prefilter) is the only untested
+cheap-tier idea left; #6 (minimize-roads CP-SAT) and the unmeasured hybrid-family follow-up
+noted under #5 are the least-explored remaining directions.
 
 ## Cheapest — reuse existing infra (hours)
 
@@ -59,13 +60,22 @@ pattern-family limit directly rather than the solver.
 
 ## Medium — a focused build
 
-5. **Lane/stub topology generator — THE lever for lower k.** The current comb/stub patterns
-   cap out ~k=110 (autopsy). Generate skeletons as compositions of straight **double-loaded
-   lanes + a trunk + Townhall stubs**, mirroring the expert's hand-built 142-road /
-   2.02-sharing city (`memory/foe-layout-heuristics`). Feed into the same k-walk + validate
-   with `route()`/`is_valid`. Directly attacks the pattern-family limit. Revisit the killed
-   Track A "lane composition" (`tasks/todo.md`) with the roads-first framing, and use the
-   Stage-0 corpus as a ready-made validation/eval set.
+5. ~~**Lane/stub topology generator.**~~ **TESTED 2026-07-16 — reproducibly WORSE, closed.**
+   Implemented `generate_lane_patterns()`/`--pattern-family {comb,lane}` — parallel double-
+   loaded lanes off a *minimal* trunk (spans only to the furthest lane seed, not
+   `budget//2` like the comb family) + TH stubs, structurally closer to the expert city's real
+   topology. Found and fixed a real connectivity bug pre-flight (`_trunk()`'s TH-adjacent
+   anchor cell sits mid-list, not at index 0, for non-corner TH placements — a naive
+   `trunk[:n]` prefix would silently disconnect the pattern). A/B'd 30min/arm x2: baseline
+   k=111/102 roads vs lane-family k=115/109 and k=115/112 — a full k-level worse both times
+   (not bit-identical like ideas #1-3, but consistently worse). **Mechanism, this time with a
+   clear signal:** at k=115, comb probes are 4/6 fast UNSAT + 2/6 UNKNOWN, but lane probes are
+   6/6 UNKNOWN — the lane geometry's long straight corridors are structurally *harder for
+   CP-SAT to decide* than the comb's shorter teeth, even though they resemble the real city's
+   topology more closely. Structural resemblance to the expert city and solver-decidability
+   pull in opposite directions here. Full numbers: `tasks/lessons.md` 2026-07-16 entry. A
+   possible follow-up (unmeasured): a *hybrid* family (comb near the frontier, lanes only
+   where there's slack) might recover the structural win without the decidability cost.
 
 6. **Minimize-roads CP-SAT (not fixed-k).** Replace the fix-k / bisect walk with a model that
    directly **minimizes road cells** subject to placement + TH-connectivity over a fixed
