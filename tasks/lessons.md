@@ -1199,3 +1199,64 @@ built) worth flagging for later: a *hybrid* family (short comb teeth near the fr
 hard-to-decide region, full lanes only where slack is generous) might recover the lane family's
 structural advantage without its solver-hardness cost -- unmeasured, out of scope for this A/B.
 Artifacts: `output/kwalk/lanefamily.log`, `output/kwalk/lanefamily-2.log`.
+
+## Stub priority hint: hurts the comb family, helps and stabilizes the lane family (2026-07-17)
+**Setup:** user follow-up question after the roads-first work above -- does the model require the
+*biggest* buildings to sit next to the TH stub cells, matching the expert-city heuristic
+(`memory/foe-layout-heuristics`: "puts ~3 big buildings next to each stub", each stub cell reaching
+load-3 "for free" via the TH edge)? No: `probe()` has zero objective, so CP-SAT seats whichever
+building fits first, with no size preference. **Diagnostic first (before building):** inspected
+3 existing solved layouts (`best-k110-a102.json`, `best-k111-a102.json`, `best-k115-a105.json`) --
+every one had at least one stub-adjacent cell hosting a genuinely tiny building (area 1 or 4)
+alongside bigger ones (16-49), confirming real headroom for a size-aware nudge.
+**Implementation:** `stub_priority=`/`--stub-priority` (opt-in, default off) added to `probe()`.
+`_th_stub_cells_in_pattern(th, roads)` finds whichever of the 4 candidate TH-flank cells are road
+cells in the *given* pattern (family-agnostic -- works whether they're comb stubs, lane stubs, or
+incidental trunk cells); `_stub_priority_hints()` then `AddHint`s the largest buildings (by area,
+top-3 per stub cell, matching the load-3 ceiling) toward their own valid anchor options that touch
+that cell -- a soft nudge (not a hard constraint), and every hint is drawn from the pattern's own
+already-computed `opts`, so (unlike the failed idea #2 warm-start) it's always in-domain by
+construction. Verified the selection logic on a controlled 6-building case (only the 3 largest of
+6 candidates get hinted) and confirmed real coverage on darkzig (177/200 sampled patterns had at
+least one stub cell present, and the top-6-by-area selection matched expectations on inspection).
+Added a SAT/UNSAT-preservation equivalence test (mirrors the `symmetry_breaking`/`hints` tests).
+315-test suite and `--selftest` green before any timed run.
+**A/B result (30min/arm, equal wall-clock, x2 per family/arm for reproducibility) -- a genuinely
+mixed, family-dependent result, the first non-uniformly-negative one in this whole run of
+experiments:**
+| family | arm | k reached | best_achieved |
+|---|---|---|---|
+| comb (production default) | baseline | 111 | 102 |
+| comb | + stub_priority | 111 | **105, 105** (worse, reproduced x2) |
+| lane | baseline | 115 | 109, 112 (variable across runs) |
+| lane | + stub_priority | 115 | **108, 108** (better than *both* baseline runs, reproduced x2) |
+`stub_priority` **hurts** the comb family by 3 roads (same k-walk depth, reproducibly worse
+`achieved`) but **helps and stabilizes** the lane family -- not only does it land at 108 (better
+than both 109 and 112), it eliminates the lane baseline's own run-to-run variance (bit-identical
+across both repeats, unlike the baseline's own two runs disagreeing by 3).
+**Mechanism check:** per-probe SAT/UNSAT/UNKNOWN status comparison (5 patterns each, lane k=115 and
+comb k=111, on/off) showed **zero status flips** -- consistent with the equivalence tests: the
+hint never changes whether a pattern is feasible. The likely explanation for a `best_achieved`
+shift despite unchanged decidability: `achieved` is computed by `route()` on whichever *specific*
+building placement CP-SAT actually returns for a SAT pattern, not from the road-skeleton budget
+`k` itself -- so a hint that changes *which* feasible placement is found (without changing whether
+one is found) can still shift the final routed road count. This is inferred from the reproducible
+net effect, not directly proven by a per-probe trace (the small sample above didn't happen to catch
+a shifted-solution case) -- flagged honestly as the best available explanation, not a certainty.
+**Verdict: mixed, stays opt-in/off by default everywhere.** Since comb is the production default
+and current best method (102, still far ahead of lane+stub_priority's 108), `stub_priority` must
+NOT flip to default-on there -- it would regress the project's best result. It's a genuine,
+reproducible win specifically for the *lane* family, which is itself still closed/opt-in from the
+next-things-to-try #5 entry above (lane alone regresses vs comb; lane+stub_priority narrows that
+gap from -7/-10 to -6, but doesn't close it). Kept as tested, correct, zero-cost-when-unused
+infrastructure, available for revisiting if the lane family (or a future hybrid family per #5's
+follow-up note) is ever picked back up. **Standing pattern across this session's four solver-side
+levers (symmetry breaking, warm-start, lane topology, stub priority):** every added
+constraint/hint/hint-like nudge either regressed or was neutral on the comb family specifically --
+comb's search is already fast and decisive (mostly quick UNSAT, per the idea #5 mechanism check),
+and redirecting an already-efficient search seems to cost more than it buys. The one place a hint
+helped (lane + stub_priority) is exactly the one place the baseline search was already struggling
+(lane's per-probe check showed 6/6 UNKNOWN at a comparable k) -- weak but consistent evidence that
+these levers pay off only when the underlying search has room to be steered, not when it's already
+efficient. Artifacts: `output/kwalk/stubpriority-comb.log`, `output/kwalk/stubpriority-comb-2.log`,
+`output/kwalk/stubpriority-lane.log`, `output/kwalk/stubpriority-lane-2.log`.

@@ -162,6 +162,7 @@ def main(argv=None):
     p.add_argument("--warm-start", action="store_true")
     p.add_argument("--warm-start-budget", type=float, default=30.0)
     p.add_argument("--pattern-family", choices=("comb", "lane"), default="comb")
+    p.add_argument("--stub-priority", action="store_true")
     args = p.parse_args(argv)
     if args.smoke:
         args.patterns = 20
@@ -231,6 +232,7 @@ def main(argv=None):
         symmetry_breaking=args.symmetry_breaking,
         hint_layout=hint_layout,
         pattern_family=args.pattern_family,
+        stub_priority=args.stub_priority,
     ).run(on_improvement=on_improvement, on_status=on_status)
     print(json.dumps({k: v for k, v in res.items() if k != "results"}, indent=1))
     per_level = {k: v[0] + (f" achieved={v[1]}" if v[1] is not None else "")
