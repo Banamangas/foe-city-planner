@@ -17,12 +17,14 @@ netting worse results despite the better topology). #4 (UNSAT prefilter) is the 
 cheap-tier idea left; #6 (minimize-roads CP-SAT) and the unmeasured hybrid-family follow-up
 noted under #5 are the least-explored remaining directions.
 
-**Update 2026-07-17 (revised):** #10 stub priority closed mixed (hurts comb, helps lane). #11
-hybrid comb/lane (bounded lane length) is **open, not closed** — cap=24 reproducibly beats every
-other lane-family result (106 roads, closest yet to comb's 102); see #11 below for the corrected
-account (an earlier version of this entry, based on only caps 4/8, wrongly concluded the idea was
-falsified). Next open threads: bracket the cap=24 sweet spot, #4 (UNSAT prefilter, still
-untested), #6 (minimize-roads CP-SAT).
+**Update 2026-07-17 (final):** #10 stub priority closed mixed (hurts comb, helps lane). #11
+hybrid comb/lane (bounded lane length) closed **positive** — bracketed a genuine, reproduced,
+isolated-optimum sweet spot at cap=24 (106 roads, closest yet to comb's 102); layering
+`stub_priority` on top of it doesn't stack (makes it worse). This is the first lever in the whole
+next-things-to-try line to reproducibly beat its own family's prior best rather than just fail
+differently, though it still doesn't dislodge plain comb (102) as the project's best result. Next
+open threads: #4 (UNSAT prefilter, still untested), #6 (minimize-roads CP-SAT), or understanding
+*why* cap=24 specifically works if this thread gets picked up again.
 
 ## Cheapest — reuse existing infra (hours)
 
@@ -124,23 +126,28 @@ untested), #6 (minimize-roads CP-SAT).
     mostly fast UNSAT). Full numbers: `tasks/lessons.md` 2026-07-17 entry. Kept opt-in/off
     everywhere; revisit only if the lane family itself is picked back up.
 
-11. **Hybrid comb/lane (bounded lane length) — cap=24 is a real, reproduced win, OPEN not
-    closed.** Idea #5's flagged follow-up: cap lane length as a cheap proxy for a spatial
-    comb/lane hybrid. Implemented `max_lane_len=`/`--lane-cap` on `generate_lane_patterns()`.
-    **Not monotonic** — uncapped lane 109/112 → cap=16 111/111 (≈ uncapped) → **cap=24 106/106
-    (reproduced — best lane-family result yet, closest to comb's 102)** → cap=8 119/119 (worse)
-    → cap=4 FAMILY_TOO_WEAK (climbed to k=283, never found one SAT). The first two caps tried
-    (4, 8) looked like a clean "smaller cap = worse" trend and the entry originally closed as
-    falsified; testing 16 then 24 (user follow-ups) overturned that — there's a real optimum
-    near cap=24, not a monotonic gradient. Best-guess mechanism (unconfirmed): a cap set above
-    the *typical* productive lane length but below the *outlier* long-lane tail may selectively
-    filter only the rare hardest-to-decide patterns rather than uniformly restricting everything.
-    While sanity-checking this, found and fixed a real pre-existing bug in
-    `scripts/exp_roads_first.py`'s `--dump-patterns` path (never threaded `th_mode` through —
-    silently used `coarse` regardless of `--th-anchors`; the real A/B runs via `kwalk_gate.py`
-    were unaffected, only informal diagnostics were). **Next step (not yet done): bracket the
-    sweet spot (e.g. 20, 28, 32) and consider layering `stub_priority` on top of the winning
-    cap** (stub priority independently helped the lane family in the earlier entry). Full
+11. ~~**Hybrid comb/lane (bounded lane length).**~~ **TESTED 2026-07-17 — cap=24 is a real,
+    bracketed, isolated-optimum win, but doesn't stack with stub_priority; closed.** Idea #5's
+    flagged follow-up: cap lane length as a cheap proxy for a spatial comb/lane hybrid.
+    Implemented `max_lane_len=`/`--lane-cap` on `generate_lane_patterns()`. **Not monotonic —
+    bracketed a narrow, isolated dip centered exactly at cap=24**: 16→111, 20→110, **24→106/106
+    (reproduced)**, 28→111, uncapped→109/112, 8→119, 4→FAMILY_TOO_WEAK. 106 is the best
+    lane-family result found and the closest anything but plain comb has come to comb's 102.
+    Best-guess mechanism (unconfirmed): a cap above the *typical* productive lane length but
+    below the *outlier* long-lane tail may selectively filter only the rare hardest-to-decide
+    patterns rather than uniformly restricting everything. **Layering `stub_priority` on top of
+    cap=24 does not stack — makes it worse** (110/110, reproduced, back to the cap=20/uncapped
+    range): whatever makes cap=24 work well alone is disturbed by also biasing toward
+    big-buildings-at-stubs, matching this session's "helps a struggling search, hurts an
+    already-tuned one" pattern showing up *within* the lane family this time. While
+    sanity-checking this, found and fixed a real pre-existing bug in `scripts/exp_roads_first.py`'s
+    `--dump-patterns` path (never threaded `th_mode` through — silently used `coarse` regardless
+    of `--th-anchors`; the real A/B runs via `kwalk_gate.py` were unaffected, only informal
+    diagnostics were). **Verdict: cap=24 alone is the winning configuration; closed with a real,
+    positive, bracketed result** — first lever in the whole next-things-to-try line to
+    reproducibly beat its own family's prior best rather than just fail differently. Still short
+    of dislodging comb (102). Natural next step if revisited: understand *why* cap=24 works (a
+    per-pattern lane-length histogram vs uncapped) rather than more parameter search. Full
     numbers: `tasks/lessons.md` 2026-07-17 entry (revised).
 
 ## Kept assets that these can reuse
