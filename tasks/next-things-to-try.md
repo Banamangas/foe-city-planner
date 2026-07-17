@@ -117,6 +117,19 @@ noted under #5 are the least-explored remaining directions.
     mostly fast UNSAT). Full numbers: `tasks/lessons.md` 2026-07-17 entry. Kept opt-in/off
     everywhere; revisit only if the lane family itself is picked back up.
 
+11. ~~**Hybrid comb/lane (bounded lane length).**~~ **TESTED 2026-07-17 — hypothesis falsified,
+    closed.** Idea #5's flagged follow-up: cap lane length as a cheap proxy for a spatial
+    comb/lane hybrid, testing whether *lane length* (not lane-ness) drives the decidability
+    cost. Implemented `max_lane_len=`/`--lane-cap` on `generate_lane_patterns()`. **Result is
+    the opposite of predicted — capping made things monotonically WORSE**: uncapped lane
+    109/112 → cap=8 **119/119** (worse, reproduced) → cap=4 **FAMILY_TOO_WEAK** (climbed to
+    k=283, never found one SAT). Shortening the cap needs *more* seeds to hit the same k
+    budget, but the number of viable seeds is bounded by the trunk's fixed length and the
+    minimum pitch (5) — capping doesn't loosen either, so it just runs out of room. Falsifies
+    the length-cap proxy specifically; doesn't rule out a *literal* spatial hybrid with its own
+    independent seed/trunk budget, but that's a materially bigger build, not a small follow-up.
+    Full numbers: `tasks/lessons.md` 2026-07-17 entry.
+
 ## Kept assets that these can reuse
 - Stage-0 corpus engine (`foeopt/corpus.py`, opt-in `--corpus`) — labeled instances for eval.
 - Feasibility CNN (`rl/kwalk_*`, AUC 0.999) + opt-in scorer hook — for idea #1 (pruning).

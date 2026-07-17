@@ -163,6 +163,7 @@ def main(argv=None):
     p.add_argument("--warm-start-budget", type=float, default=30.0)
     p.add_argument("--pattern-family", choices=("comb", "lane"), default="comb")
     p.add_argument("--stub-priority", action="store_true")
+    p.add_argument("--lane-cap", type=int, default=None)
     args = p.parse_args(argv)
     if args.smoke:
         args.patterns = 20
@@ -179,8 +180,11 @@ def main(argv=None):
         consumers = layout.road_needing()
         rng = random.Random(args.seed)
         gen_fn = _pattern_generator(args.pattern_family)
+        gen_kwargs = {}
+        if args.pattern_family == "lane":
+            gen_kwargs["max_lane_len"] = args.lane_cap
         pats = gen_fn(region, th.width, th.length,
-                      args.dump_patterns, rng, args.patterns)
+                      args.dump_patterns, rng, args.patterns, **gen_kwargs)
         kept = 0
         for pat in pats:
             _check_pattern(pat, region, args.dump_patterns)
@@ -233,6 +237,7 @@ def main(argv=None):
         hint_layout=hint_layout,
         pattern_family=args.pattern_family,
         stub_priority=args.stub_priority,
+        lane_cap=args.lane_cap,
     ).run(on_improvement=on_improvement, on_status=on_status)
     print(json.dumps({k: v for k, v in res.items() if k != "results"}, indent=1))
     per_level = {k: v[0] + (f" achieved={v[1]}" if v[1] is not None else "")

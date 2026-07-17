@@ -82,6 +82,67 @@ def test_generate_lane_patterns_th_off_corner_anchor_mid_trunk():
         _check_pattern(p, region, 30)
 
 
+def test_generate_lane_patterns_max_lane_len_none_matches_unbounded_default():
+    """max_lane_len=None (the default) must produce byte-identical output to
+    calling without the kwarg at all -- capping is strictly opt-in and must
+    not perturb the already-measured uncapped lane-family results."""
+    region = set((x, y) for x in range(16) for y in range(16))
+    for k in (20, 40):
+        a = generate_lane_patterns(region, 2, 2, k, random.Random(0), 50, th_mode="full")
+        b = generate_lane_patterns(region, 2, 2, k, random.Random(0), 50, th_mode="full",
+                                   max_lane_len=None)
+        assert a == b
+
+
+def test_generate_lane_patterns_capped_connectivity_and_exact_k():
+    """Capped lanes must still satisfy _check_pattern (connectivity, exact
+    k, region/TH-disjointness) across a few k values and cap sizes."""
+    region = set((x, y) for x in range(20) for y in range(20))
+    for cap in (2, 4, 6):
+        for k in (15, 25, 40):
+            pats = generate_lane_patterns(region, 2, 2, k, random.Random(0), 50,
+                                          th_mode="full", max_lane_len=cap)
+            for p in pats:
+                _check_pattern(p, region, k)
+
+
+def test_generate_lane_patterns_max_lane_len_bounds_each_front():
+    """The cap must actually bound how far a lane grows -- re-derive each
+    pattern's trunk/seeds the same way the generator does and confirm no
+    front extends past the cap in the output road set."""
+    from foeopt.roads_first import _trunk, _th_anchor_cell
+    region = set((x, y) for x in range(20) for y in range(20))
+    cap = 2
+    checked = 0
+    for k in (10, 15, 20, 25):
+        pats = generate_lane_patterns(region, 2, 2, k, random.Random(2), 40,
+                                      th_mode="full", max_lane_len=cap)
+        for pat in pats:
+            th = pat.th
+            side = pat.params["side"]
+            th_cells = th.cells()
+            trunk_raw = [c for c in _trunk(region, th, side) if c not in th_cells]
+            anchor = _th_anchor_cell(th, side)
+            anchor_idx = trunk_raw.index(anchor)
+            pitch = pat.params["pitch"]
+            pos_idxs = list(range(anchor_idx + pitch, len(trunk_raw), pitch))
+            neg_idxs = list(range(anchor_idx - pitch, -1, -pitch))
+            seed_idxs = sorted(pos_idxs + neg_idxs)
+            seeds = [trunk_raw[i] for i in seed_idxs]
+            horiz = trunk_raw[0][1] == trunk_raw[-1][1]
+            cand_dirs = [(0, -1), (0, 1)] if horiz else [(-1, 0), (1, 0)]
+            for s in seeds:
+                for d in cand_dirs:
+                    dist = 1
+                    while (s[0] + d[0] * dist, s[1] + d[1] * dist) in pat.roads:
+                        dist += 1
+                    assert dist - 1 <= cap, (
+                        f"lane front from seed {s} dir {d} extended "
+                        f"{dist - 1} cells > cap {cap}")
+                    checked += 1
+    assert checked > 0, "expected at least one capped pattern to check"
+
+
 def test_prefilter_area_rejects_impossible():
     from foeopt.model import Building, Footprint
     th_fp = Footprint(0, 0, 2, 2)

@@ -184,14 +184,22 @@ def _th_anchor_cell(th: Footprint, side: str) -> Cell:
 
 def generate_lane_patterns(region: set[Cell], tw: int, tl: int, k: int,
                            rng: random.Random, max_patterns: int,
-                           th_mode: str = "coarse") -> list[Pattern]:
+                           th_mode: str = "coarse",
+                           max_lane_len: int | None = None) -> list[Pattern]:
     """Parallel double-loaded-lane family: unlike generate_patterns's comb
     (single trunk consuming budget//2 regardless of need, short teeth), this
     grows a *minimal* trunk -- only as long as needed to connect the TH to
     the lane seeds on both sides of it along the trunk line -- then grows
     full straight lanes from each seed, mirroring the user's hand-built
     city's near-zero trunk overhead (memory/foe-layout-heuristics: 5
-    non-double-row cells out of 142)."""
+    non-double-row cells out of 142).
+
+    `max_lane_len` (default None = unbounded, today's behavior) caps how far
+    a lane grows from its seed before stopping -- a hybrid dial between this
+    family's uncapped lanes (structurally efficient but harder for CP-SAT to
+    decide, per the idea #5 mechanism finding) and the comb family's short
+    teeth (easier to decide). Capping only bounds individual lane length; the
+    trunk and seed spacing are unaffected."""
     out: list[Pattern] = []
     seen: set[frozenset[Cell]] = set()
     for th in th_anchor_candidates(region, tw, tl, mode=th_mode):
@@ -233,6 +241,8 @@ def generate_lane_patterns(region: set[Cell], tw: int, tl: int, k: int,
                         for j, (s, d, dist) in enumerate(fronts):
                             if remaining == 0:
                                 break
+                            if max_lane_len is not None and dist > max_lane_len:
+                                continue
                             c = (s[0] + d[0] * dist, s[1] + d[1] * dist)
                             if c in reg and c not in roads and c not in th_cells:
                                 roads.add(c)
@@ -248,7 +258,8 @@ def generate_lane_patterns(region: set[Cell], tw: int, tl: int, k: int,
                     seen.add(key)
                     out.append(Pattern(th=th, roads=key, params={
                         "th": (th.x, th.y), "side": side, "pitch": pitch,
-                        "stubs": use_stubs, "trunk_len": len(trunk_used), "k": k}))
+                        "stubs": use_stubs, "trunk_len": len(trunk_used),
+                        "max_lane_len": max_lane_len, "k": k}))
     rng.shuffle(out)
     return out[:max_patterns]
 
@@ -549,9 +560,13 @@ def _probe_level(layout, region, consumers, k, rng, params, log, pool=None,
                  on_improvement=None, corpus=None, scorer=None, score_threshold=None) -> tuple[str, int | None]:
     th = layout.townhall.footprint
     th_mode = getattr(params, "th_anchors", "coarse")
-    gen_fn = _pattern_generator(getattr(params, "pattern_family", "comb"))
+    family = getattr(params, "pattern_family", "comb")
+    gen_fn = _pattern_generator(family)
+    gen_kwargs = {"th_mode": th_mode}
+    if family == "lane":
+        gen_kwargs["max_lane_len"] = getattr(params, "lane_cap", None)
     pats = gen_fn(region, th.width, th.length, k, rng, params.patterns,
-                  th_mode=th_mode)
+                  **gen_kwargs)
     best_achieved = None
     saw_nonproof_failure = False
     order = 0
@@ -624,7 +639,8 @@ class RoadsFirstSearch:
                  probe_workers: int = 4, th_anchors: str = "full",
                  k_start="auto", corpus_dir=None, scorer=None, score_threshold=None,
                  symmetry_breaking: bool = False, hint_layout: Layout | None = None,
-                 pattern_family: str = "comb", stub_priority: bool = False):
+                 pattern_family: str = "comb", stub_priority: bool = False,
+                 lane_cap: int | None = None):
         self.layout = layout
         self.time_box = time_box
         self.patterns = patterns
@@ -641,6 +657,7 @@ class RoadsFirstSearch:
                      if hint_layout is not None else None)
         self.pattern_family = pattern_family
         self.stub_priority = stub_priority
+        self.lane_cap = lane_cap
 
     def run(self, on_improvement=None, on_status=None, should_stop=None) -> dict:
         layout = self.layout
@@ -669,6 +686,7 @@ class RoadsFirstSearch:
             hints=self.hints,
             pattern_family=self.pattern_family,
             stub_priority=self.stub_priority,
+            lane_cap=self.lane_cap,
         )
 
         results: dict[int, tuple[str, int | None]] = {}
