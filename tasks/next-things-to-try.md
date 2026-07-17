@@ -17,6 +17,13 @@ netting worse results despite the better topology). #4 (UNSAT prefilter) is the 
 cheap-tier idea left; #6 (minimize-roads CP-SAT) and the unmeasured hybrid-family follow-up
 noted under #5 are the least-explored remaining directions.
 
+**Update 2026-07-17 (revised):** #10 stub priority closed mixed (hurts comb, helps lane). #11
+hybrid comb/lane (bounded lane length) is **open, not closed** — cap=24 reproducibly beats every
+other lane-family result (106 roads, closest yet to comb's 102); see #11 below for the corrected
+account (an earlier version of this entry, based on only caps 4/8, wrongly concluded the idea was
+falsified). Next open threads: bracket the cap=24 sweet spot, #4 (UNSAT prefilter, still
+untested), #6 (minimize-roads CP-SAT).
+
 ## Cheapest — reuse existing infra (hours)
 
 1. ~~**Prune-mode guided walk.**~~ **TESTED 2026-07-16 — no gain, closed.** Swept
@@ -117,20 +124,24 @@ noted under #5 are the least-explored remaining directions.
     mostly fast UNSAT). Full numbers: `tasks/lessons.md` 2026-07-17 entry. Kept opt-in/off
     everywhere; revisit only if the lane family itself is picked back up.
 
-11. ~~**Hybrid comb/lane (bounded lane length).**~~ **TESTED 2026-07-17 — hypothesis falsified,
+11. **Hybrid comb/lane (bounded lane length) — cap=24 is a real, reproduced win, OPEN not
     closed.** Idea #5's flagged follow-up: cap lane length as a cheap proxy for a spatial
-    comb/lane hybrid, testing whether *lane length* (not lane-ness) drives the decidability
-    cost. Implemented `max_lane_len=`/`--lane-cap` on `generate_lane_patterns()`. **Result is
-    the opposite of predicted — capping made things monotonically WORSE, never better, with no
-    sweet spot in between**: uncapped lane 109/112 → cap=16 **111/111** (reproduced, ≈ uncapped
-    — barely restricts anything on darkzig's ~52-cell trunk) → cap=8 **119/119** (worse,
-    reproduced) → cap=4 **FAMILY_TOO_WEAK** (climbed to k=283, never found one SAT). Shortening
-    the cap needs *more* seeds to hit the same k budget, but the number of viable seeds is
-    bounded by the trunk's fixed length and the minimum pitch (5) — capping doesn't loosen
-    either, so it just runs out of room. Falsifies the length-cap proxy specifically; doesn't
-    rule out a *literal* spatial hybrid with its own independent seed/trunk budget, but that's
-    a materially bigger build, not a small follow-up. Full numbers: `tasks/lessons.md`
-    2026-07-17 entry.
+    comb/lane hybrid. Implemented `max_lane_len=`/`--lane-cap` on `generate_lane_patterns()`.
+    **Not monotonic** — uncapped lane 109/112 → cap=16 111/111 (≈ uncapped) → **cap=24 106/106
+    (reproduced — best lane-family result yet, closest to comb's 102)** → cap=8 119/119 (worse)
+    → cap=4 FAMILY_TOO_WEAK (climbed to k=283, never found one SAT). The first two caps tried
+    (4, 8) looked like a clean "smaller cap = worse" trend and the entry originally closed as
+    falsified; testing 16 then 24 (user follow-ups) overturned that — there's a real optimum
+    near cap=24, not a monotonic gradient. Best-guess mechanism (unconfirmed): a cap set above
+    the *typical* productive lane length but below the *outlier* long-lane tail may selectively
+    filter only the rare hardest-to-decide patterns rather than uniformly restricting everything.
+    While sanity-checking this, found and fixed a real pre-existing bug in
+    `scripts/exp_roads_first.py`'s `--dump-patterns` path (never threaded `th_mode` through —
+    silently used `coarse` regardless of `--th-anchors`; the real A/B runs via `kwalk_gate.py`
+    were unaffected, only informal diagnostics were). **Next step (not yet done): bracket the
+    sweet spot (e.g. 20, 28, 32) and consider layering `stub_priority` on top of the winning
+    cap** (stub priority independently helped the lane family in the earlier entry). Full
+    numbers: `tasks/lessons.md` 2026-07-17 entry (revised).
 
 ## Kept assets that these can reuse
 - Stage-0 corpus engine (`foeopt/corpus.py`, opt-in `--corpus`) — labeled instances for eval.
