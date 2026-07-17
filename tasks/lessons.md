@@ -1366,3 +1366,36 @@ hypothesis would not be. Artifacts: `output/kwalk/lanecap4.log`, `output/kwalk/l
 `output/kwalk/lanecap16.log`, `output/kwalk/lanecap16-2.log`, `output/kwalk/lanecap20.log`,
 `output/kwalk/lanecap24.log`, `output/kwalk/lanecap24-2.log`, `output/kwalk/lanecap28.log`,
 `output/kwalk/lanecap24-stubpriority.log`, `output/kwalk/lanecap24-stubpriority-2.log`.
+
+## next-things-to-try #4: tightened UNSAT prefilter -- sound improvement, but null at the k-walk's real operating range (2026-07-17)
+**Setup:** `prefilter()` (`foeopt/roads_first.py`) already has an adjacency-capacity check
+(`bound_adjacency`'s "<=3 consumers per road cell" argument) but applied it loosely: any road cell
+with *at least one* free orthogonal neighbor got a flat capacity of 3, regardless of whether it
+actually had 1, 2, or 3 free neighbors after this specific pattern's own roads/TH occupy some of
+them. Tightened to `min(3, actual free orthogonal neighbor count)` -- strictly tighter, still 100%
+sound (a more accurate count of the same provably-necessary quantity, never risks the `reach.py`
+false-reject failure mode from 2026-07-05, since it only ever rejects patterns the *old* check
+would also have needed to reject given perfect information). Explicitly avoided the backlog's
+alternative suggestion ("fast greedy first-fit whose hard failure flags likely-UNSAT") since that's
+a heuristic, not a certificate -- using it as a hard reject risks exactly the `reach.py` regression;
+using it only to reorder the probe queue would just be idea #1 (pruning) again, already measured
+null this session. Added 2 unit tests (a controlled case with a road cell that has exactly 1 true
+free neighbor: old check accepts, new check correctly rejects; and a matching case where 1
+consumer's demand is genuinely satisfiable, confirming the tightened check doesn't over-reject).
+320-test suite and `--selftest` green.
+**Diagnostic before any A/B (per the project's measure-first rule):** compared old-vs-new rejection
+counts on darkzig across both pattern families. At the k-walk's actual operating range (k~93-123,
+where every real run this session has probed), **zero additional patterns rejected by either
+family at any tested k** (102/106/111/115/120 comb; 80/100/115/120 lane) -- the bound is tighter in
+the abstract but never actually bites there. It *does* catch substantially more at k far below that
+range (k=25: 200/200 newly rejected; k=30: 97/200; k=40: ~1-4/200) -- but the k-walk's own
+`pick_k_start`/descent logic never probes k that low in practice (trivially area/adjacency-
+infeasible territory the walk would never reach from its k_start ~150+ descending only to ~93-123).
+**Verdict: sound, correct, real improvement to a provable bound -- but a null result for the
+production k-walk, so no real A/B run was spent on it** (per the plan's own "if it rejects ~0 more,
+report as null without a 30min run" rule). Kept as a permanent, zero-risk tightening (not opt-in --
+it's strictly more correct than the old flat-3 check with no downside, unlike every other
+opt-in/off lever this session). Consistent with the session's broader finding that the k-walk's
+real bottleneck is per-probe CP-SAT decision time on patterns that *pass* every cheap prefilter,
+not on patterns a cheap filter could have caught -- there's no low-hanging fruit left in the
+prefilter itself at this city's actual difficulty range.
