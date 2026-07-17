@@ -1261,7 +1261,7 @@ these levers pay off only when the underlying search has room to be steered, not
 efficient. Artifacts: `output/kwalk/stubpriority-comb.log`, `output/kwalk/stubpriority-comb-2.log`,
 `output/kwalk/stubpriority-lane.log`, `output/kwalk/stubpriority-lane-2.log`.
 
-## Hybrid comb/lane (bounded lane length): hypothesis falsified, monotonically worse (2026-07-17)
+## Hybrid comb/lane (bounded lane length): non-monotonic, cap=24 is a real win (2026-07-17, revised)
 **Setup:** idea #5's flagged follow-up -- "a hybrid family (short comb teeth near the frontier /
 hard-to-decide region, full lanes only where slack is generous) might recover the lane family's
 structural advantage without its solver-hardness cost." Rather than building a second from-scratch
@@ -1278,52 +1278,70 @@ and `--selftest` green before any timed run. Sanity pass (`--dump-patterns`) acr
 showed cap=3 nearly empty at the relevant k range (0-18 patterns at k>=110) -- dropped; caps 4 and
 8 chosen as short/medium representatives with healthy-looking pattern counts (18-151 across
 k=100-120).
-**A/B result: the hypothesis is falsified, and the trend is the *opposite* of predicted --
-capping makes the lane family monotonically WORSE, not better, as the cap shortens.**
+**First pass (caps 4, 8) looked monotonically negative:**
 | arm | k reached | best_achieved |
 |---|---|---|
 | comb baseline | 111 | 102 |
 | lane, uncapped (idea #5 baseline) | 115 | 109, 112 |
-| lane, cap=16 (user follow-up) | 115 | **111, 111** (reproduced exactly) |
 | lane, cap=8 | 123 | **119, 119** (reproduced exactly) |
 | lane, cap=4 | -- | **FAMILY_TOO_WEAK** (climbed to k=283, `walk_complete=true`, never found a single SAT) |
 Cap=8 is worse than uncapped lane on *both* metrics (2 k-levels higher, 7-10 roads worse) despite
 having plausible-looking pattern diversity in the sanity pass; cap=4 is a total, decisive failure
 -- not a near-miss, not a timeout, the upward-fallback walk exhausted the entire feasible k range
-without ever finding one SAT pattern.
-**User follow-up (same day): cap=16.** Sanity pass showed healthy pattern counts (150-152,
-matching uncapped's 152) -- unsurprising in hindsight, since darkzig's trunk is only ~52 cells and
-pitch>=5, so most individual lane fronts rarely need to grow past 16 cells to hit a typical budget
-before running into the trunk/region boundary anyway; a cap this large barely restricts anything.
-A/B'd 30min x2 (reproduced exactly): **k=115/roads=111 both runs** -- matches uncapped's k-level
-exactly, and 111 falls *inside* uncapped's own run-to-run range (109-112), i.e. statistically
-indistinguishable from not capping at all. This is the missing large-cap anchor point that
-completes the monotonic picture: as the cap shrinks from "effectively unbounded" (16, ≈ uncapped)
-through 8 (worse) to 4 (totally infeasible), results get strictly worse -- there is no sweet spot
-in between where a moderate cap *beats* uncapped. The best a length cap can do is converge back to
-doing nothing; every point where it actually bites, it hurts.
-**Why the hypothesis was wrong:** capping a lane's reach doesn't just shrink each individual
-`NoOverlap2D` subproblem -- it also means each lane contributes fewer cells to the k budget, so
-*more* lanes (more seeds) are needed to hit the same k. But the number of viable seed positions is
-bounded by two things this generator doesn't loosen when capping: the trunk's fixed length (set by
-the region/TH geometry, not by the cap) and the minimum seed pitch (5, unchanged). Shortening the
-cap trades "few long, individually-hard lanes" for "many short lanes that collectively can't reach
-the budget without more seeds than the trunk can provide" -- exactly what the sanity pass's shrinking
-pattern counts (152 uncapped -> 96-150 at cap=8 -> 18-48 at cap=4 -> near-zero at cap=3) already
-hinted at, and what the full A/B confirms decisively. The lane family's structural efficiency and
-its solver-decidability aren't a dial you can turn independently with this parametrization --
-they're coupled through the same fixed trunk/pitch geometry.
-**Verdict: closed, no gain, falsifies the specific hybrid mechanism tried.** `max_lane_len=`/
-`--lane-cap` kept as tested, correct, zero-cost-when-unset infrastructure (default None is
-byte-identical to today's lane family). This doesn't rule out the *literal* spatially-mixed
-hybrid (short teeth vs full lanes chosen by a genuine slack/frontier classification, not a single
-global length cap) -- but it does rule out the cheap length-cap proxy for it, and it raises the bar
-for any future hybrid: a real spatial-mixing generator would need its own seed/trunk budget that
-isn't shared with a global pitch/length constraint, which is a materially bigger build than this
-test, not a small follow-up. **Session-wide standing conclusion, now five solver/generator-side
-levers deep (pruning, warm-start, symmetry breaking, lane topology, lane-length hybrid):** every
-attempt to out-think the comb family's plateau by changing what CP-SAT sees -- reordering,
-constraining, hinting, or re-generating the skeleton -- has either regressed or, in the one mixed
-case (stub priority), helped only a family that was already worse than comb outright. The comb
-family's 102-road result remains the best in this project by a clear margin. Artifacts:
-`output/kwalk/lanecap4.log`, `output/kwalk/lanecap8.log`, `output/kwalk/lanecap8-2.log`.
+without ever finding one SAT pattern. Based on these two points the entry originally concluded
+"capping is monotonically worse, no sweet spot" -- **that conclusion was wrong; see cap=24 below.**
+**User follow-up 1: cap=16.** A/B'd 30min x2 (reproduced exactly): **k=115/roads=111 both runs**
+-- matches uncapped's k-level exactly, and 111 falls inside uncapped's own run-to-run range
+(109-112), statistically indistinguishable from not capping at all.
+**User follow-up 2: cap=24 -- overturns the "no sweet spot" conclusion.** While sanity-checking
+this cap, found and fixed a real, pre-existing bug (present since the original `--dump-patterns`
+implementation, long before this session): `scripts/exp_roads_first.py`'s dump-patterns path never
+threaded `th_mode` through to the generator, so every `--dump-patterns --th-anchors full` sanity
+check run in this whole investigation (caps 3/4/6/8/12/16) was silently using the default `coarse`
+TH-anchor mode instead -- **the real 30-min A/B runs were unaffected** (`kwalk_gate.py walk`
+correctly threads `th_anchors` through `RoadsFirstSearch`/`_probe_level` throughout), only the
+informal pre-flight pattern-count diagnostics were inaccurate. Fixed with a one-line addition
+(`gen_kwargs = {"th_mode": args.th_anchors}`); doesn't change any previously-reported hard number,
+only the (now corrected) diagnostic counts. With the fix, cap=24 shows 200/200/200 patterns
+(hitting the `max_patterns` cap) at k=100/110/120, and a direct comparison confirmed cap=24's
+pattern set is *not* identical to uncapped's (so it's not a no-op, unlike what the buggy coarse-
+mode reading of cap=16 suggested). A/B'd 30min x2 (reproduced exactly): **k=115/roads=106 both
+runs** -- better than *every* other lane-family result tried, including plain uncapped (109-112)
+and cap=16 (111), and the closest the lane family has come to comb's 102.
+| cap | k reached | best_achieved |
+|---|---|---|
+| comb baseline | 111 | 102 |
+| **24** | 115 | **106, 106** (reproduced -- best lane-family result) |
+| uncapped | 115 | 109, 112 |
+| 16 | 115 | 111, 111 |
+| 8 | 123 | 119, 119 |
+| 4 | -- | FAMILY_TOO_WEAK |
+**Not monotonic.** The relationship between cap size and result quality has a real optimum
+somewhere near cap=24, not a smooth "smaller is worse" gradient bottoming out at "uncapped is
+best." **Why (best available explanation, not fully confirmed):** a cap set well above the
+"typical" productive lane length but below the *longest* outlier lengths the uncapped family
+occasionally grows may selectively remove only the rare, most-NoOverlap2D-costly long lanes from
+the candidate pool, while leaving the bulk of productive, moderate-length lane patterns untouched
+-- a soft outlier filter rather than a uniform restriction. Cap=16 apparently sits below that
+"productive ceiling" often enough to matter (statistically indistinguishable from uncapped);
+cap=24 sits closer to it; cap=8 cuts well into the productive range and hurts; cap=4 removes it
+entirely. This is inferred from the shape of the data, not directly measured (would need a
+per-pattern length-distribution histogram to confirm) -- flagged honestly as the best current
+reading, not a certainty.
+**Verdict: not closed -- this is a genuine, reproduced improvement over the lane family's prior
+best, and the closest the lane family has gotten to comb.** Still short of dislodging comb (102)
+as the project's best method, but this reopens the hybrid-cap idea rather than closing it: the
+right next step is bracketing the sweet spot (e.g. 20, 28, 32) rather than accepting either
+extreme. Not yet done as of this entry.
+`max_lane_len=`/`--lane-cap` kept as tested, correct, zero-cost-when-unset infrastructure (default
+None is byte-identical to today's lane family). **Session-wide standing conclusion, now five
+solver/generator-side levers deep (pruning, warm-start, symmetry breaking, lane topology,
+lane-length hybrid):** four of the five regressed the comb family outright or only helped a
+still-worse family (stub priority); this one, cap=24, is the first lever in this entire
+next-things-to-try line to *reproducibly improve on the lane family's own best result* rather than
+just fail differently -- 106 is still short of comb's 102, but it's the closest anything other
+than plain comb has come. Whether it can be pushed further (bracketing the sweet spot near 24, or
+combining with `stub_priority` -- which independently helped the lane family before, see the
+2026-07-17 stub-priority entry -- on top of the winning cap) is open, not yet tried. Artifacts:
+`output/kwalk/lanecap4.log`, `output/kwalk/lanecap8.log`, `output/kwalk/lanecap16.log`,
+`output/kwalk/lanecap16-2.log`, `output/kwalk/lanecap24.log`, `output/kwalk/lanecap24-2.log`.

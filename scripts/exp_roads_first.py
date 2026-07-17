@@ -180,7 +180,7 @@ def main(argv=None):
         consumers = layout.road_needing()
         rng = random.Random(args.seed)
         gen_fn = _pattern_generator(args.pattern_family)
-        gen_kwargs = {}
+        gen_kwargs = {"th_mode": args.th_anchors}
         if args.pattern_family == "lane":
             gen_kwargs["max_lane_len"] = args.lane_cap
         pats = gen_fn(region, th.width, th.length,
