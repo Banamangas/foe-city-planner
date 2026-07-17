@@ -1284,12 +1284,24 @@ capping makes the lane family monotonically WORSE, not better, as the cap shorte
 |---|---|---|
 | comb baseline | 111 | 102 |
 | lane, uncapped (idea #5 baseline) | 115 | 109, 112 |
+| lane, cap=16 (user follow-up) | 115 | **111, 111** (reproduced exactly) |
 | lane, cap=8 | 123 | **119, 119** (reproduced exactly) |
 | lane, cap=4 | -- | **FAMILY_TOO_WEAK** (climbed to k=283, `walk_complete=true`, never found a single SAT) |
 Cap=8 is worse than uncapped lane on *both* metrics (2 k-levels higher, 7-10 roads worse) despite
 having plausible-looking pattern diversity in the sanity pass; cap=4 is a total, decisive failure
 -- not a near-miss, not a timeout, the upward-fallback walk exhausted the entire feasible k range
 without ever finding one SAT pattern.
+**User follow-up (same day): cap=16.** Sanity pass showed healthy pattern counts (150-152,
+matching uncapped's 152) -- unsurprising in hindsight, since darkzig's trunk is only ~52 cells and
+pitch>=5, so most individual lane fronts rarely need to grow past 16 cells to hit a typical budget
+before running into the trunk/region boundary anyway; a cap this large barely restricts anything.
+A/B'd 30min x2 (reproduced exactly): **k=115/roads=111 both runs** -- matches uncapped's k-level
+exactly, and 111 falls *inside* uncapped's own run-to-run range (109-112), i.e. statistically
+indistinguishable from not capping at all. This is the missing large-cap anchor point that
+completes the monotonic picture: as the cap shrinks from "effectively unbounded" (16, ≈ uncapped)
+through 8 (worse) to 4 (totally infeasible), results get strictly worse -- there is no sweet spot
+in between where a moderate cap *beats* uncapped. The best a length cap can do is converge back to
+doing nothing; every point where it actually bites, it hurts.
 **Why the hypothesis was wrong:** capping a lane's reach doesn't just shrink each individual
 `NoOverlap2D` subproblem -- it also means each lane contributes fewer cells to the k budget, so
 *more* lanes (more seeds) are needed to hit the same k. But the number of viable seed positions is
