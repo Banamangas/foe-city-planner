@@ -1260,3 +1260,58 @@ helped (lane + stub_priority) is exactly the one place the baseline search was a
 these levers pay off only when the underlying search has room to be steered, not when it's already
 efficient. Artifacts: `output/kwalk/stubpriority-comb.log`, `output/kwalk/stubpriority-comb-2.log`,
 `output/kwalk/stubpriority-lane.log`, `output/kwalk/stubpriority-lane-2.log`.
+
+## Hybrid comb/lane (bounded lane length): hypothesis falsified, monotonically worse (2026-07-17)
+**Setup:** idea #5's flagged follow-up -- "a hybrid family (short comb teeth near the frontier /
+hard-to-decide region, full lanes only where slack is generous) might recover the lane family's
+structural advantage without its solver-hardness cost." Rather than building a second from-scratch
+generator with a spatial teeth-vs-lanes classification rule (no obvious cheap proxy for "frontier"
+vs "slack"), tested the same underlying hypothesis -- that *lane length*, not lane-ness itself,
+drives the decidability cost idea #5 found (6/6 UNKNOWN for uncapped lane probes vs comb's 4/6 fast
+UNSAT) -- via a much cheaper single-parameter dial: `max_lane_len` added to
+`generate_lane_patterns()` (`foeopt/roads_first.py`), capping how far each lane grows from its
+seed before stopping. Cap=None (default) preserves today's exact uncapped behavior (verified via a
+dedicated backward-compat test comparing full pattern output, plus a test confirming the cap
+actually bounds growth by re-deriving each pattern's trunk/seeds and walking its fronts). Wired as
+`--lane-cap N` alongside the existing `--pattern-family`/`--stub-priority` flags. 318-test suite
+and `--selftest` green before any timed run. Sanity pass (`--dump-patterns`) across caps 3-12
+showed cap=3 nearly empty at the relevant k range (0-18 patterns at k>=110) -- dropped; caps 4 and
+8 chosen as short/medium representatives with healthy-looking pattern counts (18-151 across
+k=100-120).
+**A/B result: the hypothesis is falsified, and the trend is the *opposite* of predicted --
+capping makes the lane family monotonically WORSE, not better, as the cap shortens.**
+| arm | k reached | best_achieved |
+|---|---|---|
+| comb baseline | 111 | 102 |
+| lane, uncapped (idea #5 baseline) | 115 | 109, 112 |
+| lane, cap=8 | 123 | **119, 119** (reproduced exactly) |
+| lane, cap=4 | -- | **FAMILY_TOO_WEAK** (climbed to k=283, `walk_complete=true`, never found a single SAT) |
+Cap=8 is worse than uncapped lane on *both* metrics (2 k-levels higher, 7-10 roads worse) despite
+having plausible-looking pattern diversity in the sanity pass; cap=4 is a total, decisive failure
+-- not a near-miss, not a timeout, the upward-fallback walk exhausted the entire feasible k range
+without ever finding one SAT pattern.
+**Why the hypothesis was wrong:** capping a lane's reach doesn't just shrink each individual
+`NoOverlap2D` subproblem -- it also means each lane contributes fewer cells to the k budget, so
+*more* lanes (more seeds) are needed to hit the same k. But the number of viable seed positions is
+bounded by two things this generator doesn't loosen when capping: the trunk's fixed length (set by
+the region/TH geometry, not by the cap) and the minimum seed pitch (5, unchanged). Shortening the
+cap trades "few long, individually-hard lanes" for "many short lanes that collectively can't reach
+the budget without more seeds than the trunk can provide" -- exactly what the sanity pass's shrinking
+pattern counts (152 uncapped -> 96-150 at cap=8 -> 18-48 at cap=4 -> near-zero at cap=3) already
+hinted at, and what the full A/B confirms decisively. The lane family's structural efficiency and
+its solver-decidability aren't a dial you can turn independently with this parametrization --
+they're coupled through the same fixed trunk/pitch geometry.
+**Verdict: closed, no gain, falsifies the specific hybrid mechanism tried.** `max_lane_len=`/
+`--lane-cap` kept as tested, correct, zero-cost-when-unset infrastructure (default None is
+byte-identical to today's lane family). This doesn't rule out the *literal* spatially-mixed
+hybrid (short teeth vs full lanes chosen by a genuine slack/frontier classification, not a single
+global length cap) -- but it does rule out the cheap length-cap proxy for it, and it raises the bar
+for any future hybrid: a real spatial-mixing generator would need its own seed/trunk budget that
+isn't shared with a global pitch/length constraint, which is a materially bigger build than this
+test, not a small follow-up. **Session-wide standing conclusion, now five solver/generator-side
+levers deep (pruning, warm-start, symmetry breaking, lane topology, lane-length hybrid):** every
+attempt to out-think the comb family's plateau by changing what CP-SAT sees -- reordering,
+constraining, hinting, or re-generating the skeleton -- has either regressed or, in the one mixed
+case (stub priority), helped only a family that was already worse than comb outright. The comb
+family's 102-road result remains the best in this project by a clear margin. Artifacts:
+`output/kwalk/lanecap4.log`, `output/kwalk/lanecap8.log`, `output/kwalk/lanecap8-2.log`.
