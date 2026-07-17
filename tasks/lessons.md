@@ -1328,20 +1328,41 @@ cap=24 sits closer to it; cap=8 cuts well into the productive range and hurts; c
 entirely. This is inferred from the shape of the data, not directly measured (would need a
 per-pattern length-distribution histogram to confirm) -- flagged honestly as the best current
 reading, not a certainty.
-**Verdict: not closed -- this is a genuine, reproduced improvement over the lane family's prior
-best, and the closest the lane family has gotten to comb.** Still short of dislodging comb (102)
-as the project's best method, but this reopens the hybrid-cap idea rather than closing it: the
-right next step is bracketing the sweet spot (e.g. 20, 28, 32) rather than accepting either
-extreme. Not yet done as of this entry.
-`max_lane_len=`/`--lane-cap` kept as tested, correct, zero-cost-when-unset infrastructure (default
-None is byte-identical to today's lane family). **Session-wide standing conclusion, now five
-solver/generator-side levers deep (pruning, warm-start, symmetry breaking, lane topology,
-lane-length hybrid):** four of the five regressed the comb family outright or only helped a
-still-worse family (stub priority); this one, cap=24, is the first lever in this entire
-next-things-to-try line to *reproducibly improve on the lane family's own best result* rather than
-just fail differently -- 106 is still short of comb's 102, but it's the closest anything other
-than plain comb has come. Whether it can be pushed further (bracketing the sweet spot near 24, or
-combining with `stub_priority` -- which independently helped the lane family before, see the
-2026-07-17 stub-priority entry -- on top of the winning cap) is open, not yet tried. Artifacts:
-`output/kwalk/lanecap4.log`, `output/kwalk/lanecap8.log`, `output/kwalk/lanecap16.log`,
-`output/kwalk/lanecap16-2.log`, `output/kwalk/lanecap24.log`, `output/kwalk/lanecap24-2.log`.
+**Bracketing the sweet spot (same day): cap=24 is a genuine, isolated local optimum, not part of
+a wider plateau.** Ran cap=20 and cap=28 (one run each, since the question was the *shape* of the
+curve around an already-double-reproduced anchor point, not a new headline number needing its own
+reproduction):
+| cap | best_achieved |
+|---|---|
+| 16 | 111, 111 |
+| 20 | 110 |
+| **24** | **106, 106** (reproduced) |
+| 28 | 111 |
+| uncapped | 109, 112 |
+Both immediate neighbors (20, 28) are clearly worse than 24 and land close to 16/uncapped's range
+-- a narrow, isolated dip centered exactly at 24, not a gradual gradient or a wide plateau. No
+further bracketing (e.g. finer steps between 20-24 or 24-28) was needed to see the shape.
+**Layering `stub_priority` on top of cap=24 -- does not stack, makes it worse.** `stub_priority`
+independently improved the *uncapped* lane family (108 vs 109/112, see the 2026-07-17 stub-priority
+entry). Tried combining it with the now-winning cap=24. A/B'd 30min x2 (reproduced exactly):
+**cap=24 + stub_priority -> k=115/roads=110, both runs** -- worse than cap=24 alone (106) and
+roughly back to the cap=20/uncapped range. The two levers don't compose additively; whatever makes
+cap=24 work well on its own is disturbed by also biasing the search toward big-buildings-at-stubs.
+Consistent with this session's broader pattern: levers that help a *struggling* search (stub
+priority helped uncapped lane, which was UNKNOWN-dominated per idea #5's mechanism check) tend to
+hurt an *already-tuned* one (cap=24's own search is evidently already landing in a better regime,
+and the extra hint disturbs rather than improves it) -- the same "helps weak search, hurts strong
+search" reading first proposed for comb vs lane now shows up *within* the lane family itself,
+between cap=24 (strong, for a lane variant) and uncapped (comparatively weak).
+**Final verdict: cap=24 *alone* (no `stub_priority`) is the best-performing lever variant found in
+this entire next-things-to-try line, and the closest any of it has come to comb.** 106 vs comb's
+102 -- still short, but a real, reproduced, bracketed, isolated-optimum result, not a lucky draw.
+`max_lane_len=`/`--lane-cap` and `stub_priority` both kept as tested, correct, zero-cost-when-unset
+infrastructure. If this thread is picked up again, the natural next step is understanding *why*
+cap=24 specifically works (a per-pattern lane-length histogram against the uncapped family's own
+distribution would confirm or refute the "outlier filter" theory above) rather than more blind
+parameter search -- the bracket here was cheap and conclusive, further probing without a mechanism
+hypothesis would not be. Artifacts: `output/kwalk/lanecap4.log`, `output/kwalk/lanecap8.log`,
+`output/kwalk/lanecap16.log`, `output/kwalk/lanecap16-2.log`, `output/kwalk/lanecap20.log`,
+`output/kwalk/lanecap24.log`, `output/kwalk/lanecap24-2.log`, `output/kwalk/lanecap28.log`,
+`output/kwalk/lanecap24-stubpriority.log`, `output/kwalk/lanecap24-stubpriority-2.log`.
