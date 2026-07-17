@@ -143,6 +143,39 @@ def test_generate_lane_patterns_max_lane_len_bounds_each_front():
     assert checked > 0, "expected at least one capped pattern to check"
 
 
+def test_prefilter_adjacency_capacity_counts_actual_free_neighbors():
+    """A road cell with only 1 truly-free orthogonal neighbor (the rest
+    blocked by TH/out-of-region) must contribute capacity 1, not a flat 3 --
+    the tightened bound must catch a case the old flat-3 check would have
+    missed. Region: TH at (0,0)-(1,1), road cell at (2,0) whose only free
+    neighbor is (2,1) ((1,0) is TH, (3,0)/(2,-1) are out of region)."""
+    from foeopt.model import Building, Footprint
+    th_fp = Footprint(0, 0, 2, 2)
+    # (5,5) is an unrelated free cell added only so the area check has
+    # enough slack to pass and the adjacency-capacity check is the one
+    # actually exercised here.
+    region = {(0, 0), (1, 0), (0, 1), (1, 1), (2, 0), (2, 1), (5, 5)}
+    pat = Pattern(th=th_fp, roads=frozenset({(2, 0)}), params={"k": 1})
+    # 2 tiny consumers -- old flat-3 check would accept (capacity 3 >= 2);
+    # the true free-neighbor count here is 1, so the tightened check must reject.
+    c1 = Building(1, "c1", "g", Footprint(0, 0, 1, 1), True, 1, False, None, None, "a")
+    c2 = Building(2, "c2", "g", Footprint(0, 0, 1, 1), True, 1, False, None, None, "b")
+    reason = prefilter(pat, region, [c1, c2])
+    assert reason == "adjacency-capacity"
+
+
+def test_prefilter_adjacency_capacity_still_accepts_when_truly_sufficient():
+    """Same road-cell geometry, but only 1 consumer -- capacity 1 >= 1
+    demand, must not be rejected."""
+    from foeopt.model import Building, Footprint
+    th_fp = Footprint(0, 0, 2, 2)
+    region = {(0, 0), (1, 0), (0, 1), (1, 1), (2, 0), (2, 1)}
+    pat = Pattern(th=th_fp, roads=frozenset({(2, 0)}), params={"k": 1})
+    c1 = Building(1, "c1", "g", Footprint(0, 0, 1, 1), True, 1, False, None, None, "a")
+    reason = prefilter(pat, region, [c1])
+    assert reason is None
+
+
 def test_prefilter_area_rejects_impossible():
     from foeopt.model import Building, Footprint
     th_fp = Footprint(0, 0, 2, 2)

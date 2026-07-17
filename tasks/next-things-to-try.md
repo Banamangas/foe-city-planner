@@ -61,11 +61,18 @@ open threads: #4 (UNSAT prefilter, still untested), #6 (minimize-roads CP-SAT), 
    executed. Full numbers: `tasks/lessons.md` 2026-07-16 entry. Kept as tested, correct,
    zero-cost-when-off infrastructure; not a win.
 
-4. **Stronger UNSAT prefilter.** Most probes are UNSAT and cost real solve time. Add a cheap
-   pre-check that proves infeasibility without CP-SAT — e.g. road-adjacency capacity (each
-   road cell serves ≤3 consumers; if Σ demand > available adjacency capacity → UNSAT), or a
-   fast greedy first-fit whose hard failure flags likely-UNSAT. Skips expensive probes,
-   buying more budget for the decidable ones. (`foeopt/bounds.py::bound_adjacency` is a start.)
+4. ~~**Stronger UNSAT prefilter.**~~ **TESTED 2026-07-17 — sound tightening, null at the
+   k-walk's real range, closed.** Tightened `prefilter()`'s adjacency-capacity check from a
+   flat 3-per-cell to `min(3, actual free orthogonal neighbor count)` — strictly tighter,
+   still 100% sound, no `reach.py`-style false-reject risk (deliberately skipped the backlog's
+   heuristic-greedy-first-fit alternative, since a hard reject on greedy failure isn't a
+   certificate and reordering-only would just be idea #1 again, already null). Diagnostic
+   before any A/B: zero additional patterns rejected at the k-walk's actual operating range
+   (k~93-123, comb or lane) — the tightened bound only bites at k far below where the walk
+   ever probes (k=25: 200/200 newly caught; by k=40 already down to ~1-4/200). Kept as a
+   permanent, always-on correctness improvement (not opt-in — strictly better with no
+   downside), but a null result for real search performance; no 30min A/B was warranted or
+   run. Full numbers: `tasks/lessons.md` 2026-07-17 entry.
 
 ## Medium — a focused build
 

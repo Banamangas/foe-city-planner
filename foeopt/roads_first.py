@@ -278,8 +278,14 @@ def prefilter(pattern: Pattern, region: set[Cell],
     if area_needed + len(pattern.roads) > len(region) - len(th_cells):
         return "area"
     free = region - pattern.roads - th_cells
-    capacity = sum(3 for c in pattern.roads
-                   if any((c[0] + dx, c[1] + dy) in free for dx, dy in _ORTHO))
+    # Each road cell serves at most 3 consumers (bound_adjacency's argument:
+    # 4 orthogonal neighbors, at least 1 taken by road/TH connectivity) --
+    # but a specific cell may have fewer than 3 *actually* free neighbors
+    # once this pattern's own roads/TH occupy some of them, so cap by the
+    # real count instead of granting a flat 3 to any cell with >=1 free
+    # neighbor. Strictly tighter than the old flat-3 check, still sound.
+    capacity = sum(min(3, sum(1 for dx, dy in _ORTHO if (c[0] + dx, c[1] + dy) in free))
+                   for c in pattern.roads)
     if capacity < len(consumers):
         return "adjacency-capacity"
     return None
