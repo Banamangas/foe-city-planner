@@ -26,6 +26,18 @@ differently, though it still doesn't dislodge plain comb (102) as the project's 
 open threads: #4 (UNSAT prefilter, still untested), #6 (minimize-roads CP-SAT), or understanding
 *why* cap=24 specifically works if this thread gets picked up again.
 
+**Update 2026-07-17 (later):** #4 and #6 both closed. #4 (tightened UNSAT prefilter) is a real,
+sound, permanent improvement to `prefilter()` but null for the k-walk's actual operating range —
+it rejects nothing extra at k~93-123 (where every real run probes), only at k far below where the
+walk never goes. Kept unconditionally (strictly more correct, no downside). #6 (minimize-roads
+CP-SAT) is a decisive kill — see item 6 below and `tasks/lessons.md` 2026-07-17. **No open
+cheap/medium-tier ideas remain untested**; every idea in this document has now been tried and
+closed (positive: #5's cap=24 hybrid follow-up; mixed: #10 stub priority; negative/null: #1, #2,
+#3, #4, #5 as originally proposed, #6). Remaining unexplored items are the Speed-tier ones (#7-9,
+infra/tuning rather than new levers) — the project's best validated result stays **102 roads**
+(plain comb family, no levers), with the hybrid cap=24 family as the closest reproducible
+runner-up at 106.
+
 ## Cheapest — reuse existing infra (hours)
 
 1. ~~**Prune-mode guided walk.**~~ **TESTED 2026-07-16 — no gain, closed.** Swept
@@ -93,10 +105,21 @@ open threads: #4 (UNSAT prefilter, still untested), #6 (minimize-roads CP-SAT), 
    possible follow-up (unmeasured): a *hybrid* family (comb near the frontier, lanes only
    where there's slack) might recover the structural win without the decidability cost.
 
-6. **Minimize-roads CP-SAT (not fixed-k).** Replace the fix-k / bisect walk with a model that
-   directly **minimizes road cells** subject to placement + TH-connectivity over a fixed
-   decomposition/region. Harder model, but searches the road count directly and may beat what
-   the bisection reaches in a budget.
+6. ~~**Minimize-roads CP-SAT (not fixed-k).**~~ **TESTED 2026-07-17 — decisive kill, closed.**
+   Built `foeopt/minroads.py`: road-cell selection as a CP-SAT decision variable (BFS-tree
+   connectivity via reified distance-labeling) jointly `Minimize()`d with one-hot placement
+   variables, replacing the fixed-skeleton-then-place two-stage split entirely. Toy-scale gate
+   (`tests/test_minroads.py`) matches `rl.oracle.optimal_roads` exactly on 2/3/4-building cases
+   — model is correct. Real-scale gate on darkzig (2720 region cells, 63 consumers): 60s budget
+   returned `UNKNOWN` (no feasible solution found at all); 300s budget went further than the
+   plan anticipated — RSS climbed to ~3.9GB within 17 CPU-seconds and kept growing, exhausting
+   the machine's RAM+swap and **crashing the user's terminal**, force-killed via `pkill -9`. Not
+   just slow — memory-catastrophic before completing a first search pass. Confirms the two-stage
+   architecture's fixed, pre-verified-connected skeleton (`O(buildings)` placement variables)
+   isn't an implementation shortcut, it's load-bearing for tractability at this problem size.
+   Full details: `tasks/lessons.md` 2026-07-17 entry. Kept as a documented throwaway, not
+   productionized, not imported by any production path. **Do not re-attempt without a hard
+   memory ulimit and much smaller regions first**, if ever revisited.
 
 ## Speed — same result, less compute
 
