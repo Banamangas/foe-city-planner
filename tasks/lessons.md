@@ -1399,3 +1399,54 @@ opt-in/off lever this session). Consistent with the session's broader finding th
 real bottleneck is per-probe CP-SAT decision time on patterns that *pass* every cheap prefilter,
 not on patterns a cheap filter could have caught -- there's no low-hanging fruit left in the
 prefilter itself at this city's actual difficulty range.
+
+## next-things-to-try #6: joint minimize-roads CP-SAT -- correct at toy scale, memory-catastrophic at real scale (2026-07-17)
+**Setup:** every prior lever this session worked *within* the two-stage architecture (propose a
+road skeleton, then `probe()` places buildings on it, bisecting a fixed `k`). Idea #6 asked whether
+removing the two-stage split -- making road-cell selection itself a CP-SAT decision variable with
+an explicit `Minimize(sum(roads))` objective, solved jointly with placement -- could beat the
+k-walk's best achieved (102, comb). Built `foeopt/minroads.py`: a standalone model (does not touch
+`roads_first.py`/`probe()`) with connectivity enforced as a BFS-tree constraint (`dist_c` IntVar per
+candidate cell, reified parent-link BoolVars proving reachability from a TH-adjacent root by
+strictly-increasing integer distance -- CP-SAT's Python API has no lazy-cut support, so this
+distance-labeling encoding is the standard substitute for "roads form a tree rooted at TH") and
+building placement as one-hot `NewOptionalFixedSizeIntervalVar`s per (building, valid (x,y))
+channeled to the road-selection BoolVars, since `AddAllowedAssignments` against a precomputed
+position list no longer applies once the road set itself is a variable.
+**Toy-scale correctness gate:** 4 tests in `tests/test_minroads.py` compare `solve_min_roads`
+against `rl.oracle.optimal_roads` (the project's existing exact brute-force oracle) on 2/3/4-building
+toy layouts -- exact match on road count every time, plus one test that independently re-validates
+the model's own chosen positions through the *real* `route()`/`is_valid()` pipeline rather than
+trusting the model's internal claims. All 4 pass. Model is provably correct at small scale.
+**Real-city tractability gate (the actual point of the plan's gating structure):** ran
+`scripts/exp_minroads.py darkzig.json` at increasing time budgets.
+- `--time-limit 60`: completed cleanly in 65.2s wall time (model construction itself is fast, a few
+  seconds -- the 65.2s is dominated by the 60s solve budget), but returned `status=UNKNOWN,
+  roads=None` -- CP-SAT could not find *any* feasible solution, let alone prove optimality, within
+  60s on darkzig's real scale (2720 region cells, 63 consumers).
+- `--time-limit 300`: killed by the OS at exit 137 (SIGKILL) -- not the process itself failing,
+  the *system* intervening. Re-ran under direct process monitoring (`ps -o rss`) to confirm: RSS
+  hit ~3.9GB within 17 CPU-seconds of the solve starting and kept climbing. A second monitoring
+  attempt exhausted the machine's 30GB RAM + swap badly enough that **it crashed the user's
+  terminal** (confirmed directly by the user: "Process keeps crashing the terminal"). Force-killed
+  via `pkill -9 -f exp_minroads.py`; memory recovered once dead.
+**Verdict: decisive kill, worse than the plan's own worst-case expectation.** The plan anticipated
+"may not even reach a first feasible solution in reasonable time" as the likely negative outcome
+and treated that as sufficient to stop (no long-box escalation, per the project's "no tuning
+marathon" rule). What actually happened is a level below that: the one-hot placement encoding
+(`O(buildings x positions-per-building)` boolean variables, replacing the fixed model's `O(buildings)`
+IntVars) combined with the BFS-tree connectivity encoding (one IntVar + up to 4 reified parent-link
+BoolVars *per candidate road cell*, ~2720 of them) blows up CP-SAT's internal memory footprint
+catastrophically before it can even finish a first search pass -- not merely slow, actively
+dangerous to run unbounded on a real workstation. **Do not re-attempt this model at real-city scale
+without a hard memory ulimit and much smaller instances first** (e.g. bound the road-candidate
+region to a bounding box around a partial city, not the full 2720-cell darkzig region) if this
+direction is ever revisited. The two-stage roads-first architecture's separation of concerns --
+fixed, pre-verified-connected skeleton with only `O(buildings)` placement variables -- isn't just
+an implementation convenience, it's load-bearing for tractability at this problem size. Confirms by
+contrast that this session's real wins (idea #5 lane topology, stub priority, the cap=24 hybrid,
+idea #4's prefilter) all worked by improving the two-stage split rather than replacing it, and that
+was the right place to have spent the compute.
+**Kept as a documented, gated negative/throwaway result** (`foeopt/minroads.py`,
+`tests/test_minroads.py`, `scripts/exp_minroads.py`), not productionized, not imported by any
+production code path -- same posture as every other closed experiment this session.
