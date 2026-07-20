@@ -1,0 +1,73 @@
+# Roads optimizer — next things to try
+
+_Started 2026-07-15, after Track C-bis (ML acceleration) was archived._
+
+**Where we are:** the roads-first CP-SAT k-walk cuts darkzig to ~102–106 validated roads
+(k≈110). Track C-bis showed the frontier is a **pattern-family limit**, not a scheduling
+limit (Stage 1 ranking gave 0 benefit) nor a SAT-proving-speed limit that ML could fix
+(Stage 1.5 autopsy: 0 SAT / 4 UNSAT / 4 UNKNOWN — no feasible-but-hard SAT to warm-start).
+See `tasks/lessons.md` (2026-07-15). Ideas below, **cheapest first**. Discipline: A/B any
+change vs baseline at **equal wall-clock, 0-unplaced, ≥ a few seeds** (the pool is
+non-deterministic), and validate the *bottleneck* before building.
+
+## Cheapest — reuse existing infra (hours)
+
+1. **Prune-mode guided walk (UNTESTED — do this first).** The G1 comparison ran the scorer
+   in **rank-only** mode (`score_threshold=None`), which only reorders — useless when the
+   descent's SATs are plentiful. The scorer hook already supports **pruning**. Try
+   `kwalk_gate.py walk darkzig.json --scorer output/kwalk/cnn.pt --score-threshold 0.2`
+   (sweep 0.1–0.4). The CNN (held-out AUC 0.999) confidently flags hopeless patterns;
+   *skipping* them removes the many slow UNSAT/UNKNOWN probes and frees budget for promising
+   ones — a different lever than ranking, and never measured. Risk: a false-negative prunes a
+   feasible pattern; keep the threshold conservative and A/B vs baseline.
+
+2. **Non-ML CP-SAT warm-start from the classical packer.** Stage 2's warm-start was killed
+   for lack of a SAT target, but you don't need ML: seed CP-SAT's building positions in
+   `probe()` with the existing repack/greedy packer layout (it places all buildings, just
+   road-inefficiently) via `AddHint`. A valid hint can turn slow frontier UNKNOWNs into fast
+   SAT/UNSAT — attacking the decision-limit directly, cheaply.
+
+3. **Symmetry breaking in the CP-SAT probe (likely the biggest per-probe speedup).** darkzig
+   has huge footprint symmetry (25× 4×4, 13× 6×4, …). Identical-size buildings are
+   interchangeable, so the solver wastes time on symmetric assignments. Add lexicographic
+   ordering constraints among same-size buildings (order by (x,y)). Speeds **both** SAT and
+   UNSAT proofs — directly targets the UNKNOWN frontier that blocks going lower.
+
+4. **Stronger UNSAT prefilter.** Most probes are UNSAT and cost real solve time. Add a cheap
+   pre-check that proves infeasibility without CP-SAT — e.g. road-adjacency capacity (each
+   road cell serves ≤3 consumers; if Σ demand > available adjacency capacity → UNSAT), or a
+   fast greedy first-fit whose hard failure flags likely-UNSAT. Skips expensive probes,
+   buying more budget for the decidable ones. (`foeopt/bounds.py::bound_adjacency` is a start.)
+
+## Medium — a focused build
+
+5. **Lane/stub topology generator — THE lever for lower k.** The current comb/stub patterns
+   cap out ~k=110 (autopsy). Generate skeletons as compositions of straight **double-loaded
+   lanes + a trunk + Townhall stubs**, mirroring the expert's hand-built 142-road /
+   2.02-sharing city (`memory/foe-layout-heuristics`). Feed into the same k-walk + validate
+   with `route()`/`is_valid`. Directly attacks the pattern-family limit. Revisit the killed
+   Track A "lane composition" (`tasks/todo.md`) with the roads-first framing, and use the
+   Stage-0 corpus as a ready-made validation/eval set.
+
+6. **Minimize-roads CP-SAT (not fixed-k).** Replace the fix-k / bisect walk with a model that
+   directly **minimizes road cells** subject to placement + TH-connectivity over a fixed
+   decomposition/region. Harder model, but searches the road count directly and may beat what
+   the bisection reaches in a budget.
+
+## Speed — same result, less compute
+
+7. **Concurrent k-levels.** The bisection is sequential; probe several k-levels in parallel
+   (16 cores available; runs use ~12). Fills idle cores during the easy upper levels.
+
+8. **CP-SAT parameter portfolio for the hard frontier.** The autopsy's 4/8 UNKNOWNs stayed
+   undecided at 15 min. Try alternate CP-SAT strategies specifically on frontier probes (more
+   LNS workers, different branching, `use_lns_only`, longer-but-fewer). Small tuning study.
+
+9. **Assumption-based incremental solving across a level.** Patterns at one k share region +
+   building set; only the road skeleton differs. Explore CP-SAT assumptions / clause reuse to
+   amortize solving across a level's patterns.
+
+## Kept assets that these can reuse
+- Stage-0 corpus engine (`foeopt/corpus.py`, opt-in `--corpus`) — labeled instances for eval.
+- Feasibility CNN (`rl/kwalk_*`, AUC 0.999) + opt-in scorer hook — for idea #1 (pruning).
+- `scripts/kwalk_gate.py` (walk driver) and `scripts/kwalk_autopsy.py` (frontier probing).
