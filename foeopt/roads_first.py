@@ -562,81 +562,110 @@ def _run_probe_seq(payload: tuple) -> dict:
     finally:
         _WORKER_LAYOUT = None
 
-def _probe_level(layout, region, consumers, k, rng, params, log, pool=None,
-                 on_improvement=None, corpus=None, scorer=None, score_threshold=None) -> tuple[str, int | None]:
+def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=None,
+                        on_improvement=None, corpus=None, scorer=None,
+                        score_threshold=None) -> dict[int, tuple[str, int | None]]:
+    """Generate + probe several k-levels' patterns in one shared pool dispatch
+    instead of draining one level's ~200 patterns before the next level's are
+    even generated. `_run_probe`'s payload/result already carry `k`, so this
+    only changes dispatch/demux, not the worker-side probe logic.
+
+    Levels are generated in `ks` order against the *same* `rng` stream, so
+    pattern content for a given k is identical to what a sequential run of
+    `_probe_level` would have produced -- this is the determinism invariant
+    that makes batching a pure speed change, not a different search."""
     th = layout.townhall.footprint
     th_mode = getattr(params, "th_anchors", "coarse")
     family = getattr(params, "pattern_family", "comb")
     gen_fn = _pattern_generator(family)
-    gen_kwargs = {"th_mode": th_mode}
-    if family == "lane":
-        gen_kwargs["max_lane_len"] = getattr(params, "lane_cap", None)
-    pats = gen_fn(region, th.width, th.length, k, rng, params.patterns,
-                  **gen_kwargs)
-    best_achieved = None
-    saw_nonproof_failure = False
-    order = 0
 
-    def handle_result(result, pat):
-        nonlocal best_achieved, order, saw_nonproof_failure
-        order += 1
+    state: dict[int, dict] = {}
+    for k in ks:
+        gen_kwargs = {"th_mode": th_mode}
+        if family == "lane":
+            gen_kwargs["max_lane_len"] = getattr(params, "lane_cap", None)
+        pats = gen_fn(region, th.width, th.length, k, rng, params.patterns,
+                      **gen_kwargs)
+        surviving = []
+        for pat in pats:
+            reason = prefilter(pat, region, consumers)
+            if reason is not None:
+                log({"k": k, "params": pat.params, "status": "PREFILTERED",
+                     "reason": reason, "secs": 0.0, "order": 0})
+                continue
+            surviving.append(pat)
+        if scorer is not None and surviving:
+            scored = [(scorer(pat), pat) for pat in surviving]
+            if score_threshold is not None:
+                scored = [sp for sp in scored if sp[0] >= score_threshold]
+            scored.sort(key=lambda sp: sp[0], reverse=True)
+            surviving = [pat for _, pat in scored]
+        state[k] = {"pats": pats, "surviving": surviving, "best_achieved": None,
+                    "saw_nonproof_failure": False, "order": 0}
+
+    def handle_result(k, result, pat):
+        st = state[k]
+        st["order"] += 1
         status = result["status"]
         achieved = result["achieved"]
         log({"k": k, "params": pat.params, "status": status,
-             "achieved": achieved, "secs": result["secs"], "order": order})
+             "achieved": achieved, "secs": result["secs"], "order": st["order"]})
         if corpus is not None:
             corpus.record(k=k, roads=pat.roads, th=pat.th, status=status,
                           secs=result["secs"], pos=result.get("pos"))
         if status == "SAT":
             vlay = result["layout"]
-            if best_achieved is None or achieved < best_achieved:
-                best_achieved = achieved
+            if st["best_achieved"] is None or achieved < st["best_achieved"]:
+                st["best_achieved"] = achieved
                 if on_improvement is not None:
                     on_improvement(vlay, k, achieved)
         elif status in ("UNKNOWN", "ROUTE_FAIL", "INVALID", "SAT_FILLER_FAIL", "SAT_ROTATED"):
-            saw_nonproof_failure = True
-        if time.monotonic() > params.deadline:
-            return True
-        return False
+            st["saw_nonproof_failure"] = True
+        return time.monotonic() > params.deadline
 
-    surviving = []
-    for pat in pats:
-        reason = prefilter(pat, region, consumers)
-        if reason is not None:
-            log({"k": k, "params": pat.params, "status": "PREFILTERED",
-                 "reason": reason, "secs": 0.0, "order": 0})
-            continue
-        surviving.append(pat)
-
-    if scorer is not None and surviving:
-        scored = [(scorer(pat), pat) for pat in surviving]
-        if score_threshold is not None:
-            scored = [sp for sp in scored if sp[0] >= score_threshold]
-        scored.sort(key=lambda sp: sp[0], reverse=True)
-        surviving = [pat for _, pat in scored]
+    def classify(st):
+        if st["best_achieved"] is not None:
+            return ("FEASIBLE", st["best_achieved"])
+        if not st["pats"]:
+            return ("INCONCLUSIVE", None)
+        return ("INCONCLUSIVE" if st["saw_nonproof_failure"] else "INFEASIBLE", None)
 
     if pool is None:
-        for pat in surviving:
-            result = _run_probe_seq((pat, k, layout, params.probe_limit, params.probe_workers,
-                                     getattr(params, "symmetry_breaking", False),
-                                     getattr(params, "hints", None),
-                                     getattr(params, "stub_priority", False)))
-            if handle_result(result, pat):
-                return ("INCONCLUSIVE" if best_achieved is None else "FEASIBLE", best_achieved)
+        for i, k in enumerate(ks):
+            interrupted = False
+            for pat in state[k]["surviving"]:
+                result = _run_probe_seq((pat, k, layout, params.probe_limit, params.probe_workers,
+                                         getattr(params, "symmetry_breaking", False),
+                                         getattr(params, "hints", None),
+                                         getattr(params, "stub_priority", False)))
+                if handle_result(k, result, pat):
+                    interrupted = True
+                    break
+            if interrupted:
+                out = {kk: classify(state[kk]) for kk in ks[:i]}
+                sb = state[k]["best_achieved"]
+                out[k] = ("INCONCLUSIVE" if sb is None else "FEASIBLE", sb)
+                for kk in ks[i + 1:]:
+                    out[kk] = ("INCONCLUSIVE", None)
+                return out
     else:
-        payloads = [(pat, k, idx) for idx, pat in enumerate(surviving)]
+        payloads = [(pat, k, idx) for k in ks for idx, pat in enumerate(state[k]["surviving"])]
         for result in pool.imap_unordered(_run_probe, payloads):
+            k = result["k"]
             idx = result["pat_index"]
-            pat = surviving[idx]
-            if handle_result(result, pat):
+            pat = state[k]["surviving"][idx]
+            if handle_result(k, result, pat):
                 pool.terminate()
                 break
 
-    if best_achieved is not None:
-        return ("FEASIBLE", best_achieved)
-    if not pats:
-        return ("INCONCLUSIVE", None)
-    return ("INCONCLUSIVE" if saw_nonproof_failure else "INFEASIBLE", None)
+    return {k: classify(state[k]) for k in ks}
+
+
+def _probe_level(layout, region, consumers, k, rng, params, log, pool=None,
+                 on_improvement=None, corpus=None, scorer=None, score_threshold=None) -> tuple[str, int | None]:
+    return _probe_levels_batch(layout, region, consumers, [k], rng, params, log, pool=pool,
+                               on_improvement=on_improvement, corpus=corpus,
+                               scorer=scorer, score_threshold=score_threshold)[k]
 
 
 class RoadsFirstSearch:
@@ -646,7 +675,7 @@ class RoadsFirstSearch:
                  k_start="auto", corpus_dir=None, scorer=None, score_threshold=None,
                  symmetry_breaking: bool = False, hint_layout: Layout | None = None,
                  pattern_family: str = "comb", stub_priority: bool = False,
-                 lane_cap: int | None = None):
+                 lane_cap: int | None = None, concurrent_levels: int = 1):
         self.layout = layout
         self.time_box = time_box
         self.patterns = patterns
@@ -664,6 +693,7 @@ class RoadsFirstSearch:
         self.pattern_family = pattern_family
         self.stub_priority = stub_priority
         self.lane_cap = lane_cap
+        self.concurrent_levels = concurrent_levels
 
     def run(self, on_improvement=None, on_status=None, should_stop=None) -> dict:
         layout = self.layout
@@ -712,6 +742,19 @@ class RoadsFirstSearch:
                     on_status(k, results[k][0], 0, 0)
             return results[k]
 
+        def levels(ks):
+            missing = [kk for kk in ks if kk not in results]
+            if missing:
+                batch = _probe_levels_batch(layout, region, consumers, missing, rng,
+                                            params, lambda r: None, pool=pool,
+                                            on_improvement=on_improvement, corpus=corpus,
+                                            scorer=self.scorer, score_threshold=self.score_threshold)
+                for kk, res in batch.items():
+                    results[kk] = res
+                    if on_status is not None:
+                        on_status(kk, res[0], 0, 0)
+            return {kk: results[kk] for kk in ks}
+
         try:
             if self.corpus_dir:
                 corpus = CorpusWriter(self.corpus_dir, layout)
@@ -726,29 +769,68 @@ class RoadsFirstSearch:
             if st != "FEASIBLE":
                 k_max = len(layout.region.cells) - sum(
                     b.footprint.width * b.footprint.length for b in layout.buildings)
-                while st != "FEASIBLE" and k < k_max:
-                    if _should_stop():
-                        truncated = True
-                        break
-                    k += 4
-                    st, _ = level(k)
+                if self.concurrent_levels > 1:
+                    while st != "FEASIBLE" and k < k_max:
+                        if _should_stop():
+                            truncated = True
+                            break
+                        batch_ks = [kk for kk in
+                                   (k + 4 * i for i in range(1, self.concurrent_levels + 1))
+                                   if kk <= k_max]
+                        if not batch_ks:
+                            break
+                        batch = levels(batch_ks)
+                        feasible_ks = [kk for kk in batch_ks if batch[kk][0] == "FEASIBLE"]
+                        if feasible_ks:
+                            k = min(feasible_ks)
+                            st = "FEASIBLE"
+                        else:
+                            k = max(batch_ks)
+                            st = batch[k][0]
+                else:
+                    while st != "FEASIBLE" and k < k_max:
+                        if _should_stop():
+                            truncated = True
+                            break
+                        k += 4
+                        st, _ = level(k)
                 if st != "FEASIBLE":
                     return {"verdict": "FAMILY_TOO_WEAK", "walk_complete": not truncated,
                             "deadline_hit": _should_stop(), "results": results}
 
             lo_feasible = k
-            while True:
-                if _should_stop():
-                    truncated = True
-                    break
-                nxt = lo_feasible - 4
-                if nxt < 1:
-                    break
-                st, _ = level(nxt)
-                if st == "FEASIBLE":
-                    lo_feasible = nxt
-                else:
-                    break
+            if self.concurrent_levels > 1:
+                while True:
+                    if _should_stop():
+                        truncated = True
+                        break
+                    batch_ks = [kk for kk in
+                               (lo_feasible - 4 * i for i in range(1, self.concurrent_levels + 1))
+                               if kk >= 1]
+                    if not batch_ks:
+                        break
+                    batch = levels(batch_ks)
+                    feasible_ks = [kk for kk in batch_ks if batch[kk][0] == "FEASIBLE"]
+                    if len(feasible_ks) == len(batch_ks):
+                        lo_feasible = min(batch_ks)
+                    elif feasible_ks:
+                        lo_feasible = min(feasible_ks)
+                        break
+                    else:
+                        break
+            else:
+                while True:
+                    if _should_stop():
+                        truncated = True
+                        break
+                    nxt = lo_feasible - 4
+                    if nxt < 1:
+                        break
+                    st, _ = level(nxt)
+                    if st == "FEASIBLE":
+                        lo_feasible = nxt
+                    else:
+                        break
 
             lo, hi = lo_feasible - 4, lo_feasible
             while hi - lo > 1:

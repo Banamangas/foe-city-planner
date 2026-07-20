@@ -1450,3 +1450,62 @@ was the right place to have spent the compute.
 **Kept as a documented, gated negative/throwaway result** (`foeopt/minroads.py`,
 `tests/test_minroads.py`, `scripts/exp_minroads.py`), not productionized, not imported by any
 production code path -- same posture as every other closed experiment this session.
+
+## next-things-to-try #7: concurrent k-levels -- workers-count bump backfires, cross-level batching is a real (small) win (2026-07-19/20)
+**Setup:** unlike #1-6, this was explicitly a "same result, less compute" idea -- the k-walk
+(`RoadsFirstSearch.run()`) leaves cores idle per the backlog's own note ("16 cores available; runs
+use ~12"). Split into two independently-testable mechanisms before writing any concurrency code,
+per the project's measure-first rule: (1) `kwalk_gate.py`'s defaults are `--workers 6
+--probe-workers 2` = 12 of 16 cores -- nothing stops running `--workers 8` = 16 cores today, zero
+code required; (2) independent of worker count, `run()`'s ascent/descent phases call `level(k)`
+one at a time, and `_probe_level` blocks until that level's ~200 patterns fully drain before the
+*next* level is even generated -- a synchronization barrier that idles workers near each level's
+tail regardless of pool size.
+**Phase 0 (free diagnostic, no code change): `--workers 8` reproducibly makes it WORSE, not
+better.** Equal wall-clock (1800s) vs the existing `baseline.log` (workers=6): baseline reached
+k=111/best_achieved=102, 0 inconclusive. `--workers 8` (`output/kwalk/workers8.log` + `-2.log`,
+byte-identical both runs) only reached k=113/best_achieved=105 with 1 INCONCLUSIVE level -- a full
+level worse, reproducibly. Mechanism: 8 workers x 2 probe-threads = 16 concurrent CP-SAT threads on
+a 16-core machine leaves zero headroom for OS/scheduling overhead, so individual probes run slower
+under contention. This is a genuinely different, useful negative result on its own (the "obvious"
+fix -- just add more workers -- is actively counterproductive here), and importantly doesn't
+implicate the barrier hypothesis: Phase 1 below doesn't touch worker count at all, so it can't
+reintroduce this same contention.
+**Phase 1: cross-level batched dispatch.** Added `_probe_levels_batch(layout, region, consumers,
+ks, ...)` (`foeopt/roads_first.py`) which generates+prefilters patterns for a *list* of k's (in
+order, against the same shared `rng`, preserving byte-identical pattern content vs sequential
+per-k calls -- verified by a dedicated determinism test) and submits all their surviving patterns
+into **one** `pool.imap_unordered` call instead of one call per level, eliminating the per-level
+drain barrier. `_probe_level(k)` is now a one-line wrapper (`_probe_levels_batch(..., [k], ...)[k]`)
+-- kept every existing call site and the full `test_probe_level.py`/`test_search.py` suite passing
+unmodified (324 tests, zero changes needed), proving batch-of-1 degenerates to exactly today's
+code path. Two pre-existing tail-classification quirks (a mid-level deadline hit in the `pool=None`
+branch returns a conservative 2-way INCONCLUSIVE/FEASIBLE; the same in the pooled branch falls
+through to the standard 3-way logic and can mis-classify a never-tested level as INFEASIBLE) were
+identified and **deliberately preserved bit-for-bit**, not fixed -- this was scoped as a pure speed
+change, and "fixing" either quirk would make batch-of-1 diverge from today's `_probe_level`,
+violating the whole point of the backward-compat wrapper. New opt-in `RoadsFirstSearch(...,
+concurrent_levels=N)` (default 1 = today's behavior exactly) batches the ascent phase (`[k+4,
+k+8, ..., k+4N]`, take the smallest FEASIBLE) and fine-descent phase (`[lo-4, ..., lo-4N]`, take
+the smallest still-feasible under the walk's existing monotonicity assumption) into single
+dispatches; bisection stays sequential (already the most information-dense phase, out of scope).
+8 new tests for `_probe_levels_batch` (SAT tracking, both interruption-classification quirks,
+the merged-single-`imap_unordered`-call mechanism itself, the rng-determinism invariant) + 4 new
+`RoadsFirstSearch` tests (ascent/descent batch construction, concurrent_levels=1 never touches the
+new function, concurrent_levels=1 vs 4 reach identical verdict/best_achieved on a fake truth
+table). 333 total tests green, `--selftest` PASS.
+**A/B result (equal wall-clock 1800s x2, reproduced, `concurrent_levels=4` vs baseline's
+`concurrent_levels=1`, both workers=6/probe-workers=2, comb family):** identical
+`best_achieved=102` both arms (confirms the determinism invariant held in practice, not just in
+unit tests) but `concurrent_levels=4` reproducibly reached **one level further** in the walk --
+resolved `k=107: INFEASIBLE` (narrowing the bisection bracket to [107,111]), which sequential
+baseline's 1800s budget never got to test (`output/kwalk/concurrent4.log` + `-2.log`, byte-identical
+both runs, vs `baseline.log`). A real, reproducible, if modest, speed win with no downside
+observed -- exactly the "same result, faster" shape idea #7 was scoped for, unlike every lever in
+#1-6 which traded search-quality for search-quality.
+**Verdict:** Phase 0 alone would have been actively harmful if shipped as "the fix" (a naive
+`--workers` bump). Phase 1's actual mechanism (barrier removal, not core-count increase) is the
+real lever, and it works, cheaply, without the contention risk Phase 0 exposed. Kept as an opt-in
+`concurrent_levels` parameter (default 1, zero risk to any existing call site) rather than changing
+the default -- consistent with every other lever this session (`pattern_family`, `stub_priority`,
+`lane_cap`) being explicit opt-in.

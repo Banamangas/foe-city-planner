@@ -38,6 +38,13 @@ infra/tuning rather than new levers) — the project's best validated result sta
 (plain comb family, no levers), with the hybrid cap=24 family as the closest reproducible
 runner-up at 106.
 
+**Update 2026-07-20:** #7 (concurrent k-levels) closed — small reproducible speed win, see item 7
+below and `tasks/lessons.md` 2026-07-19/20. First lever whose point was "same result, faster"
+rather than a different search outcome; a naive `--workers` bump was tested first and found to
+reproducibly *backfire* (CP-SAT thread contention), so the win came specifically from removing
+the per-level dispatch barrier (`concurrent_levels=N`), not from raw core count. #8 and #9 (CP-SAT
+parameter portfolio, assumption-based incremental solving) remain the only untested items.
+
 ## Cheapest — reuse existing infra (hours)
 
 1. ~~**Prune-mode guided walk.**~~ **TESTED 2026-07-16 — no gain, closed.** Swept
@@ -123,8 +130,19 @@ runner-up at 106.
 
 ## Speed — same result, less compute
 
-7. **Concurrent k-levels.** The bisection is sequential; probe several k-levels in parallel
-   (16 cores available; runs use ~12). Fills idle cores during the easy upper levels.
+7. ~~**Concurrent k-levels.**~~ **TESTED 2026-07-19/20 — small reproducible win, closed.**
+   Phase 0 diagnostic (no code): naively bumping `--workers 8` (16 of 16 cores) reproducibly made
+   the walk **worse** (k=113/105 vs baseline k=111/102) — CP-SAT thread contention with zero core
+   headroom, not the fix the "idle cores" framing suggested. Phase 1: added
+   `_probe_levels_batch()` + opt-in `RoadsFirstSearch(concurrent_levels=N)` (default 1 = today's
+   exact behavior) — merges several k-levels' patterns into one shared `pool.imap_unordered` call
+   instead of draining one level before generating the next, removing the per-level barrier
+   without changing worker count (so it doesn't reintroduce Phase 0's contention). A/B (equal
+   1800s wall-clock x2, reproduced): `concurrent_levels=4` matched baseline's `best_achieved=102`
+   exactly both times, but reproducibly resolved one level further (`k=107: INFEASIBLE`) than
+   sequential baseline reached in the same budget. Real, if modest, "same result, faster" win —
+   the first lever in the whole next-things-to-try line whose entire point was speed rather than a
+   different search outcome. Full details: `tasks/lessons.md` 2026-07-19/20 entry.
 
 8. **CP-SAT parameter portfolio for the hard frontier.** The autopsy's 4/8 UNKNOWNs stayed
    undecided at 15 min. Try alternate CP-SAT strategies specifically on frontier probes (more
