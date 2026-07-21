@@ -995,3 +995,633 @@ sub-problem turned out not to be the bottleneck -- validate the *bottleneck* (au
 after, building the ML pipeline. Here Stage 0 (data engine) + a cheap Stage 1.5 autopsy would have been
 a smarter first move than Stage 1 (train+scheduler) in hindsight; the staged gates still caught it
 cheaply, which is the point of measure-first.
+
+## next-things-to-try #1: prune-mode k-walk (score-threshold) extends descent depth but does not improve best_achieved (2026-07-16)
+**Setup:** `next-things-to-try.md` idea #1 flagged that the Track C-bis G1 gate only tested the CNN
+scorer in **rank-only** mode (reordering); the scorer hook also supports **pruning**
+(`--score-threshold`, patterns scoring below the threshold are dropped from the probe queue entirely,
+not just reordered) and that lever had never been measured. Swept `--score-threshold 0.1/0.2/0.3/0.4`
+on darkzig, 30min/arm (`scripts/prune_sweep.sh`), equal wall-clock, same config as the existing G1
+baseline (patterns=200, probe-limit=30, workers=6, probe-workers=2, th-anchors=full); reused the
+existing `output/kwalk/baseline.log` (30min, no scorer) rather than re-running it.
+**Smoke-tested first** (2min budget, threshold 0.3): ran clean, valid JSON, no crash -- proceeded to
+the full sweep.
+**Result:**
+| arm | lowest_feasible_k probed | best_achieved | inconclusive | walk_complete |
+|---|---|---|---|---|
+| baseline | 111 | 102 | 0 | false |
+| threshold 0.1 | 109 | 102 | 1 | false |
+| threshold 0.2 | 110 | 102 | 2 | true |
+| threshold 0.3 | 110 | 102 | 2 | true |
+| threshold 0.4 | 110 | 102 | 2 | true |
+Per-k-level sequences (`output/kwalk/prune-{t}.log`) show no false negatives: every k baseline found
+FEASIBLE (123/119/115/111) stayed FEASIBLE under every pruning threshold -- the mechanism is safe, the
+threshold range 0.1-0.4 never mis-drops a truly-feasible pattern down to INFEASIBLE. Thresholds 0.2-0.4
+gave **identical** k-sequences and outcomes (reproducible, not noise), so no repeat-seed runs were
+needed to confirm.
+**Pruning does free real budget** -- baseline never got past k=111 in 30min; 0.2-0.4 completed the
+entire bisection to k=110 (`walk_complete=true`) and 0.1 reached k=109, one level deeper than baseline.
+**But `best_achieved` stayed pinned at 102 in every arm, including baseline.** The extra k-levels
+reached by pruning were either INCONCLUSIVE or a SAT that didn't beat the existing 102. **Verdict: no
+gain from pruning at these thresholds** -- same root cause as the Stage-1 G1 null result
+(2026-07-15 entry): the k-walk frontier is **decision-limited, not ordering/volume-limited**. Cutting
+the number of patterns probed per level (pruning) lets the walk visit more k-levels within the time
+box, but the binding constraint is whether CP-SAT can *prove* SAT/UNSAT on a hard pattern within the
+30s probe-limit -- pruning doesn't make a single hard probe decidable faster, it just reaches more
+locked doors sooner. Reordering (Stage 1) and now culling (this test) are both volume/order levers on
+a problem that's gated by per-probe solve time.
+**Consequence for the backlog:** idea #1 is closed, no gain. This sharpens the priority of idea #3
+(symmetry breaking in the CP-SAT probe -- directly targets per-probe SAT/UNSAT proving time, the actual
+bottleneck both this test and Stage 1.5 point at) and idea #2 (warm-start hints) over further
+scheduling-side tweaks. Artifacts: `output/kwalk/prune-0.1.log` .. `prune-0.4.log`,
+`scripts/prune_sweep.sh`.
+
+## next-things-to-try #3: CP-SAT symmetry breaking makes the k-walk WORSE, reproducibly (2026-07-16)
+**Setup:** idea #3 hypothesized that darkzig's heavy footprint symmetry (13x 2x2, 7x 4x4, 6x 6x4, ...
+-- 63 consumers, 21 distinct sizes, 42 "chainable" same-size pairs) wastes CP-SAT time on permutation-
+symmetric assignments, since `probe()`'s model has no per-building distinction beyond footprint size
+(`_anchor_candidates` only reads `width`/`length`). Implemented `symmetry_breaking=` (opt-in, default
+off) in `foeopt/roads_first.py`: for each footprint-size group, chain a lexicographic `(x, y) <=`
+ordering across consecutive members via boolean channeling (`_add_symmetry_breaking`, 2 bool vars + 6
+constraints per adjacent pair). Threaded through `_run_probe`/`_run_probe_seq`/`_worker_init`/
+`RoadsFirstSearch`/CLI (`--symmetry-breaking` on both `exp_roads_first.py` and `kwalk_gate.py`), all
+backward-compatible (existing 3-/5-tuple worker-payload call sites still work via defaults). Added
+`test_symmetry_breaking_preserves_status_across_patterns` (checks SAT/UNSAT/UNKNOWN status is identical
+on/off across every surviving pattern in a toy 3-identical-building case) plus the full suite (301
+tests) and the roads-first `--selftest` (`parallel_equiv=True`) all green before measuring.
+**Smoke-tested first** (2min budget): ran clean, no crash, valid JSON.
+**A/B result (30min/arm, equal wall-clock, same config as the idea-#1 baseline): reproducibly WORSE.**
+| arm | lowest_feasible_k | best_achieved | inconclusive |
+|---|---|---|---|
+| baseline (no symmetry breaking) | 111 | **102** | 0 |
+| symmetry-breaking, run 1 | 115 | **105** | 1 (k=111 INCONCLUSIVE) |
+| symmetry-breaking, run 2 (repeat) | 115 | **105** | 1 (k=111 INCONCLUSIVE) |
+Both symmetry-breaking runs landed on the exact same k-sequence and numbers -- reproducible, not pool-
+scheduling noise. The walk stalls a full level earlier than baseline and best_achieved regresses by 3
+roads.
+**Mechanism check:** timed 6 individual probes at k=115 on/off in isolation (2 UNSAT resolving in
+<1s either way, 2 more UNSAT in ~0.75s either way, 2 UNKNOWN pinned at the 15s cap either way) --
+**no per-probe slowdown visible on this small sample**, so the 30min regression isn't simple "each
+probe takes longer" overhead on the patterns sampled. Most likely explanation (not directly measured):
+cumulative per-probe *model-construction* cost (84 extra bool vars + ~250 extra constraints built in
+Python on literally every probe, including the ~1300+ fast UNSAT ones from the idea-#1 baseline run)
+adds up across the ~2000+ probes run in 30min, and/or the added constraints interfere with CP-SAT's own
+automatic symmetry detection during presolve (a built-in feature) rather than complementing it --
+manually-added redundant symmetry-breaking constraints are a known way to *slow down* a modern CP-SAT
+solver that already detects and exploits this exact kind of interchangeable-item symmetry itself.
+**Verdict: closed, stays opt-in/off.** `symmetry_breaking=` kept in `foeopt/roads_first.py` as tested,
+correct, zero-cost-when-off infrastructure (same policy as `reach.py`/`--lns`/`--safe-placements`), but
+the reproducible measurement rules it out as a win. **Lesson for the backlog:** "manually add textbook
+symmetry breaking" is not free against a solver (CP-SAT) that already does this automatically in
+presolve -- measure before assuming a classic OR technique transfers, same standing pattern as
+"expert heuristics bolted onto the greedy constructor lose an equal-wall-clock A/B" (2026-07-06 entry),
+now with a CP-SAT-specific instance: don't fight the presolve. Idea #2 (warm-start hints from the
+classical packer) is now the top remaining cheap-tier candidate; unlike this idea it doesn't add
+constraints, it seeds the search, so it isn't subject to the same presolve-interference risk.
+Artifacts: `output/kwalk/symbreak.log`, `output/kwalk/symbreak-2.log`.
+
+## next-things-to-try #2: CP-SAT warm-start hints from the classical packer also make the k-walk WORSE, reproducibly (2026-07-16)
+**Setup:** idea #2 hypothesized that hinting `probe()`'s CP-SAT model with the classical repack
+packer's building positions (via `AddHint`) could turn slow frontier UNKNOWNs into fast SAT/UNSAT,
+without adding any constraints (so, unlike idea #3's symmetry breaking, not subject to a presolve-
+interference risk). Implemented `hints=` in `foeopt/roads_first.py`: for each consumer with an
+entity_id present in the hint map, `AddHint`s its (x, y) vars to the *nearest valid anchor* in that
+building's `opts` for the current pattern (`_nearest_opt`, Manhattan distance) -- never an out-of-
+domain value, so the hint is always locally consistent even though it may not be collision-free
+globally. Threaded through the same worker-global/`RoadsFirstSearch`/CLI plumbing as idea #3
+(`hint_layout=` constructs the entity_id->(x,y) map once from a `Layout`; `--warm-start`
+[`--warm-start-budget`, default 30s] on both CLI scripts calls `foeopt.packer.repack()` once and feeds
+its output layout in). Added 2 tests (hint status-preservation across patterns incl. an out-of-region
+hint that must snap via `_nearest_opt`, not crash; `_nearest_opt` unit test) -- full suite (303 tests)
+and roads-first `--selftest` green before measuring.
+**Smoke-tested first** (2min budget): ran clean, no crash, valid JSON.
+**A/B result (equal *total* wall-clock: 30s repack + 1770s walk = 1800s, matching the 1800s baseline;
+2 runs to check reproducibility): reproducibly WORSE**, same pattern as idea #3.
+| arm | lowest_feasible_k | best_achieved | inconclusive |
+|---|---|---|---|
+| baseline (no hints) | 111 | **102** | 0 |
+| warm-start, run 1 | 117 | **109** | 1 (k=115 INCONCLUSIVE) |
+| warm-start, run 2 (repeat) | 117 | **109** | 1 (k=115 INCONCLUSIVE) |
+Both warm-start runs landed on the exact same k-sequence and numbers -- reproducible, not noise. Two
+k-levels earlier stall than baseline and best_achieved regresses by 7 roads (worse than idea #3's
+regression).
+**Mechanism check:** timed 6 individual probes at k=115 on/off in isolation -- again **no per-probe
+slowdown visible** (UNSAT resolves in <0.5-1.1s either way, UNKNOWN pinned at the 15s cap either way;
+if anything the hinted UNSAT probes were marginally *faster*). The likely explanation is the **quality
+of the hint source, not solver mechanics**: `repack()` alone (no anneal polish -- the polish step is
+what the project's other results get to the 158-road local-method floor from) landed **199 roads** in
+a 15s diagnostic call here, i.e. the hinted building positions come from a layout with far more slack
+and a completely different road topology than what a ~102-118-road roads-first pattern needs. The hint
+therefore doesn't point CP-SAT toward a good region of the search space for the *tight* skeletons the
+k-walk is actually probing at the frontier -- it points toward a loose, road-inefficient one, and
+`AddHint`'s repair-from-hint search machinery spends effort reconciling that irrelevant starting point
+instead of searching freely. Consistent with idea #3's reading: bolting external structure onto CP-SAT
+without accounting for how it interacts with the solver's own search strategy is not free.
+**Verdict: closed, stays opt-in/off.** `hints=` kept in `foeopt/roads_first.py` as tested, correct,
+zero-cost-when-off infrastructure (same policy as `symmetry_breaking=`/`reach.py`/`--lns`), but not a
+win as tested. **Not retested with an annealed/polished hint source (~158 roads, closer in quality to
+the k-walk's own frontier) -- that's a plausible but unmeasured follow-up, out of scope for this A/B
+since idea #2 as written specified "the existing repack/greedy packer layout".**
+**Consequence for the backlog:** all three of the cheap-tier ideas (#1 pruning, #2 warm-start, #3
+symmetry breaking) are now closed, all negative, all pointing at the same wall: the k-walk frontier is
+gated by raw CP-SAT proving time on hard patterns, and none of these levers (reordering, culling,
+constraining, seeding) move that needle on darkzig. The medium-tier idea #5 (lane/stub topology
+generator -- attacking the *pattern family* itself, not the solver) is now the strongest remaining
+candidate, per the same "pattern-family limit, not a scheduling/solver limit" conclusion Track C-bis
+Stage 1.5 already reached from a different angle. Artifacts: `output/kwalk/warmstart.log`,
+`output/kwalk/warmstart-2.log`.
+
+## next-things-to-try #5: lane/stub topology generator also regresses the k-walk (2026-07-16)
+**Setup:** with all three cheap-tier solver-side levers closed negative, idea #5 targeted the
+pattern *family* itself: the comb generator's short, budget-proportional teeth off one trunk
+can't represent the user's real city's straight double-loaded lanes + near-zero-overhead trunk
+(5/142 cells) + TH stubs. Added `generate_lane_patterns()` to `foeopt/roads_first.py` as a second
+family, matching `generate_patterns()`'s signature so it drops into the same k-walk/CP-SAT/
+validate pipeline unchanged (opt-in `pattern_family=`/`--pattern-family {comb,lane}`, default
+`comb`). Reuses `th_anchor_candidates`/`_trunk`/`_stub_cells`; unlike the comb family (which
+commits `budget//2` cells to trunk regardless of need), the trunk is built *minimally* -- only
+spanning from the TH-adjacent anchor cell out to the furthest lane seed on each side -- directly
+encoding the "almost no overhead" finding. Lanes grow as full straight runs (not single-step
+teeth) from seeds spaced at a `pitch` (5-11) along that trunk.
+**Found and fixed a real bug before any timed run:** `_trunk()`'s returned cell list has the
+TH-adjacent anchor cell at index 0 only when the TH sits at a region corner -- for TH placements
+away from a corner (confirmed empirically on darkzig: anchor at index 23 of 52 for a mid-region
+TH), the anchor sits in the *middle* of the list. A naive `trunk[:n]` prefix (which is what the
+comb family already does, and works there mainly because its trunk_len -- `budget//2` -- is
+usually large enough to reach past the anchor by luck) would silently produce a **disconnected**
+lane pattern for non-corner TH placements. Fixed by explicitly computing the anchor's index and
+slicing symmetrically around it (`_th_anchor_cell()` + `trunk_raw[lo:hi+1]`). Caught via a
+dedicated regression test (`test_generate_lane_patterns_th_off_corner_anchor_mid_trunk`) plus a
+direct `_check_pattern` sweep across k=8/20/40 before any CP-SAT time was spent -- all patterns
+connected, exact-k, in-region.
+**Also found a monkeypatch-breaking bug during testing:** the first implementation dispatched
+families via a module-level `_PATTERN_GENERATORS = {"comb": generate_patterns, ...}` dict built
+once at import time, which silently broke two pre-existing tests
+(`test_probe_level_records_each_probe`, `test_scorer_orders_and_prunes_patterns`) that
+monkeypatch `rf.generate_patterns` directly -- the dict had already captured the original
+function object, so patching the module attribute had no effect on dispatch. Fixed by resolving
+the family via a plain function (`_pattern_generator(family)`) that does a live name lookup
+against module globals on every call, restoring monkeypatch-ability. Full suite green (310
+tests) before any timed run.
+**Sanity pass** (`--dump-patterns`, no CP-SAT time): lane family produces a healthy, comparable
+pattern count to comb across the whole relevant k range (152 vs comb's 192 at k=60-150, both
+100% prefilter survival) -- not degenerate, not near-empty.
+**Smoke-tested first** (2min budget): ran clean, no crash, valid JSON.
+**A/B result (equal 1800s wall-clock, 2 runs): reproducibly WORSE**, same direction as ideas
+#2/#3, though (unlike those) not bit-identical across the two runs:
+| arm | lowest_feasible_k | best_achieved |
+|---|---|---|
+| baseline (comb) | 111 | **102** |
+| lane family, run 1 | 115 | **109** |
+| lane family, run 2 (repeat) | 115 | **112** |
+Both lane-family runs plateau at k=115 (never reaching k=111 or below) -- a full k-level worse
+than baseline in both runs, with `best_achieved` 7-10 roads worse. The exact `best_achieved`
+differed between runs (109 vs 112, unlike ideas #1-3's bit-identical repeats) -- explained below.
+**Mechanism check (this time a clear signal, unlike ideas #2/#3's inconclusive per-probe timing):**
+timed 6 individual probes at k=115 for each family in isolation. **Comb: 4/6 fast UNSAT (0.7-1.6s),
+2/6 UNKNOWN (10s cap). Lane: 6/6 UNKNOWN (10s cap) -- zero fast resolutions.** The lane family's
+long straight corridors with wide parallel building rows create geometrically harder
+`NoOverlap2D` decision problems for CP-SAT than the comb's shorter, more locally-constrained
+teeth -- even though the lane topology is structurally closer to the user's real (efficient) city,
+it is *harder for the solver to arbitrate*, which starves the walk of the fast SAT/UNSAT
+resolutions it needs to make k-walk progress within a fixed probe-limit. This also explains the
+run-to-run variance: with almost every probe pinned at the timeout, which few probes happen to
+finish (parallel-pool race) has an outsized effect on the result, unlike the comb family where
+most probes resolve fast and the outcome is dominated by exhaustive coverage rather than luck.
+**Verdict: closed, stays opt-in/off.** `pattern_family=`/`generate_lane_patterns()` kept as
+tested, correct (including a real connectivity bug fixed pre-flight), zero-cost-when-unused
+infrastructure -- not a win as implemented. **This closes all four next-things-to-try levers
+tried so far (pruning, warm-start, symmetry breaking, lane topology), all negative, and sharpens
+the diagnosis further: it is not enough for a richer topology to structurally resemble the
+expert city -- it must also be easy for CP-SAT to *decide* quickly, and the two pull in opposite
+directions here (wider/straighter geometry -> harder packing subproblems).** A follow-up (not
+built) worth flagging for later: a *hybrid* family (short comb teeth near the frontier /
+hard-to-decide region, full lanes only where slack is generous) might recover the lane family's
+structural advantage without its solver-hardness cost -- unmeasured, out of scope for this A/B.
+Artifacts: `output/kwalk/lanefamily.log`, `output/kwalk/lanefamily-2.log`.
+
+## Stub priority hint: hurts the comb family, helps and stabilizes the lane family (2026-07-17)
+**Setup:** user follow-up question after the roads-first work above -- does the model require the
+*biggest* buildings to sit next to the TH stub cells, matching the expert-city heuristic
+(`memory/foe-layout-heuristics`: "puts ~3 big buildings next to each stub", each stub cell reaching
+load-3 "for free" via the TH edge)? No: `probe()` has zero objective, so CP-SAT seats whichever
+building fits first, with no size preference. **Diagnostic first (before building):** inspected
+3 existing solved layouts (`best-k110-a102.json`, `best-k111-a102.json`, `best-k115-a105.json`) --
+every one had at least one stub-adjacent cell hosting a genuinely tiny building (area 1 or 4)
+alongside bigger ones (16-49), confirming real headroom for a size-aware nudge.
+**Implementation:** `stub_priority=`/`--stub-priority` (opt-in, default off) added to `probe()`.
+`_th_stub_cells_in_pattern(th, roads)` finds whichever of the 4 candidate TH-flank cells are road
+cells in the *given* pattern (family-agnostic -- works whether they're comb stubs, lane stubs, or
+incidental trunk cells); `_stub_priority_hints()` then `AddHint`s the largest buildings (by area,
+top-3 per stub cell, matching the load-3 ceiling) toward their own valid anchor options that touch
+that cell -- a soft nudge (not a hard constraint), and every hint is drawn from the pattern's own
+already-computed `opts`, so (unlike the failed idea #2 warm-start) it's always in-domain by
+construction. Verified the selection logic on a controlled 6-building case (only the 3 largest of
+6 candidates get hinted) and confirmed real coverage on darkzig (177/200 sampled patterns had at
+least one stub cell present, and the top-6-by-area selection matched expectations on inspection).
+Added a SAT/UNSAT-preservation equivalence test (mirrors the `symmetry_breaking`/`hints` tests).
+315-test suite and `--selftest` green before any timed run.
+**A/B result (30min/arm, equal wall-clock, x2 per family/arm for reproducibility) -- a genuinely
+mixed, family-dependent result, the first non-uniformly-negative one in this whole run of
+experiments:**
+| family | arm | k reached | best_achieved |
+|---|---|---|---|
+| comb (production default) | baseline | 111 | 102 |
+| comb | + stub_priority | 111 | **105, 105** (worse, reproduced x2) |
+| lane | baseline | 115 | 109, 112 (variable across runs) |
+| lane | + stub_priority | 115 | **108, 108** (better than *both* baseline runs, reproduced x2) |
+`stub_priority` **hurts** the comb family by 3 roads (same k-walk depth, reproducibly worse
+`achieved`) but **helps and stabilizes** the lane family -- not only does it land at 108 (better
+than both 109 and 112), it eliminates the lane baseline's own run-to-run variance (bit-identical
+across both repeats, unlike the baseline's own two runs disagreeing by 3).
+**Mechanism check:** per-probe SAT/UNSAT/UNKNOWN status comparison (5 patterns each, lane k=115 and
+comb k=111, on/off) showed **zero status flips** -- consistent with the equivalence tests: the
+hint never changes whether a pattern is feasible. The likely explanation for a `best_achieved`
+shift despite unchanged decidability: `achieved` is computed by `route()` on whichever *specific*
+building placement CP-SAT actually returns for a SAT pattern, not from the road-skeleton budget
+`k` itself -- so a hint that changes *which* feasible placement is found (without changing whether
+one is found) can still shift the final routed road count. This is inferred from the reproducible
+net effect, not directly proven by a per-probe trace (the small sample above didn't happen to catch
+a shifted-solution case) -- flagged honestly as the best available explanation, not a certainty.
+**Verdict: mixed, stays opt-in/off by default everywhere.** Since comb is the production default
+and current best method (102, still far ahead of lane+stub_priority's 108), `stub_priority` must
+NOT flip to default-on there -- it would regress the project's best result. It's a genuine,
+reproducible win specifically for the *lane* family, which is itself still closed/opt-in from the
+next-things-to-try #5 entry above (lane alone regresses vs comb; lane+stub_priority narrows that
+gap from -7/-10 to -6, but doesn't close it). Kept as tested, correct, zero-cost-when-unused
+infrastructure, available for revisiting if the lane family (or a future hybrid family per #5's
+follow-up note) is ever picked back up. **Standing pattern across this session's four solver-side
+levers (symmetry breaking, warm-start, lane topology, stub priority):** every added
+constraint/hint/hint-like nudge either regressed or was neutral on the comb family specifically --
+comb's search is already fast and decisive (mostly quick UNSAT, per the idea #5 mechanism check),
+and redirecting an already-efficient search seems to cost more than it buys. The one place a hint
+helped (lane + stub_priority) is exactly the one place the baseline search was already struggling
+(lane's per-probe check showed 6/6 UNKNOWN at a comparable k) -- weak but consistent evidence that
+these levers pay off only when the underlying search has room to be steered, not when it's already
+efficient. Artifacts: `output/kwalk/stubpriority-comb.log`, `output/kwalk/stubpriority-comb-2.log`,
+`output/kwalk/stubpriority-lane.log`, `output/kwalk/stubpriority-lane-2.log`.
+
+## Hybrid comb/lane (bounded lane length): non-monotonic, cap=24 is a real win (2026-07-17, revised)
+**Setup:** idea #5's flagged follow-up -- "a hybrid family (short comb teeth near the frontier /
+hard-to-decide region, full lanes only where slack is generous) might recover the lane family's
+structural advantage without its solver-hardness cost." Rather than building a second from-scratch
+generator with a spatial teeth-vs-lanes classification rule (no obvious cheap proxy for "frontier"
+vs "slack"), tested the same underlying hypothesis -- that *lane length*, not lane-ness itself,
+drives the decidability cost idea #5 found (6/6 UNKNOWN for uncapped lane probes vs comb's 4/6 fast
+UNSAT) -- via a much cheaper single-parameter dial: `max_lane_len` added to
+`generate_lane_patterns()` (`foeopt/roads_first.py`), capping how far each lane grows from its
+seed before stopping. Cap=None (default) preserves today's exact uncapped behavior (verified via a
+dedicated backward-compat test comparing full pattern output, plus a test confirming the cap
+actually bounds growth by re-deriving each pattern's trunk/seeds and walking its fronts). Wired as
+`--lane-cap N` alongside the existing `--pattern-family`/`--stub-priority` flags. 318-test suite
+and `--selftest` green before any timed run. Sanity pass (`--dump-patterns`) across caps 3-12
+showed cap=3 nearly empty at the relevant k range (0-18 patterns at k>=110) -- dropped; caps 4 and
+8 chosen as short/medium representatives with healthy-looking pattern counts (18-151 across
+k=100-120).
+**First pass (caps 4, 8) looked monotonically negative:**
+| arm | k reached | best_achieved |
+|---|---|---|
+| comb baseline | 111 | 102 |
+| lane, uncapped (idea #5 baseline) | 115 | 109, 112 |
+| lane, cap=8 | 123 | **119, 119** (reproduced exactly) |
+| lane, cap=4 | -- | **FAMILY_TOO_WEAK** (climbed to k=283, `walk_complete=true`, never found a single SAT) |
+Cap=8 is worse than uncapped lane on *both* metrics (2 k-levels higher, 7-10 roads worse) despite
+having plausible-looking pattern diversity in the sanity pass; cap=4 is a total, decisive failure
+-- not a near-miss, not a timeout, the upward-fallback walk exhausted the entire feasible k range
+without ever finding one SAT pattern. Based on these two points the entry originally concluded
+"capping is monotonically worse, no sweet spot" -- **that conclusion was wrong; see cap=24 below.**
+**User follow-up 1: cap=16.** A/B'd 30min x2 (reproduced exactly): **k=115/roads=111 both runs**
+-- matches uncapped's k-level exactly, and 111 falls inside uncapped's own run-to-run range
+(109-112), statistically indistinguishable from not capping at all.
+**User follow-up 2: cap=24 -- overturns the "no sweet spot" conclusion.** While sanity-checking
+this cap, found and fixed a real, pre-existing bug (present since the original `--dump-patterns`
+implementation, long before this session): `scripts/exp_roads_first.py`'s dump-patterns path never
+threaded `th_mode` through to the generator, so every `--dump-patterns --th-anchors full` sanity
+check run in this whole investigation (caps 3/4/6/8/12/16) was silently using the default `coarse`
+TH-anchor mode instead -- **the real 30-min A/B runs were unaffected** (`kwalk_gate.py walk`
+correctly threads `th_anchors` through `RoadsFirstSearch`/`_probe_level` throughout), only the
+informal pre-flight pattern-count diagnostics were inaccurate. Fixed with a one-line addition
+(`gen_kwargs = {"th_mode": args.th_anchors}`); doesn't change any previously-reported hard number,
+only the (now corrected) diagnostic counts. With the fix, cap=24 shows 200/200/200 patterns
+(hitting the `max_patterns` cap) at k=100/110/120, and a direct comparison confirmed cap=24's
+pattern set is *not* identical to uncapped's (so it's not a no-op, unlike what the buggy coarse-
+mode reading of cap=16 suggested). A/B'd 30min x2 (reproduced exactly): **k=115/roads=106 both
+runs** -- better than *every* other lane-family result tried, including plain uncapped (109-112)
+and cap=16 (111), and the closest the lane family has come to comb's 102.
+| cap | k reached | best_achieved |
+|---|---|---|
+| comb baseline | 111 | 102 |
+| **24** | 115 | **106, 106** (reproduced -- best lane-family result) |
+| uncapped | 115 | 109, 112 |
+| 16 | 115 | 111, 111 |
+| 8 | 123 | 119, 119 |
+| 4 | -- | FAMILY_TOO_WEAK |
+**Not monotonic.** The relationship between cap size and result quality has a real optimum
+somewhere near cap=24, not a smooth "smaller is worse" gradient bottoming out at "uncapped is
+best." **Why (best available explanation, not fully confirmed):** a cap set well above the
+"typical" productive lane length but below the *longest* outlier lengths the uncapped family
+occasionally grows may selectively remove only the rare, most-NoOverlap2D-costly long lanes from
+the candidate pool, while leaving the bulk of productive, moderate-length lane patterns untouched
+-- a soft outlier filter rather than a uniform restriction. Cap=16 apparently sits below that
+"productive ceiling" often enough to matter (statistically indistinguishable from uncapped);
+cap=24 sits closer to it; cap=8 cuts well into the productive range and hurts; cap=4 removes it
+entirely. This is inferred from the shape of the data, not directly measured (would need a
+per-pattern length-distribution histogram to confirm) -- flagged honestly as the best current
+reading, not a certainty.
+**Bracketing the sweet spot (same day): cap=24 is a genuine, isolated local optimum, not part of
+a wider plateau.** Ran cap=20 and cap=28 (one run each, since the question was the *shape* of the
+curve around an already-double-reproduced anchor point, not a new headline number needing its own
+reproduction):
+| cap | best_achieved |
+|---|---|
+| 16 | 111, 111 |
+| 20 | 110 |
+| **24** | **106, 106** (reproduced) |
+| 28 | 111 |
+| uncapped | 109, 112 |
+Both immediate neighbors (20, 28) are clearly worse than 24 and land close to 16/uncapped's range
+-- a narrow, isolated dip centered exactly at 24, not a gradual gradient or a wide plateau. No
+further bracketing (e.g. finer steps between 20-24 or 24-28) was needed to see the shape.
+**Layering `stub_priority` on top of cap=24 -- does not stack, makes it worse.** `stub_priority`
+independently improved the *uncapped* lane family (108 vs 109/112, see the 2026-07-17 stub-priority
+entry). Tried combining it with the now-winning cap=24. A/B'd 30min x2 (reproduced exactly):
+**cap=24 + stub_priority -> k=115/roads=110, both runs** -- worse than cap=24 alone (106) and
+roughly back to the cap=20/uncapped range. The two levers don't compose additively; whatever makes
+cap=24 work well on its own is disturbed by also biasing the search toward big-buildings-at-stubs.
+Consistent with this session's broader pattern: levers that help a *struggling* search (stub
+priority helped uncapped lane, which was UNKNOWN-dominated per idea #5's mechanism check) tend to
+hurt an *already-tuned* one (cap=24's own search is evidently already landing in a better regime,
+and the extra hint disturbs rather than improves it) -- the same "helps weak search, hurts strong
+search" reading first proposed for comb vs lane now shows up *within* the lane family itself,
+between cap=24 (strong, for a lane variant) and uncapped (comparatively weak).
+**Final verdict: cap=24 *alone* (no `stub_priority`) is the best-performing lever variant found in
+this entire next-things-to-try line, and the closest any of it has come to comb.** 106 vs comb's
+102 -- still short, but a real, reproduced, bracketed, isolated-optimum result, not a lucky draw.
+`max_lane_len=`/`--lane-cap` and `stub_priority` both kept as tested, correct, zero-cost-when-unset
+infrastructure. If this thread is picked up again, the natural next step is understanding *why*
+cap=24 specifically works (a per-pattern lane-length histogram against the uncapped family's own
+distribution would confirm or refute the "outlier filter" theory above) rather than more blind
+parameter search -- the bracket here was cheap and conclusive, further probing without a mechanism
+hypothesis would not be. Artifacts: `output/kwalk/lanecap4.log`, `output/kwalk/lanecap8.log`,
+`output/kwalk/lanecap16.log`, `output/kwalk/lanecap16-2.log`, `output/kwalk/lanecap20.log`,
+`output/kwalk/lanecap24.log`, `output/kwalk/lanecap24-2.log`, `output/kwalk/lanecap28.log`,
+`output/kwalk/lanecap24-stubpriority.log`, `output/kwalk/lanecap24-stubpriority-2.log`.
+
+## next-things-to-try #4: tightened UNSAT prefilter -- sound improvement, but null at the k-walk's real operating range (2026-07-17)
+**Setup:** `prefilter()` (`foeopt/roads_first.py`) already has an adjacency-capacity check
+(`bound_adjacency`'s "<=3 consumers per road cell" argument) but applied it loosely: any road cell
+with *at least one* free orthogonal neighbor got a flat capacity of 3, regardless of whether it
+actually had 1, 2, or 3 free neighbors after this specific pattern's own roads/TH occupy some of
+them. Tightened to `min(3, actual free orthogonal neighbor count)` -- strictly tighter, still 100%
+sound (a more accurate count of the same provably-necessary quantity, never risks the `reach.py`
+false-reject failure mode from 2026-07-05, since it only ever rejects patterns the *old* check
+would also have needed to reject given perfect information). Explicitly avoided the backlog's
+alternative suggestion ("fast greedy first-fit whose hard failure flags likely-UNSAT") since that's
+a heuristic, not a certificate -- using it as a hard reject risks exactly the `reach.py` regression;
+using it only to reorder the probe queue would just be idea #1 (pruning) again, already measured
+null this session. Added 2 unit tests (a controlled case with a road cell that has exactly 1 true
+free neighbor: old check accepts, new check correctly rejects; and a matching case where 1
+consumer's demand is genuinely satisfiable, confirming the tightened check doesn't over-reject).
+320-test suite and `--selftest` green.
+**Diagnostic before any A/B (per the project's measure-first rule):** compared old-vs-new rejection
+counts on darkzig across both pattern families. At the k-walk's actual operating range (k~93-123,
+where every real run this session has probed), **zero additional patterns rejected by either
+family at any tested k** (102/106/111/115/120 comb; 80/100/115/120 lane) -- the bound is tighter in
+the abstract but never actually bites there. It *does* catch substantially more at k far below that
+range (k=25: 200/200 newly rejected; k=30: 97/200; k=40: ~1-4/200) -- but the k-walk's own
+`pick_k_start`/descent logic never probes k that low in practice (trivially area/adjacency-
+infeasible territory the walk would never reach from its k_start ~150+ descending only to ~93-123).
+**Verdict: sound, correct, real improvement to a provable bound -- but a null result for the
+production k-walk, so no real A/B run was spent on it** (per the plan's own "if it rejects ~0 more,
+report as null without a 30min run" rule). Kept as a permanent, zero-risk tightening (not opt-in --
+it's strictly more correct than the old flat-3 check with no downside, unlike every other
+opt-in/off lever this session). Consistent with the session's broader finding that the k-walk's
+real bottleneck is per-probe CP-SAT decision time on patterns that *pass* every cheap prefilter,
+not on patterns a cheap filter could have caught -- there's no low-hanging fruit left in the
+prefilter itself at this city's actual difficulty range.
+
+## next-things-to-try #6: joint minimize-roads CP-SAT -- correct at toy scale, memory-catastrophic at real scale (2026-07-17)
+**Setup:** every prior lever this session worked *within* the two-stage architecture (propose a
+road skeleton, then `probe()` places buildings on it, bisecting a fixed `k`). Idea #6 asked whether
+removing the two-stage split -- making road-cell selection itself a CP-SAT decision variable with
+an explicit `Minimize(sum(roads))` objective, solved jointly with placement -- could beat the
+k-walk's best achieved (102, comb). Built `foeopt/minroads.py`: a standalone model (does not touch
+`roads_first.py`/`probe()`) with connectivity enforced as a BFS-tree constraint (`dist_c` IntVar per
+candidate cell, reified parent-link BoolVars proving reachability from a TH-adjacent root by
+strictly-increasing integer distance -- CP-SAT's Python API has no lazy-cut support, so this
+distance-labeling encoding is the standard substitute for "roads form a tree rooted at TH") and
+building placement as one-hot `NewOptionalFixedSizeIntervalVar`s per (building, valid (x,y))
+channeled to the road-selection BoolVars, since `AddAllowedAssignments` against a precomputed
+position list no longer applies once the road set itself is a variable.
+**Toy-scale correctness gate:** 4 tests in `tests/test_minroads.py` compare `solve_min_roads`
+against `rl.oracle.optimal_roads` (the project's existing exact brute-force oracle) on 2/3/4-building
+toy layouts -- exact match on road count every time, plus one test that independently re-validates
+the model's own chosen positions through the *real* `route()`/`is_valid()` pipeline rather than
+trusting the model's internal claims. All 4 pass. Model is provably correct at small scale.
+**Real-city tractability gate (the actual point of the plan's gating structure):** ran
+`scripts/exp_minroads.py darkzig.json` at increasing time budgets.
+- `--time-limit 60`: completed cleanly in 65.2s wall time (model construction itself is fast, a few
+  seconds -- the 65.2s is dominated by the 60s solve budget), but returned `status=UNKNOWN,
+  roads=None` -- CP-SAT could not find *any* feasible solution, let alone prove optimality, within
+  60s on darkzig's real scale (2720 region cells, 63 consumers).
+- `--time-limit 300`: killed by the OS at exit 137 (SIGKILL) -- not the process itself failing,
+  the *system* intervening. Re-ran under direct process monitoring (`ps -o rss`) to confirm: RSS
+  hit ~3.9GB within 17 CPU-seconds of the solve starting and kept climbing. A second monitoring
+  attempt exhausted the machine's 30GB RAM + swap badly enough that **it crashed the user's
+  terminal** (confirmed directly by the user: "Process keeps crashing the terminal"). Force-killed
+  via `pkill -9 -f exp_minroads.py`; memory recovered once dead.
+**Verdict: decisive kill, worse than the plan's own worst-case expectation.** The plan anticipated
+"may not even reach a first feasible solution in reasonable time" as the likely negative outcome
+and treated that as sufficient to stop (no long-box escalation, per the project's "no tuning
+marathon" rule). What actually happened is a level below that: the one-hot placement encoding
+(`O(buildings x positions-per-building)` boolean variables, replacing the fixed model's `O(buildings)`
+IntVars) combined with the BFS-tree connectivity encoding (one IntVar + up to 4 reified parent-link
+BoolVars *per candidate road cell*, ~2720 of them) blows up CP-SAT's internal memory footprint
+catastrophically before it can even finish a first search pass -- not merely slow, actively
+dangerous to run unbounded on a real workstation. **Do not re-attempt this model at real-city scale
+without a hard memory ulimit and much smaller instances first** (e.g. bound the road-candidate
+region to a bounding box around a partial city, not the full 2720-cell darkzig region) if this
+direction is ever revisited. The two-stage roads-first architecture's separation of concerns --
+fixed, pre-verified-connected skeleton with only `O(buildings)` placement variables -- isn't just
+an implementation convenience, it's load-bearing for tractability at this problem size. Confirms by
+contrast that this session's real wins (idea #5 lane topology, stub priority, the cap=24 hybrid,
+idea #4's prefilter) all worked by improving the two-stage split rather than replacing it, and that
+was the right place to have spent the compute.
+**Kept as a documented, gated negative/throwaway result** (`foeopt/minroads.py`,
+`tests/test_minroads.py`, `scripts/exp_minroads.py`), not productionized, not imported by any
+production code path -- same posture as every other closed experiment this session.
+
+## next-things-to-try #7: concurrent k-levels -- workers-count bump backfires, cross-level batching is a real (small) win (2026-07-19/20)
+**Setup:** unlike #1-6, this was explicitly a "same result, less compute" idea -- the k-walk
+(`RoadsFirstSearch.run()`) leaves cores idle per the backlog's own note ("16 cores available; runs
+use ~12"). Split into two independently-testable mechanisms before writing any concurrency code,
+per the project's measure-first rule: (1) `kwalk_gate.py`'s defaults are `--workers 6
+--probe-workers 2` = 12 of 16 cores -- nothing stops running `--workers 8` = 16 cores today, zero
+code required; (2) independent of worker count, `run()`'s ascent/descent phases call `level(k)`
+one at a time, and `_probe_level` blocks until that level's ~200 patterns fully drain before the
+*next* level is even generated -- a synchronization barrier that idles workers near each level's
+tail regardless of pool size.
+**Phase 0 (free diagnostic, no code change): `--workers 8` reproducibly makes it WORSE, not
+better.** Equal wall-clock (1800s) vs the existing `baseline.log` (workers=6): baseline reached
+k=111/best_achieved=102, 0 inconclusive. `--workers 8` (`output/kwalk/workers8.log` + `-2.log`,
+byte-identical both runs) only reached k=113/best_achieved=105 with 1 INCONCLUSIVE level -- a full
+level worse, reproducibly. Mechanism: 8 workers x 2 probe-threads = 16 concurrent CP-SAT threads on
+a 16-core machine leaves zero headroom for OS/scheduling overhead, so individual probes run slower
+under contention. This is a genuinely different, useful negative result on its own (the "obvious"
+fix -- just add more workers -- is actively counterproductive here), and importantly doesn't
+implicate the barrier hypothesis: Phase 1 below doesn't touch worker count at all, so it can't
+reintroduce this same contention.
+**Phase 1: cross-level batched dispatch.** Added `_probe_levels_batch(layout, region, consumers,
+ks, ...)` (`foeopt/roads_first.py`) which generates+prefilters patterns for a *list* of k's (in
+order, against the same shared `rng`, preserving byte-identical pattern content vs sequential
+per-k calls -- verified by a dedicated determinism test) and submits all their surviving patterns
+into **one** `pool.imap_unordered` call instead of one call per level, eliminating the per-level
+drain barrier. `_probe_level(k)` is now a one-line wrapper (`_probe_levels_batch(..., [k], ...)[k]`)
+-- kept every existing call site and the full `test_probe_level.py`/`test_search.py` suite passing
+unmodified (324 tests, zero changes needed), proving batch-of-1 degenerates to exactly today's
+code path. Two pre-existing tail-classification quirks (a mid-level deadline hit in the `pool=None`
+branch returns a conservative 2-way INCONCLUSIVE/FEASIBLE; the same in the pooled branch falls
+through to the standard 3-way logic and can mis-classify a never-tested level as INFEASIBLE) were
+identified and **deliberately preserved bit-for-bit**, not fixed -- this was scoped as a pure speed
+change, and "fixing" either quirk would make batch-of-1 diverge from today's `_probe_level`,
+violating the whole point of the backward-compat wrapper. New opt-in `RoadsFirstSearch(...,
+concurrent_levels=N)` (default 1 = today's behavior exactly) batches the ascent phase (`[k+4,
+k+8, ..., k+4N]`, take the smallest FEASIBLE) and fine-descent phase (`[lo-4, ..., lo-4N]`, take
+the smallest still-feasible under the walk's existing monotonicity assumption) into single
+dispatches; bisection stays sequential (already the most information-dense phase, out of scope).
+8 new tests for `_probe_levels_batch` (SAT tracking, both interruption-classification quirks,
+the merged-single-`imap_unordered`-call mechanism itself, the rng-determinism invariant) + 4 new
+`RoadsFirstSearch` tests (ascent/descent batch construction, concurrent_levels=1 never touches the
+new function, concurrent_levels=1 vs 4 reach identical verdict/best_achieved on a fake truth
+table). 333 total tests green, `--selftest` PASS.
+**A/B result (equal wall-clock 1800s x2, reproduced, `concurrent_levels=4` vs baseline's
+`concurrent_levels=1`, both workers=6/probe-workers=2, comb family):** identical
+`best_achieved=102` both arms (confirms the determinism invariant held in practice, not just in
+unit tests) but `concurrent_levels=4` reproducibly reached **one level further** in the walk --
+resolved `k=107: INFEASIBLE` (narrowing the bisection bracket to [107,111]), which sequential
+baseline's 1800s budget never got to test (`output/kwalk/concurrent4.log` + `-2.log`, byte-identical
+both runs, vs `baseline.log`). A real, reproducible, if modest, speed win with no downside
+observed -- exactly the "same result, faster" shape idea #7 was scoped for, unlike every lever in
+#1-6 which traded search-quality for search-quality.
+**Verdict:** Phase 0 alone would have been actively harmful if shipped as "the fix" (a naive
+`--workers` bump). Phase 1's actual mechanism (barrier removal, not core-count increase) is the
+real lever, and it works, cheaply, without the contention risk Phase 0 exposed. Kept as an opt-in
+`concurrent_levels` parameter (default 1, zero risk to any existing call site) rather than changing
+the default -- consistent with every other lever this session (`pattern_family`, `stub_priority`,
+`lane_cap`) being explicit opt-in.
+
+## next-things-to-try #8: CP-SAT parameter portfolio for the hard frontier -- clean null across every candidate, closed (2026-07-20/21)
+**Setup:** the last untested item. Backlog: "the autopsy's 4/8 UNKNOWNs stayed undecided at 15
+min... try alternate CP-SAT strategies... small tuning study." Reframed the question precisely
+before building anything: the Stage 1.5 autopsy (2026-07-15) already showed more *time* (900s vs
+30s) and more *workers* (12 vs 2) only decides half of a hard sample -- idea #8 asks whether
+switching *search strategy* decides more of them within the walk's own real 30s/probe_workers=2
+budget, which the autopsy never varied. Reused `output/corpus/darkzig/instances.jsonl` (663
+UNKNOWN records, k=107-127, confirmed recorded at ~30s each) rather than generating new data --
+exactly the frontier population idea #8 needs, spanning the walk's real operating range.
+**Built:** `probe()` (`foeopt/roads_first.py`) gained an opt-in `solver_overrides: dict | None =
+None` hook, applied via `setattr(solver.parameters, k, v)` right before `solver.Solve()` -- a
+generic pass-through (not named presets), since the candidates span unrelated CP-SAT parameters.
+Threaded through `_run_probe`/`_run_probe_seq`/`_worker_init`/`_WORKER_*` globals exactly like
+every prior opt-in lever (`symmetry_breaking`, `hints`, `stub_priority`). Default `None` is a true
+no-op -- full existing suite (338 tests after adding this session's own new coverage) passes
+unmodified. New tests prove the hook actually reaches the real solver (an invalid parameter name
+raises `AttributeError`, since a stub could never do that; a valid override --
+`max_time_in_seconds` set near zero -- observably starves a normally-decidable pattern into
+`UNKNOWN`) plus worker-global plumbing tests mirroring the existing `symmetry_breaking`/
+`stub_priority` coverage.
+**API surprise:** `search_branching` is a pybind-native enum on this ortools version
+(9.15.6755), not a plain int-settable protobuf field -- `setattr(params, "search_branching", 2)`
+raises `TypeError` (wrong argument type), even though the same int is what
+`sat_parameters_pb2.SatParameters.PORTFOLIO_SEARCH` returns. The working value has to come from
+the parameter object's own class (`cp_model_helper.SatParameters.PORTFOLIO_SEARCH`, a typed enum
+instance), discovered empirically since neither ortools' own enum module nor `dir()` on a fresh
+`CpSolver().parameters` made this obvious ahead of time -- worth remembering if this hook is ever
+reused for another enum-typed parameter.
+**Diagnostic (`scripts/exp_frontier_portfolio.py`, smoke-tested N=4 first, then real N=20):**
+5 candidates (`portfolio_search`, `lp_search`, `linearization_max`, `more_probe_workers_4` --
+the literal "longer-but-fewer" lever, giving each probe 4 internal threads instead of 2 at the
+same 30s wall-clock -- and `use_lns_only`) plus a `default_reconfirm` control (the same config as
+recording time, re-solved fresh), each re-solving the same 20 sampled frontier patterns
+sequentially (no outer parallelism, per idea #7 Phase 0's contention lesson).
+**Result -- and an important calibration finding from the control arm itself:**
+| config | decided / 20 |
+|---|---|
+| default_reconfirm (control) | 1 (5%) |
+| portfolio_search | 0 (0%) |
+| lp_search | 0 (0%) |
+| linearization_max | 1 (5%) |
+| more_probe_workers_4 | 0 (0%) |
+| lns_only | 0 (0%) |
+The `default_reconfirm` control -- re-solving with *no* override at all, the exact same config
+these patterns were originally recorded UNKNOWN under -- itself flipped 1/20 to a decided status.
+CP-SAT's parallel portfolio is **not perfectly reproducible run-to-run even with a fixed
+`random_seed`**, because real-time thread-scheduling races between workers aren't controlled by
+the logical seed. This sets a ~5% noise floor that any real candidate needs to clear to claim
+signal -- `linearization_max` merely matched it (not evidence of a real effect), and every other
+candidate landed at or below it. **No candidate showed real signal.** `use_lns_only=True` ran
+without error on this no-objective feasibility model (worth noting since LNS is documented as an
+incumbent-improvement strategy needing an objective) but produced no observable difference either.
+**Verdict: clean, decisive null across the whole small candidate set -- closed, no real k-walk A/B
+warranted** (per the plan's own gate: nothing cleared the noise floor). Consistent with, and
+reinforcing, the Stage 1.5 autopsy's reading: this frontier is genuinely hard for CP-SAT at this
+problem size, not an artifact of the *particular* search strategy in use -- neither more time,
+more workers, nor a different strategy shakes it loose. `solver_overrides` is kept as a tested,
+harmless, opt-in-only primitive (zero risk, zero behavior change by default) in case a future,
+more targeted parameter is worth trying, but this closes next-things-to-try.md item #8 and,
+with it, every item in the document except #9 (assumption-based incremental solving, the one
+remaining unexplored Speed-tier idea).
+
+## next-things-to-try #9: assumption-based incremental solving -- CP-SAT doesn't support it, confirmed by the maintainer, closed with zero code (2026-07-21)
+**Setup:** the last item in the document. Backlog: "Patterns at one k share region + building set;
+only the road skeleton differs. Explore CP-SAT assumptions / clause reuse to amortize solving
+across a level's patterns." Unlike every other idea this session, checked the *premise* against
+the real solver capability before writing any code or entering plan mode -- if the underlying
+mechanism doesn't exist, no model redesign or toy-scale gate can rescue it.
+**What exists in the API:** `CpModel.add_assumption(s)` and `CpSolver.sufficient_assumptions_for_infeasibility()`
+are real, present methods (confirmed by inspecting the installed ortools 9.15.6755 package
+directly). But their purpose is **minimal-unsatisfiable-subset (MUS) extraction within a single
+`Solve()` call** -- "which of these assumed-true literals, if I could drop some, would let the
+rest be jointly feasible" -- not carrying learned clauses or search-tree state *across* separate
+`Solve()` calls the way incremental SAT solvers with assumption interfaces classically do.
+**Confirmed authoritatively, not guessed:** GitHub issue google/or-tools#2014 ("Incremental
+solving using CP-SAT solver," filed 2020, closed 2021-12-07) is exactly this feature request.
+Laurent Perron (CP-SAT's lead maintainer) closed it with **"no plan for more than `AddHint()`"**
+-- i.e. the solution-hint mechanism (already used in this codebase for `hints=`/`stub_priority=`)
+is, and is intended to remain, the *only* supported way to carry information from one solve to
+another; there is no clause-database or search-tree reuse across calls. A separate
+`or-tools-discuss` thread specifically asking about assumptions for this purpose got the same
+answer from Perron directly: real assumption-based incremental solving "will not happen soon" and
+early attempts to force it (`ResetAndSolveWithGivenAssumptions()`) crashed the SAT propagation
+layer, "not designed for this use case." Searched for anything more recent superseding this --
+found nothing (no evidence this changed by the 9.15.x version installed here or any 2025 release
+note).
+**Why this matters for this specific idea, not just as a general limitation:** even if CP-SAT DID
+support cross-call reuse, achieving it here would require restructuring `probe()`'s model so road
+cells are themselves boolean *variables* that differ only in their *assumed* values between
+patterns (today they're baked directly into each building's `AddAllowedAssignments` candidate
+list, which differs in *structure*, not just assumed truth values, between patterns) -- i.e. the
+same one-hot road-selection encoding idea #6 (`foeopt/minroads.py`) already found
+memory-catastrophic at real-city scale. So this idea would have inherited idea #6's fatal flaw on
+top of not being supported by the solver at all -- a second, independent reason not to pursue it.
+**The one actually-supported adjacent mechanism (`AddHint()`, transferring a sibling pattern's
+solved positions as a hint for the next pattern at the same k) was not built or tested** --
+idea #2 already found hints (from an external classical-packer solution, a different source but
+the same mechanism) reproducibly make the walk *worse* (`tasks/lessons.md` 2026-07-16), which is
+a strong, directly relevant prior against a same-mechanism variant helping here. Building and
+testing it anyway, purely to re-confirm a strong existing prior with a different hint *source*,
+would not be measure-first discipline -- reported as a considered-but-not-pursued follow-up
+rather than built.
+**Verdict: closed as infeasible by design, not by experiment.** No code, no toy gate, no A/B --
+the premise doesn't hold, confirmed from the tool's own lead maintainer across two independent,
+directly-on-point sources. This is the cheapest possible closure this session produced: a null
+result reached entirely through research, at zero compute cost, rather than through a diagnostic
+run.
+**This closes `next-things-to-try.md` in its entirety.** Every item (#1-9) has now been tried,
+tested, or (for #9 alone) researched to a decisive close. Final scoreboard: one clear win (#5's
+cap=24 hybrid follow-up, 106 roads), one mixed result (#10 stub priority), one small reproducible
+speed win (#7 concurrent k-levels), one permanent zero-risk tightening kept unconditionally (#4's
+prefilter bound), and the rest (#1, #2, #3, #5-as-originally-proposed, #6, #8, #9) negative or
+null. The project's best validated result remains **102 roads** (plain comb family, no levers),
+achieved early in this line and never beaten by any of the eight subsequent ideas tested against
+it.
