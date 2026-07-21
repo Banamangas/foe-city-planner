@@ -1571,3 +1571,57 @@ harmless, opt-in-only primitive (zero risk, zero behavior change by default) in 
 more targeted parameter is worth trying, but this closes next-things-to-try.md item #8 and,
 with it, every item in the document except #9 (assumption-based incremental solving, the one
 remaining unexplored Speed-tier idea).
+
+## next-things-to-try #9: assumption-based incremental solving -- CP-SAT doesn't support it, confirmed by the maintainer, closed with zero code (2026-07-21)
+**Setup:** the last item in the document. Backlog: "Patterns at one k share region + building set;
+only the road skeleton differs. Explore CP-SAT assumptions / clause reuse to amortize solving
+across a level's patterns." Unlike every other idea this session, checked the *premise* against
+the real solver capability before writing any code or entering plan mode -- if the underlying
+mechanism doesn't exist, no model redesign or toy-scale gate can rescue it.
+**What exists in the API:** `CpModel.add_assumption(s)` and `CpSolver.sufficient_assumptions_for_infeasibility()`
+are real, present methods (confirmed by inspecting the installed ortools 9.15.6755 package
+directly). But their purpose is **minimal-unsatisfiable-subset (MUS) extraction within a single
+`Solve()` call** -- "which of these assumed-true literals, if I could drop some, would let the
+rest be jointly feasible" -- not carrying learned clauses or search-tree state *across* separate
+`Solve()` calls the way incremental SAT solvers with assumption interfaces classically do.
+**Confirmed authoritatively, not guessed:** GitHub issue google/or-tools#2014 ("Incremental
+solving using CP-SAT solver," filed 2020, closed 2021-12-07) is exactly this feature request.
+Laurent Perron (CP-SAT's lead maintainer) closed it with **"no plan for more than `AddHint()`"**
+-- i.e. the solution-hint mechanism (already used in this codebase for `hints=`/`stub_priority=`)
+is, and is intended to remain, the *only* supported way to carry information from one solve to
+another; there is no clause-database or search-tree reuse across calls. A separate
+`or-tools-discuss` thread specifically asking about assumptions for this purpose got the same
+answer from Perron directly: real assumption-based incremental solving "will not happen soon" and
+early attempts to force it (`ResetAndSolveWithGivenAssumptions()`) crashed the SAT propagation
+layer, "not designed for this use case." Searched for anything more recent superseding this --
+found nothing (no evidence this changed by the 9.15.x version installed here or any 2025 release
+note).
+**Why this matters for this specific idea, not just as a general limitation:** even if CP-SAT DID
+support cross-call reuse, achieving it here would require restructuring `probe()`'s model so road
+cells are themselves boolean *variables* that differ only in their *assumed* values between
+patterns (today they're baked directly into each building's `AddAllowedAssignments` candidate
+list, which differs in *structure*, not just assumed truth values, between patterns) -- i.e. the
+same one-hot road-selection encoding idea #6 (`foeopt/minroads.py`) already found
+memory-catastrophic at real-city scale. So this idea would have inherited idea #6's fatal flaw on
+top of not being supported by the solver at all -- a second, independent reason not to pursue it.
+**The one actually-supported adjacent mechanism (`AddHint()`, transferring a sibling pattern's
+solved positions as a hint for the next pattern at the same k) was not built or tested** --
+idea #2 already found hints (from an external classical-packer solution, a different source but
+the same mechanism) reproducibly make the walk *worse* (`tasks/lessons.md` 2026-07-16), which is
+a strong, directly relevant prior against a same-mechanism variant helping here. Building and
+testing it anyway, purely to re-confirm a strong existing prior with a different hint *source*,
+would not be measure-first discipline -- reported as a considered-but-not-pursued follow-up
+rather than built.
+**Verdict: closed as infeasible by design, not by experiment.** No code, no toy gate, no A/B --
+the premise doesn't hold, confirmed from the tool's own lead maintainer across two independent,
+directly-on-point sources. This is the cheapest possible closure this session produced: a null
+result reached entirely through research, at zero compute cost, rather than through a diagnostic
+run.
+**This closes `next-things-to-try.md` in its entirety.** Every item (#1-9) has now been tried,
+tested, or (for #9 alone) researched to a decisive close. Final scoreboard: one clear win (#5's
+cap=24 hybrid follow-up, 106 roads), one mixed result (#10 stub priority), one small reproducible
+speed win (#7 concurrent k-levels), one permanent zero-risk tightening kept unconditionally (#4's
+prefilter bound), and the rest (#1, #2, #3, #5-as-originally-proposed, #6, #8, #9) negative or
+null. The project's best validated result remains **102 roads** (plain comb family, no levers),
+achieved early in this line and never beaten by any of the eight subsequent ideas tested against
+it.

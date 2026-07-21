@@ -49,8 +49,20 @@ parameter portfolio, assumption-based incremental solving) remain the only untes
 see item 8 below and `tasks/lessons.md` 2026-07-20/21. Useful side-finding: CP-SAT's parallel
 portfolio isn't perfectly reproducible run-to-run even with a fixed seed (a no-override control
 arm itself flipped 1/20 samples), which sets a real noise floor — none of the 5 candidate
-strategies cleared it. **Every item in this document is now closed except #9** (assumption-based
-incremental solving across a level), the last unexplored idea.
+strategies cleared it.
+
+**Update 2026-07-21 (final): this document is closed in its entirety.** #9 (assumption-based
+incremental solving) closed the same day — infeasible by design, not by experiment: CP-SAT has no
+support for reusing learned clauses/search state across separate `Solve()` calls, confirmed
+directly by the lead maintainer (GitHub issue google/or-tools#2014, closed with "no plan for more
+than `AddHint()`"), so no code was written. See item 9 below and `tasks/lessons.md` 2026-07-21.
+**Every item #1-9 has now been tried, tested, or (uniquely for #9) researched to a decisive
+close.** Final scoreboard: one clear win (#5's cap=24 hybrid, 106 roads), one mixed result (#10
+stub priority), one small reproducible speed win (#7 concurrent k-levels), one permanent
+zero-risk tightening kept unconditionally (#4's prefilter bound), and the rest negative or null
+(#1, #2, #3, #5-as-originally-proposed, #6, #8, #9). **The project's best validated result remains
+102 roads** (plain comb family, no levers) — never beaten by any of the eight ideas tested against
+it since.
 
 ## Cheapest — reuse existing infra (hours)
 
@@ -163,9 +175,22 @@ incremental solving across a level), the last unexplored idea.
    frontier is genuinely hard for CP-SAT at this problem size, not a strategy artifact. Full
    details: `tasks/lessons.md` 2026-07-20/21 entry.
 
-9. **Assumption-based incremental solving across a level.** Patterns at one k share region +
-   building set; only the road skeleton differs. Explore CP-SAT assumptions / clause reuse to
-   amortize solving across a level's patterns.
+9. ~~**Assumption-based incremental solving across a level.**~~ **CLOSED 2026-07-21 — infeasible
+   by design, not by experiment; zero code needed.** Checked the premise against the real solver
+   before building anything: CP-SAT's `add_assumptions()`/`sufficient_assumptions_for_infeasibility()`
+   exist but are for minimal-unsatisfiable-subset extraction *within* one `Solve()` call, not
+   reusing learned clauses/search state *across* calls. Confirmed authoritatively — GitHub issue
+   google/or-tools#2014 (filed 2020) was closed by CP-SAT's lead maintainer with **"no plan for
+   more than `AddHint()`"**; a separate or-tools-discuss thread asking specifically about
+   assumptions for this purpose got the same answer ("will not happen soon," early attempts
+   crashed the SAT propagation layer). No evidence this has changed since. Also: even if
+   supported, achieving it here would require the same one-hot road-selection encoding idea #6
+   (`foeopt/minroads.py`) already found memory-catastrophic at real-city scale — a second,
+   independent reason not to pursue it. The one actually-supported adjacent mechanism
+   (`AddHint()`, transferring a sibling pattern's solution as a hint) wasn't built or tested since
+   idea #2 already found hints reproducibly *hurt* the walk from a different source — a strong
+   prior against a same-mechanism variant, not worth spending compute to re-confirm. Full details:
+   `tasks/lessons.md` 2026-07-21 entry.
 
 ## Follow-ups raised during the work above
 
