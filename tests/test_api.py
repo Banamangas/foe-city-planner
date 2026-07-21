@@ -76,6 +76,51 @@ def test_api_optimize_without_load_returns_400(client):
     assert "error" in r.get_json()
 
 
+def test_api_optimize_defaults_to_validated_worker_config(client, monkeypatch):
+    """/api/optimize's defaults must match this session's validated config
+    (tasks/lessons.md 2026-07-19/20 + 2026-07-20/21): workers=6/probe_workers=2
+    (not 16 total CP-SAT threads, which reproducibly regresses the walk via
+    contention) and concurrent_levels=4 (a reproducible, no-downside speed
+    win) -- not silently left at the old, untested workers=4/probe_workers=4
+    defaults."""
+    import webapp.app as app_mod
+    captured = []
+    def spy_submit(self, layout, **kwargs):
+        captured.append(kwargs)
+        return "fake-job-id"
+    monkeypatch.setattr(app_mod.JobManager, "submit", spy_submit)
+
+    r_load = client.post("/api/load", json=_combined_payload())
+    city_id = r_load.get_json()["city_id"]
+    r = client.post("/api/optimize", json={"city_id": city_id, "time_box": 1.0})
+    assert r.status_code == 200
+    assert captured, "JobManager.submit was never called"
+    assert captured[0]["workers"] == 6
+    assert captured[0]["probe_workers"] == 2
+    assert captured[0]["concurrent_levels"] == 4
+
+
+def test_api_optimize_worker_config_still_overridable(client, monkeypatch):
+    """Explicit request params must still override the new defaults."""
+    import webapp.app as app_mod
+    captured = []
+    def spy_submit(self, layout, **kwargs):
+        captured.append(kwargs)
+        return "fake-job-id"
+    monkeypatch.setattr(app_mod.JobManager, "submit", spy_submit)
+
+    r_load = client.post("/api/load", json=_combined_payload())
+    city_id = r_load.get_json()["city_id"]
+    r = client.post("/api/optimize", json={
+        "city_id": city_id, "time_box": 1.0,
+        "workers": 8, "probe_workers": 1, "concurrent_levels": 1,
+    })
+    assert r.status_code == 200
+    assert captured[0]["workers"] == 8
+    assert captured[0]["probe_workers"] == 1
+    assert captured[0]["concurrent_levels"] == 1
+
+
 def test_api_stop_unknown_job(client):
     r = client.post("/api/stop/nonexistent")
     assert r.status_code == 404

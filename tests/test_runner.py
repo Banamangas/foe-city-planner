@@ -67,3 +67,57 @@ def test_job_manager_pop_improvement_returns_none_when_empty():
 def test_job_manager_unknown_job_status():
     jobs = JobManager()
     assert jobs.status("nonexistent")["state"] == "error"
+
+
+def test_job_manager_submit_passes_concurrent_levels_through(monkeypatch):
+    """concurrent_levels must reach RoadsFirstSearch -- the one lever this
+    session's next-things-to-try sweep found to be a reproducible, no-downside
+    speed win (tasks/lessons.md 2026-07-19/20), so production should be able
+    to use it."""
+    import webapp.runner as runner_mod
+    captured = []
+
+    class FakeSearch:
+        def __init__(self, layout, **kwargs):
+            captured.append(kwargs)
+
+        def run(self, on_improvement=None, on_status=None, should_stop=None):
+            return {"verdict": "DONE", "results": {}}
+
+    monkeypatch.setattr(runner_mod, "RoadsFirstSearch", FakeSearch)
+    lay = _tiny_layout()
+    jobs = JobManager()
+    jid = jobs.submit(lay, time_box=1.0, patterns=5, probe_limit=1.0, workers=1,
+                      concurrent_levels=4)
+    for _ in range(300):
+        if jobs.is_done(jid):
+            break
+        time.sleep(0.05)
+    assert captured, "RoadsFirstSearch was never constructed"
+    assert captured[0]["concurrent_levels"] == 4
+
+
+def test_job_manager_submit_defaults_concurrent_levels_to_1(monkeypatch):
+    """Omitting concurrent_levels must not silently change behavior for
+    existing callers -- default stays 1, matching RoadsFirstSearch's own
+    backward-compatible default."""
+    import webapp.runner as runner_mod
+    captured = []
+
+    class FakeSearch:
+        def __init__(self, layout, **kwargs):
+            captured.append(kwargs)
+
+        def run(self, on_improvement=None, on_status=None, should_stop=None):
+            return {"verdict": "DONE", "results": {}}
+
+    monkeypatch.setattr(runner_mod, "RoadsFirstSearch", FakeSearch)
+    lay = _tiny_layout()
+    jobs = JobManager()
+    jid = jobs.submit(lay, time_box=1.0, patterns=5, probe_limit=1.0, workers=1)
+    for _ in range(300):
+        if jobs.is_done(jid):
+            break
+        time.sleep(0.05)
+    assert captured
+    assert captured[0]["concurrent_levels"] == 1
