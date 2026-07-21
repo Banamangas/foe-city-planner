@@ -44,3 +44,11 @@ def test_verdict_control_comb_excluded_from_richer_tally():
     rows = [_row("comb", "UNKNOWN"), _row("comb", "UNKNOWN"), _row("lane", "UNSAT")]
     verdict, _ = mod.classify_verdict(rows)
     assert verdict == "FEASIBILITY_WALL"     # richer = 1 lane UNSAT, 0 unknown
+
+
+def test_verdict_tie_at_floor_is_not_a_win():
+    # achieved == floor ties the best, does not BEAT it -> not BREAK_FLOOR
+    # (guards the win condition against a `<` -> `<=` regression).
+    rows = [_row("lane", "SAT", achieved=102, legal=True), _row("lane", "UNSAT")]
+    verdict, _ = mod.classify_verdict(rows)
+    assert verdict == "FEASIBILITY_WALL"
