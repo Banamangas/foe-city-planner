@@ -4,9 +4,9 @@ from foeopt.validate import is_valid
 from foeopt.exact_router import exact_route
 
 
-def _b(eid, x, y, w, l, *, road=False, th=False):
+def _b(eid, x, y, w, l, *, road=False, th=False, level=1):
     return Building(eid, f"c{eid}", "main_building" if th else "g",
-                    Footprint(x, y, w, l), road, 1, th, None, None, f"b{eid}")
+                    Footprint(x, y, w, l), road, level, th, None, None, f"b{eid}")
 
 
 def _layout_single():
@@ -58,3 +58,16 @@ def test_exact_uncoverable_consumer():
     res = exact_route(Layout(region, [th, c], th, {}), time_limit=10)
     assert res.status == "UNCOVERABLE"
     assert res.roads is None
+
+
+def test_exact_post_assigns_max_road_level_to_shared_cell():
+    # two consumers of different road_level share the unique cover cell (1,2);
+    # its assigned level must be the MAX (2), not last-write or the default 1.
+    region = Region(frozenset((x, y) for x in range(3) for y in range(3)))
+    th = _b(1, 1, 0, 1, 1, th=True)
+    c1 = _b(2, 0, 2, 1, 1, road=True, level=1)
+    c2 = _b(3, 2, 2, 1, 1, road=True, level=2)
+    res = exact_route(Layout(region, [th, c1, c2], th, {}), time_limit=10)
+    assert res.status == "OPTIMAL"
+    assert res.roads[(1, 2)] == 2              # shared cover cell -> max(1, 2)
+    assert res.roads[(1, 1)] == 1              # connector, adjacent to no consumer
