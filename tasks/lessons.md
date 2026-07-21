@@ -1625,3 +1625,58 @@ prefilter bound), and the rest (#1, #2, #3, #5-as-originally-proposed, #6, #8, #
 null. The project's best validated result remains **102 roads** (plain comb family, no levers),
 achieved early in this line and never beaten by any of the eight subsequent ideas tested against
 it.
+
+## Exact fixed-placement router — Stage 0 (2026-07-21)
+
+**Verdict: route() is near-optimal for fixed placement — MEASURED, not assumed. The exact
+router does NOT beat 102; a marginal 1-road slack exists on 1/11 layouts. Near-null for the
+goal (beat 102); kept as a tested reference + a cheap never-hurts opt-in polish.**
+
+The assumption "route() is already near-optimal for fixed placement" (2026-06-23 attempt #6)
+was asserted but never measured. Built an exact router — `foeopt/exact_router.py`, minimum
+connected road-cover via CP-SAT + single-commodity flow (the tractable slice of
+`foeopt/minroads.py` with placement fixed: no rectangle-placement variables) — and compared
+its proven optimum to `route()` on every darkzig best-k layout.
+Harness `scripts/exp_exact_router.py`; command
+`uv run python scripts/exp_exact_router.py darkzig.json output/roads-first/best-k*.json --time-limit 60`.
+
+**Results (11 darkzig best-k layouts, achieved 102–120):**
+
+| layout | route() | exact (all proven OPTIMAL) | slack | solve |
+|---|---|---|---|---|
+| best-k110-a102 | 102 | 102 | 0 | 0.03s |
+| best-k111-a102 | 102 | 102 | 0 | 0.04s |
+| best-k115-a105 | 105 | 105 | 0 | 0.03s |
+| best-k115-a107 | 107 | 107 | 0 | 0.03s |
+| best-k119-a108 | 108 | 108 | 0 | 0.04s |
+| **best-k119-a110** | **110** | **109** | **1** | 0.07s |
+| best-k119-a112 | 112 | 112 | 0 | 0.04s |
+| best-k123-a109 | 109 | 109 | 0 | 0.03s |
+| best-k123-a111 | 111 | 111 | 0 | 0.03s |
+| best-k123-a115 | 115 | 115 | 0 | 0.02s |
+| best-k127-a120 | 120 | 120 | 0 | 0.07s |
+
+- **10 of 11 layouts: exact == route(), proven optimal.** route()'s greedy SPH +
+  articulation-prune hits the global minimum for the fixed placement.
+- **1 of 11 (best-k119-a110): 1 road of slack** (110 → 109). route() is not *perfectly*
+  optimal, but the gap is a single road on a non-best layout.
+- **The 102 layout is already route()-optimal (slack 0)** → the exact router does **not** beat
+  the all-time best. The lone win (110 → 109) is still above 102.
+- **Trivially tractable: every solve 0.02–0.07s.** Tractability was never the question — the
+  fixed-placement model is tiny (~100–270 free cells). An exact router is a viable drop-in.
+
+**Gate.** The pre-committed gate ("OPTIMAL slack ≥ 1 → advance") is met by the *letter* (1
+layout, 1 road), but the *substance* is a near-null for the goal: route() is near-optimal, the
+exact router doesn't beat 102, and a 1-road-on-9%-of-layouts gain doesn't justify a full
+production wiring on its own.
+
+**Strategic conclusion.** route() is **not** where the roads are hiding — the darkzig road
+count is limited by placement/skeleton, not by route()'s greediness. This settles a
+load-bearing assumption with hard data and redirects future effort toward the
+placement/skeleton levers. `foeopt/exact_router.py` is kept as a tested reference and a cheap
+never-hurts opt-in polish (`res.roads if res.optimal else route()`), available should a layout
+ever carry slack, but it is not a path below 102.
+
+**Excluded:** `best-k93/94/96` (achieved 86–90) are a *different* 89-building city (1/89 entity
+overlap with darkzig) — `KeyError` on reconstruct, correctly rejected; their counts are
+unrelated to darkzig. Assets: `foeopt/exact_router.py` (5 tests), `scripts/exp_exact_router.py`.
