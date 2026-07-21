@@ -1680,3 +1680,75 @@ ever carry slack, but it is not a path below 102.
 **Excluded:** `best-k93/94/96` (achieved 86–90) are a *different* 89-building city (1/89 entity
 overlap with darkzig) — `KeyError` on reconstruct, correctly rejected; their counts are
 unrelated to darkzig. Assets: `foeopt/exact_router.py` (5 tests), `scripts/exp_exact_router.py`.
+## Roads-first placement objective — Stage 0 correlation study (2026-07-21)
+
+**Verdict: the oracle_gap is REAL, but no proxy captures it → do NOT advance to Stage 1
+with P1–P4.** Per the pre-committed Stage-0 gate (spec
+`docs/superpowers/specs/2026-07-21-roads-first-placement-objective-design.md` §5),
+documented and closed before any CP-SAT objective code. The measure-first gate did its
+job: it caught that the four natural placement proxies don't predict route()'s road count —
+one (P1) is actively counterproductive — so an objective built on them would have been
+built on sand (and P1 would have made results *worse*).
+
+**Question.** The roads-first probe returns the *first* feasible placement; route() then
+rebuilds the road network on it. Does a better placement on the same skeleton route lower,
+and can a placement-level proxy steer CP-SAT toward it?
+
+**Method (after a methodology fix — see below).** Reuse the 34 known-SAT skeletons in
+`output/corpus/darkzig/instances.jsonl`; for each, collect distinct placements by re-running
+`probe()` under `random_seed` 0–7 (single-worker, no objective — the real first-feasible
+model); score every placement with route() and the four proxies (`foeopt/placement_proxies.py`).
+22 of 34 skeletons yielded ≥2 distinct placements. Harness: `scripts/exp_placement_objective.py`;
+raw: `output/stage0-placement.json`.
+
+**Results (22 skeletons, k 110–127).**
+- **mean_oracle_gap = 4.77 roads (max 19); frontier k≤118: 5.0 (n=3, underpowered).**
+  Placement choice genuinely matters — the first-feasible placement leaves ~5 roads on the
+  table on average, and the gap persists at the tight frontier. An *oracle* objective would
+  help; the headroom is real (far above the 1.0 KILL floor).
+- **No proxy predicts the good placement.** Gate needs mean rank-corr ≥ 0.4 AND mean realized
+  reduction ≥ 50% of the gap (≥ 2.39):
+
+  | proxy | mean Spearman | mean realized reduction |
+  |---|---|---|
+  | P1 touched cells | **−0.279** | 0.91 |
+  | P2 subtree | −0.05 | 1.09 |
+  | P3 double-loaded | 0.15 | 1.68 |
+  | P4 same-size | 0.16 | 0.73 |
+
+  Every proxy fails both bars. P3 is closest (captures ~35% of the gap) but its correlation
+  (0.15) is far below 0.4. **P1 is negatively correlated**: minimizing the road cells
+  consumers touch (more skeleton-sharing) reliably picks *worse* placements.
+
+**Gate arithmetic.** mean_oracle_gap 4.77 ≥ 1.0 → not killed. No proxy clears rank-corr ≥ 0.4
+(best 0.16) or realized ≥ 2.39 (best 1.68). → spec's third branch: **large gap, no qualifying
+proxy → document, stop before Stage 1.**
+
+**Mechanism (best read).** route() *discards the skeleton* and rebuilds the network from the
+consumer placement. So the three skeleton-relative proxies (P1/P2/P3 — sharing / subtree /
+double-loading measured against `pattern.roads`) score structure route() then throws away;
+the one placement-intrinsic proxy (P4, same-size alignment, no skeleton reference) is the
+least-bad (weak +0.16). Read: a useful placement objective must predict route()'s output from
+the *placement geometry itself*, not from its relationship to the scaffold skeleton — or it
+must optimize route() directly (which reintroduces the routing cost the two-stage split exists
+to avoid). This is the same proxy-divergence that sank four prior packer heuristics
+(2026-06-22), caught this time *before* the build.
+
+**Not disproven, but not these proxies.** The ~5-road headroom is real; reviving the lever
+needs a placement-intrinsic proxy that actually correlates with route() (or a route()-in-the-loop
+objective) — a new spec, not this build. Caveat: `first_roads` here is seed-0's placement (an
+arbitrary first-feasible); the production multi-worker probe may already start better, so the
+gap *vs the real baseline* could be smaller — but the proxy failure is a rank correlation,
+independent of the baseline, so "don't advance" is robust.
+
+**Methodology defect found + fixed (reusable lesson).** Stage 0 as originally planned (randomly
+generate skeletons + `enumerate_all_solutions` pool) does not work at real scale: feasible
+skeletons are ~2% at the frontier (34 SAT / 1459 corpus probes), so random sampling returns 0
+usable skeletons, and `enumerate_all_solutions` + single worker is too slow to first-solution on
+a 63-rectangle packing. The toy selftest passed anyway (trivial instance), hiding it. Fix: reuse
+corpus SATs + multi-seed `probe()`. **Lesson: when a study needs feasible instances of a problem
+whose feasibility is rare, reuse the corpus of known-feasible ones — don't sample blind.**
+
+**Assets kept.** `foeopt/placement_proxies.py` (four proxies, unit-tested) and
+`scripts/exp_placement_objective.py` (corpus-driven correlation harness) stay as reference
+tooling — any future placement-proxy idea A/Bs through the same harness.
