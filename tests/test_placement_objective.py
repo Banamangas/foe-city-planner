@@ -19,3 +19,23 @@ def test_spearman_handles_ties_without_crashing():
 
 def test_spearman_too_short_is_zero():
     assert mod.spearman([1], [2]) == 0.0
+
+
+def test_load_sat_skeletons_filters_and_reconstructs(tmp_path):
+    import json
+    d = tmp_path / "corpus"
+    d.mkdir()
+    (d / "manifest.json").write_text(
+        json.dumps({"city_id": "x", "region": [[0, 0]], "buildings": []}))
+    recs = [
+        {"k": 10, "status": "UNSAT", "secs": 1, "th": [0, 0, 2, 2],
+         "roads": [[2, 0]], "pos": None},
+        {"k": 12, "status": "SAT", "secs": 1, "th": [3, 4, 2, 2],
+         "roads": [[5, 5], [5, 6]], "pos": {"1": [0, 0, 1, 1]}},
+    ]
+    (d / "instances.jsonl").write_text("\n".join(json.dumps(r) for r in recs))
+    pats = mod.load_sat_skeletons(str(d))
+    assert len(pats) == 1              # UNSAT record filtered out
+    assert pats[0].params["k"] == 12
+    assert (pats[0].th.x, pats[0].th.width) == (3, 2)
+    assert pats[0].roads == frozenset({(5, 5), (5, 6)})
