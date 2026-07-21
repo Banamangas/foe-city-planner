@@ -31,6 +31,12 @@ def test_touched_cells_detects_sharing():
     assert proxy_touched_cells(PAT, {1: (1, 2, 1, 1), 2: (3, 2, 1, 1)}) == 1
 
 
+def test_road_contacts_handles_non_square_footprint():
+    # defense-in-depth: a 2x1 (non-square) consumer flows through border_cells()
+    # with (w, l) in canonical order -> guards the repo's known w/l-swap bug class.
+    assert road_contacts(PAT, {1: (0, 2, 2, 1)}) == {(2, 2): {1}}
+
+
 def test_subtree_adds_connectors_to_townhall():
     # touched cells are (2,2) and (2,3); the only TH-root is (2,0) (adj to (1,0)),
     # so the subtree must include connectors (2,1)+(2,0): {(2,0),(2,1),(2,2),(2,3)} = 4.

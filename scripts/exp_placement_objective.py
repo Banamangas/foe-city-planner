@@ -147,6 +147,9 @@ def score_skeleton(layout: Layout, pattern, n_seeds: int, probe_limit: float) ->
            "oracle_gap": first_roads - min(roads), "proxies": {}}
     for name, _, _ in PROXIES:
         col = [vals[name] for _, vals in rows]
+        # ties (common for low-resolution proxies like P4) break to the earliest
+        # seed, so realized_reduction is conservative: biased toward the null, never
+        # a false "advance".
         best_idx = min(range(len(rows)), key=lambda i: col[i])
         out["proxies"][name] = {
             "spearman": round(spearman(col, roads), 3),
