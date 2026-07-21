@@ -28,7 +28,7 @@ from foeopt.loader import load_layout
 from foeopt.model import Layout
 from foeopt.roads_first import (
     Pattern, generate_patterns, prefilter, probe, validate,
-    _check_pattern, RoadsFirstSearch,
+    _check_pattern, RoadsFirstSearch, _pattern_generator,
 )
 
 # Worker-process globals set by _worker_init (sent once per worker, not per task).
@@ -158,6 +158,12 @@ def main(argv=None):
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--probe-workers", type=int, default=4)
     p.add_argument("--corpus", default=None, metavar="DIR")
+    p.add_argument("--symmetry-breaking", action="store_true")
+    p.add_argument("--warm-start", action="store_true")
+    p.add_argument("--warm-start-budget", type=float, default=30.0)
+    p.add_argument("--pattern-family", choices=("comb", "lane"), default="comb")
+    p.add_argument("--stub-priority", action="store_true")
+    p.add_argument("--lane-cap", type=int, default=None)
     args = p.parse_args(argv)
     if args.smoke:
         args.patterns = 20
@@ -173,8 +179,12 @@ def main(argv=None):
         th = layout.townhall.footprint
         consumers = layout.road_needing()
         rng = random.Random(args.seed)
-        pats = generate_patterns(region, th.width, th.length,
-                                 args.dump_patterns, rng, args.patterns)
+        gen_fn = _pattern_generator(args.pattern_family)
+        gen_kwargs = {"th_mode": args.th_anchors}
+        if args.pattern_family == "lane":
+            gen_kwargs["max_lane_len"] = args.lane_cap
+        pats = gen_fn(region, th.width, th.length,
+                      args.dump_patterns, rng, args.patterns, **gen_kwargs)
         kept = 0
         for pat in pats:
             _check_pattern(pat, region, args.dump_patterns)
@@ -190,6 +200,11 @@ def main(argv=None):
     layout = load_layout(args.city)
     out_dir = pathlib.Path("output/roads-first")
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    hint_layout = None
+    if args.warm_start:
+        from foeopt.packer import repack
+        hint_layout = repack(layout, budget_seconds=args.warm_start_budget).layout
 
     def on_status(k, status, _, _2):
         print(f"  k={k}: {status}", flush=True)
@@ -218,6 +233,11 @@ def main(argv=None):
         th_anchors=args.th_anchors,
         k_start=args.k_start,
         corpus_dir=args.corpus,
+        symmetry_breaking=args.symmetry_breaking,
+        hint_layout=hint_layout,
+        pattern_family=args.pattern_family,
+        stub_priority=args.stub_priority,
+        lane_cap=args.lane_cap,
     ).run(on_improvement=on_improvement, on_status=on_status)
     print(json.dumps({k: v for k, v in res.items() if k != "results"}, indent=1))
     per_level = {k: v[0] + (f" achieved={v[1]}" if v[1] is not None else "")

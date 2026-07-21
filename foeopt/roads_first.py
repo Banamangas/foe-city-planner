@@ -172,6 +172,105 @@ def generate_patterns(region: set[Cell], tw: int, tl: int, k: int,
     return out[:max_patterns]
 
 
+def _th_anchor_cell(th: Footprint, side: str) -> Cell:
+    if side == "top":
+        return (th.x, th.y - 1)
+    if side == "bottom":
+        return (th.x, th.y + th.length)
+    if side == "left":
+        return (th.x - 1, th.y)
+    return (th.x + th.width, th.y)
+
+
+def generate_lane_patterns(region: set[Cell], tw: int, tl: int, k: int,
+                           rng: random.Random, max_patterns: int,
+                           th_mode: str = "coarse",
+                           max_lane_len: int | None = None) -> list[Pattern]:
+    """Parallel double-loaded-lane family: unlike generate_patterns's comb
+    (single trunk consuming budget//2 regardless of need, short teeth), this
+    grows a *minimal* trunk -- only as long as needed to connect the TH to
+    the lane seeds on both sides of it along the trunk line -- then grows
+    full straight lanes from each seed, mirroring the user's hand-built
+    city's near-zero trunk overhead (memory/foe-layout-heuristics: 5
+    non-double-row cells out of 142).
+
+    `max_lane_len` (default None = unbounded, today's behavior) caps how far
+    a lane grows from its seed before stopping -- a hybrid dial between this
+    family's uncapped lanes (structurally efficient but harder for CP-SAT to
+    decide, per the idea #5 mechanism finding) and the comb family's short
+    teeth (easier to decide). Capping only bounds individual lane length; the
+    trunk and seed spacing are unaffected."""
+    out: list[Pattern] = []
+    seen: set[frozenset[Cell]] = set()
+    for th in th_anchor_candidates(region, tw, tl, mode=th_mode):
+        th_cells = th.cells()
+        reg = region
+        for side in ("top", "bottom", "left", "right"):
+            trunk_raw = [c for c in _trunk(reg, th, side) if c not in th_cells]
+            if not trunk_raw:
+                continue
+            anchor = _th_anchor_cell(th, side)
+            if anchor not in trunk_raw:
+                continue
+            anchor_idx = trunk_raw.index(anchor)
+            horiz = trunk_raw[0][1] == trunk_raw[-1][1]
+            for pitch in (5, 6, 7, 8, 9, 10, 11):
+                for use_stubs in (False, True):
+                    roads: set[Cell] = set()
+                    stubs = _stub_cells(reg, th, roads) if use_stubs else []
+                    budget = k - len(stubs)
+                    if budget < 1:
+                        continue
+                    pos_idxs = list(range(anchor_idx + pitch, len(trunk_raw), pitch))
+                    neg_idxs = list(range(anchor_idx - pitch, -1, -pitch))
+                    seed_idxs = sorted(pos_idxs + neg_idxs)
+                    if not seed_idxs:
+                        continue
+                    lo, hi = min(seed_idxs + [anchor_idx]), max(seed_idxs + [anchor_idx])
+                    trunk_used = trunk_raw[lo:hi + 1]
+                    roads |= set(trunk_used)
+                    remaining = budget - len(trunk_used)
+                    if remaining < 0:
+                        continue
+                    seeds = [trunk_raw[i] for i in seed_idxs]
+                    cand_dirs = [(0, -1), (0, 1)] if horiz else [(-1, 0), (1, 0)]
+                    fronts = [(s, d, 1) for s in seeds for d in cand_dirs]
+                    grown = True
+                    while remaining > 0 and grown:
+                        grown = False
+                        for j, (s, d, dist) in enumerate(fronts):
+                            if remaining == 0:
+                                break
+                            if max_lane_len is not None and dist > max_lane_len:
+                                continue
+                            c = (s[0] + d[0] * dist, s[1] + d[1] * dist)
+                            if c in reg and c not in roads and c not in th_cells:
+                                roads.add(c)
+                                fronts[j] = (s, d, dist + 1)
+                                remaining -= 1
+                                grown = True
+                    if remaining != 0:
+                        continue
+                    roads |= set(stubs)
+                    key = frozenset(roads)
+                    if len(key) != k or key in seen:
+                        continue
+                    seen.add(key)
+                    out.append(Pattern(th=th, roads=key, params={
+                        "th": (th.x, th.y), "side": side, "pitch": pitch,
+                        "stubs": use_stubs, "trunk_len": len(trunk_used),
+                        "max_lane_len": max_lane_len, "k": k}))
+    rng.shuffle(out)
+    return out[:max_patterns]
+
+
+def _pattern_generator(family: str):
+    # Resolved dynamically (not a frozen dict built at import time) so tests
+    # that monkeypatch module-level generate_patterns/generate_lane_patterns
+    # still take effect here.
+    return generate_lane_patterns if family == "lane" else generate_patterns
+
+
 def prefilter(pattern: Pattern, region: set[Cell],
               consumers: list[Building]) -> str | None:
     th_cells = pattern.th.cells()
@@ -179,8 +278,14 @@ def prefilter(pattern: Pattern, region: set[Cell],
     if area_needed + len(pattern.roads) > len(region) - len(th_cells):
         return "area"
     free = region - pattern.roads - th_cells
-    capacity = sum(3 for c in pattern.roads
-                   if any((c[0] + dx, c[1] + dy) in free for dx, dy in _ORTHO))
+    # Each road cell serves at most 3 consumers (bound_adjacency's argument:
+    # 4 orthogonal neighbors, at least 1 taken by road/TH connectivity) --
+    # but a specific cell may have fewer than 3 *actually* free neighbors
+    # once this pattern's own roads/TH occupy some of them, so cap by the
+    # real count instead of granting a flat 3 to any cell with >=1 free
+    # neighbor. Strictly tighter than the old flat-3 check, still sound.
+    capacity = sum(min(3, sum(1 for dx, dy in _ORTHO if (c[0] + dx, c[1] + dy) in free))
+                   for c in pattern.roads)
     if capacity < len(consumers):
         return "adjacency-capacity"
     return None
@@ -225,8 +330,85 @@ def _anchor_candidates(b: Building, region: set[Cell], blocked: set[Cell],
     return out
 
 
+def _add_symmetry_breaking(m, cand, xs, ys) -> None:
+    """Buildings sharing a footprint size are interchangeable in this model
+    (_anchor_candidates only looks at width/length), so the solver otherwise
+    explores every permutation of them as distinct symmetric solutions. Chain
+    a lexicographic (x, y) <= ordering across each size-group to collapse
+    that permutation symmetry to one representative assignment."""
+    groups: dict[tuple[int, int], list[int]] = {}
+    for i, (b, _) in enumerate(cand):
+        groups.setdefault((b.footprint.width, b.footprint.length), []).append(i)
+    for members in groups.values():
+        for a, b_idx in zip(members, members[1:]):
+            lt = m.NewBoolVar(f"symlt{a}_{b_idx}")
+            eq = m.NewBoolVar(f"symeq{a}_{b_idx}")
+            m.Add(xs[a] < xs[b_idx]).OnlyEnforceIf(lt)
+            m.Add(xs[a] >= xs[b_idx]).OnlyEnforceIf(lt.Not())
+            m.Add(xs[a] == xs[b_idx]).OnlyEnforceIf(eq)
+            m.Add(xs[a] != xs[b_idx]).OnlyEnforceIf(eq.Not())
+            m.AddBoolOr([lt, eq])
+            m.Add(ys[a] <= ys[b_idx]).OnlyEnforceIf(eq)
+
+
+def _nearest_opt(opts: list[tuple[int, int]], target: tuple[int, int]) -> tuple[int, int]:
+    tx, ty = target
+    return min(opts, key=lambda o: abs(o[0] - tx) + abs(o[1] - ty))
+
+
+def _th_stub_cells_in_pattern(th: Footprint, roads) -> list[Cell]:
+    """Which of the 4 candidate TH-flank cells (left/right x top/bottom row
+    of the TH footprint -- the two the user's expert city stubs off of,
+    each reaching load-3 "for free" via the TH edge) are actually road
+    cells in this pattern. Works for any pattern regardless of which
+    generator produced it or whether it used an explicit stub mechanism --
+    it just looks at the final road-cell set."""
+    out = []
+    for row in (th.y, th.y + th.length - 1):
+        for x in (th.x - 1, th.x + th.width):
+            c = (x, row)
+            if c in roads:
+                out.append(c)
+    return out
+
+
+def _stub_priority_hints(pattern: Pattern,
+                         cand: list[tuple[Building, list[tuple[int, int]]]]
+                         ) -> dict[int, tuple[int, int]]:
+    """Bias the largest buildings toward the TH-flank stub cells present in
+    this pattern -- up to 3 buildings per cell, matching the load-3 ceiling
+    a stub cell can serve. CP-SAT has no objective in this model, so without
+    a nudge it seats whichever building happens to fit there first,
+    regardless of size (memory/foe-layout-heuristics: the expert city
+    deliberately puts ~3 big buildings next to each TH stub)."""
+    stub_cells = _th_stub_cells_in_pattern(pattern.th, pattern.roads)
+    if not stub_cells:
+        return {}
+    hints: dict[int, tuple[int, int]] = {}
+    used: set[int] = set()
+    for c in stub_cells:
+        touching = []
+        for i, (b, opts) in enumerate(cand):
+            if i in used:
+                continue
+            w, l = b.footprint.width, b.footprint.length
+            for (x, y) in opts:
+                if c in Footprint(x, y, w, l).border_cells():
+                    touching.append((w * l, i, (x, y)))
+                    break
+        touching.sort(key=lambda t: t[0], reverse=True)
+        for _area, i, xy in touching[:3]:
+            hints[i] = xy
+            used.add(i)
+    return hints
+
+
 def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
-          *, probe_limit: float, probe_workers: int = 1) -> tuple[str, dict | None]:
+          *, probe_limit: float, probe_workers: int = 1,
+          symmetry_breaking: bool = False,
+          hints: dict[int, tuple[int, int]] | None = None,
+          stub_priority: bool = False,
+          solver_overrides: dict[str, object] | None = None) -> tuple[str, dict | None]:
     from ortools.sat.python import cp_model
 
     th_cells = set(pattern.th.cells())
@@ -237,6 +419,8 @@ def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
         if not opts:
             return ("UNSAT", None)
         cand.append((b, opts))
+
+    stub_hints = _stub_priority_hints(pattern, cand) if stub_priority else {}
 
     m = cp_model.CpModel()
     x0b, y0b, x1b, y1b = _bbox(region)
@@ -249,12 +433,25 @@ def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
         xiv.append(m.NewFixedSizeIntervalVar(x, w0, f"xi{i}"))
         yiv.append(m.NewFixedSizeIntervalVar(y, l0, f"yi{i}"))
         xs.append(x); ys.append(y)
+        if hints is not None and b.entity_id in hints:
+            hx, hy = _nearest_opt(opts, hints[b.entity_id])
+            m.AddHint(x, hx)
+            m.AddHint(y, hy)
+        elif i in stub_hints:
+            hx, hy = stub_hints[i]
+            m.AddHint(x, hx)
+            m.AddHint(y, hy)
     m.AddNoOverlap2D(xiv, yiv)
+    if symmetry_breaking:
+        _add_symmetry_breaking(m, cand, xs, ys)
 
     solver = cp_model.CpSolver()
     solver.parameters.num_search_workers = probe_workers
     solver.parameters.random_seed = 0
     solver.parameters.max_time_in_seconds = probe_limit
+    if solver_overrides:
+        for key, value in solver_overrides.items():
+            setattr(solver.parameters, key, value)
     st = solver.Solve(m)
     if st in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         pos = {}
@@ -309,13 +506,26 @@ def validate(layout_src: Layout, pattern: Pattern,
 _WORKER_LAYOUT: Layout | None = None
 _WORKER_PROBE_LIMIT: float = 30.0
 _WORKER_PROBE_WORKERS: int = 1
+_WORKER_SYMMETRY_BREAKING: bool = False
+_WORKER_HINTS: dict[int, tuple[int, int]] | None = None
+_WORKER_STUB_PRIORITY: bool = False
+_WORKER_SOLVER_OVERRIDES: dict[str, object] | None = None
 
 
-def _worker_init(layout: Layout, probe_limit: float, probe_workers: int) -> None:
+def _worker_init(layout: Layout, probe_limit: float, probe_workers: int,
+                 symmetry_breaking: bool = False, hints=None,
+                 stub_priority: bool = False,
+                 solver_overrides: dict[str, object] | None = None) -> None:
     global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS
+    global _WORKER_SYMMETRY_BREAKING, _WORKER_HINTS, _WORKER_STUB_PRIORITY
+    global _WORKER_SOLVER_OVERRIDES
     _WORKER_LAYOUT = layout
     _WORKER_PROBE_LIMIT = probe_limit
     _WORKER_PROBE_WORKERS = probe_workers
+    _WORKER_SYMMETRY_BREAKING = symmetry_breaking
+    _WORKER_HINTS = hints
+    _WORKER_STUB_PRIORITY = stub_priority
+    _WORKER_SOLVER_OVERRIDES = solver_overrides
 
 
 def _run_probe(payload: tuple) -> dict:
@@ -326,7 +536,11 @@ def _run_probe(payload: tuple) -> dict:
     t0 = time.monotonic()
     st, pos = probe(pat, region, consumers,
                    probe_limit=_WORKER_PROBE_LIMIT,
-                   probe_workers=_WORKER_PROBE_WORKERS)
+                   probe_workers=_WORKER_PROBE_WORKERS,
+                   symmetry_breaking=_WORKER_SYMMETRY_BREAKING,
+                   hints=_WORKER_HINTS,
+                   stub_priority=_WORKER_STUB_PRIORITY,
+                   solver_overrides=_WORKER_SOLVER_OVERRIDES)
     secs = round(time.monotonic() - t0, 1)
     if st != "SAT":
         return {"k": k, "params": pat.params, "status": st,
@@ -344,89 +558,135 @@ def _run_probe(payload: tuple) -> dict:
 
 def _run_probe_seq(payload: tuple) -> dict:
     global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS
-    pat, k, layout, probe_limit, probe_workers = payload
+    global _WORKER_SYMMETRY_BREAKING, _WORKER_HINTS, _WORKER_STUB_PRIORITY
+    global _WORKER_SOLVER_OVERRIDES
+    pat, k, layout, probe_limit, probe_workers, *rest = payload
     _WORKER_LAYOUT = layout
     _WORKER_PROBE_LIMIT = probe_limit
     _WORKER_PROBE_WORKERS = probe_workers
+    _WORKER_SYMMETRY_BREAKING = rest[0] if rest else False
+    _WORKER_HINTS = rest[1] if len(rest) > 1 else None
+    _WORKER_STUB_PRIORITY = rest[2] if len(rest) > 2 else False
+    _WORKER_SOLVER_OVERRIDES = rest[3] if len(rest) > 3 else None
     try:
         return _run_probe((pat, k, 0))
     finally:
         _WORKER_LAYOUT = None
 
-def _probe_level(layout, region, consumers, k, rng, params, log, pool=None,
-                 on_improvement=None, corpus=None, scorer=None, score_threshold=None) -> tuple[str, int | None]:
+def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=None,
+                        on_improvement=None, corpus=None, scorer=None,
+                        score_threshold=None) -> dict[int, tuple[str, int | None]]:
+    """Generate + probe several k-levels' patterns in one shared pool dispatch
+    instead of draining one level's ~200 patterns before the next level's are
+    even generated. `_run_probe`'s payload/result already carry `k`, so this
+    only changes dispatch/demux, not the worker-side probe logic.
+
+    Levels are generated in `ks` order against the *same* `rng` stream, so
+    pattern content for a given k is identical to what a sequential run of
+    `_probe_level` would have produced -- this is the determinism invariant
+    that makes batching a pure speed change, not a different search."""
     th = layout.townhall.footprint
     th_mode = getattr(params, "th_anchors", "coarse")
-    pats = generate_patterns(region, th.width, th.length, k, rng, params.patterns,
-                             th_mode=th_mode)
-    best_achieved = None
-    saw_nonproof_failure = False
-    order = 0
+    family = getattr(params, "pattern_family", "comb")
+    gen_fn = _pattern_generator(family)
 
-    def handle_result(result, pat):
-        nonlocal best_achieved, order, saw_nonproof_failure
-        order += 1
+    state: dict[int, dict] = {}
+    for k in ks:
+        gen_kwargs = {"th_mode": th_mode}
+        if family == "lane":
+            gen_kwargs["max_lane_len"] = getattr(params, "lane_cap", None)
+        pats = gen_fn(region, th.width, th.length, k, rng, params.patterns,
+                      **gen_kwargs)
+        surviving = []
+        for pat in pats:
+            reason = prefilter(pat, region, consumers)
+            if reason is not None:
+                log({"k": k, "params": pat.params, "status": "PREFILTERED",
+                     "reason": reason, "secs": 0.0, "order": 0})
+                continue
+            surviving.append(pat)
+        if scorer is not None and surviving:
+            scored = [(scorer(pat), pat) for pat in surviving]
+            if score_threshold is not None:
+                scored = [sp for sp in scored if sp[0] >= score_threshold]
+            scored.sort(key=lambda sp: sp[0], reverse=True)
+            surviving = [pat for _, pat in scored]
+        state[k] = {"pats": pats, "surviving": surviving, "best_achieved": None,
+                    "saw_nonproof_failure": False, "order": 0}
+
+    def handle_result(k, result, pat):
+        st = state[k]
+        st["order"] += 1
         status = result["status"]
         achieved = result["achieved"]
         log({"k": k, "params": pat.params, "status": status,
-             "achieved": achieved, "secs": result["secs"], "order": order})
+             "achieved": achieved, "secs": result["secs"], "order": st["order"]})
         if corpus is not None:
             corpus.record(k=k, roads=pat.roads, th=pat.th, status=status,
                           secs=result["secs"], pos=result.get("pos"))
         if status == "SAT":
             vlay = result["layout"]
-            if best_achieved is None or achieved < best_achieved:
-                best_achieved = achieved
+            if st["best_achieved"] is None or achieved < st["best_achieved"]:
+                st["best_achieved"] = achieved
                 if on_improvement is not None:
                     on_improvement(vlay, k, achieved)
         elif status in ("UNKNOWN", "ROUTE_FAIL", "INVALID", "SAT_FILLER_FAIL", "SAT_ROTATED"):
-            saw_nonproof_failure = True
-        if time.monotonic() > params.deadline:
-            return True
-        return False
+            st["saw_nonproof_failure"] = True
+        return time.monotonic() > params.deadline
 
-    surviving = []
-    for pat in pats:
-        reason = prefilter(pat, region, consumers)
-        if reason is not None:
-            log({"k": k, "params": pat.params, "status": "PREFILTERED",
-                 "reason": reason, "secs": 0.0, "order": 0})
-            continue
-        surviving.append(pat)
-
-    if scorer is not None and surviving:
-        scored = [(scorer(pat), pat) for pat in surviving]
-        if score_threshold is not None:
-            scored = [sp for sp in scored if sp[0] >= score_threshold]
-        scored.sort(key=lambda sp: sp[0], reverse=True)
-        surviving = [pat for _, pat in scored]
+    def classify(st):
+        if st["best_achieved"] is not None:
+            return ("FEASIBLE", st["best_achieved"])
+        if not st["pats"]:
+            return ("INCONCLUSIVE", None)
+        return ("INCONCLUSIVE" if st["saw_nonproof_failure"] else "INFEASIBLE", None)
 
     if pool is None:
-        for pat in surviving:
-            result = _run_probe_seq((pat, k, layout, params.probe_limit, params.probe_workers))
-            if handle_result(result, pat):
-                return ("INCONCLUSIVE" if best_achieved is None else "FEASIBLE", best_achieved)
+        for i, k in enumerate(ks):
+            interrupted = False
+            for pat in state[k]["surviving"]:
+                result = _run_probe_seq((pat, k, layout, params.probe_limit, params.probe_workers,
+                                         getattr(params, "symmetry_breaking", False),
+                                         getattr(params, "hints", None),
+                                         getattr(params, "stub_priority", False)))
+                if handle_result(k, result, pat):
+                    interrupted = True
+                    break
+            if interrupted:
+                out = {kk: classify(state[kk]) for kk in ks[:i]}
+                sb = state[k]["best_achieved"]
+                out[k] = ("INCONCLUSIVE" if sb is None else "FEASIBLE", sb)
+                for kk in ks[i + 1:]:
+                    out[kk] = ("INCONCLUSIVE", None)
+                return out
     else:
-        payloads = [(pat, k, idx) for idx, pat in enumerate(surviving)]
+        payloads = [(pat, k, idx) for k in ks for idx, pat in enumerate(state[k]["surviving"])]
         for result in pool.imap_unordered(_run_probe, payloads):
+            k = result["k"]
             idx = result["pat_index"]
-            pat = surviving[idx]
-            if handle_result(result, pat):
+            pat = state[k]["surviving"][idx]
+            if handle_result(k, result, pat):
                 pool.terminate()
                 break
 
-    if best_achieved is not None:
-        return ("FEASIBLE", best_achieved)
-    if not pats:
-        return ("INCONCLUSIVE", None)
-    return ("INCONCLUSIVE" if saw_nonproof_failure else "INFEASIBLE", None)
+    return {k: classify(state[k]) for k in ks}
+
+
+def _probe_level(layout, region, consumers, k, rng, params, log, pool=None,
+                 on_improvement=None, corpus=None, scorer=None, score_threshold=None) -> tuple[str, int | None]:
+    return _probe_levels_batch(layout, region, consumers, [k], rng, params, log, pool=pool,
+                               on_improvement=on_improvement, corpus=corpus,
+                               scorer=scorer, score_threshold=score_threshold)[k]
 
 
 class RoadsFirstSearch:
     def __init__(self, layout: Layout, *, time_box: float, patterns: int = 200,
                  probe_limit: float = 60.0, workers: int = 4,
                  probe_workers: int = 4, th_anchors: str = "full",
-                 k_start="auto", corpus_dir=None, scorer=None, score_threshold=None):
+                 k_start="auto", corpus_dir=None, scorer=None, score_threshold=None,
+                 symmetry_breaking: bool = False, hint_layout: Layout | None = None,
+                 pattern_family: str = "comb", stub_priority: bool = False,
+                 lane_cap: int | None = None, concurrent_levels: int = 1):
         self.layout = layout
         self.time_box = time_box
         self.patterns = patterns
@@ -438,6 +698,13 @@ class RoadsFirstSearch:
         self.corpus_dir = corpus_dir
         self.scorer = scorer
         self.score_threshold = score_threshold
+        self.symmetry_breaking = symmetry_breaking
+        self.hints = ({b.entity_id: (b.footprint.x, b.footprint.y) for b in hint_layout.buildings}
+                     if hint_layout is not None else None)
+        self.pattern_family = pattern_family
+        self.stub_priority = stub_priority
+        self.lane_cap = lane_cap
+        self.concurrent_levels = concurrent_levels
 
     def run(self, on_improvement=None, on_status=None, should_stop=None) -> dict:
         layout = self.layout
@@ -451,7 +718,8 @@ class RoadsFirstSearch:
             pool = multiprocessing.Pool(
                 self.workers,
                 initializer=_worker_init,
-                initargs=(layout, self.probe_limit, self.probe_workers))
+                initargs=(layout, self.probe_limit, self.probe_workers,
+                         self.symmetry_breaking, self.hints, self.stub_priority))
 
         corpus = None
 
@@ -461,6 +729,11 @@ class RoadsFirstSearch:
             probe_workers=self.probe_workers,
             deadline=deadline,
             th_anchors=self.th_anchors,
+            symmetry_breaking=self.symmetry_breaking,
+            hints=self.hints,
+            pattern_family=self.pattern_family,
+            stub_priority=self.stub_priority,
+            lane_cap=self.lane_cap,
         )
 
         results: dict[int, tuple[str, int | None]] = {}
@@ -480,6 +753,19 @@ class RoadsFirstSearch:
                     on_status(k, results[k][0], 0, 0)
             return results[k]
 
+        def levels(ks):
+            missing = [kk for kk in ks if kk not in results]
+            if missing:
+                batch = _probe_levels_batch(layout, region, consumers, missing, rng,
+                                            params, lambda r: None, pool=pool,
+                                            on_improvement=on_improvement, corpus=corpus,
+                                            scorer=self.scorer, score_threshold=self.score_threshold)
+                for kk, res in batch.items():
+                    results[kk] = res
+                    if on_status is not None:
+                        on_status(kk, res[0], 0, 0)
+            return {kk: results[kk] for kk in ks}
+
         try:
             if self.corpus_dir:
                 corpus = CorpusWriter(self.corpus_dir, layout)
@@ -494,29 +780,68 @@ class RoadsFirstSearch:
             if st != "FEASIBLE":
                 k_max = len(layout.region.cells) - sum(
                     b.footprint.width * b.footprint.length for b in layout.buildings)
-                while st != "FEASIBLE" and k < k_max:
-                    if _should_stop():
-                        truncated = True
-                        break
-                    k += 4
-                    st, _ = level(k)
+                if self.concurrent_levels > 1:
+                    while st != "FEASIBLE" and k < k_max:
+                        if _should_stop():
+                            truncated = True
+                            break
+                        batch_ks = [kk for kk in
+                                   (k + 4 * i for i in range(1, self.concurrent_levels + 1))
+                                   if kk <= k_max]
+                        if not batch_ks:
+                            break
+                        batch = levels(batch_ks)
+                        feasible_ks = [kk for kk in batch_ks if batch[kk][0] == "FEASIBLE"]
+                        if feasible_ks:
+                            k = min(feasible_ks)
+                            st = "FEASIBLE"
+                        else:
+                            k = max(batch_ks)
+                            st = batch[k][0]
+                else:
+                    while st != "FEASIBLE" and k < k_max:
+                        if _should_stop():
+                            truncated = True
+                            break
+                        k += 4
+                        st, _ = level(k)
                 if st != "FEASIBLE":
                     return {"verdict": "FAMILY_TOO_WEAK", "walk_complete": not truncated,
                             "deadline_hit": _should_stop(), "results": results}
 
             lo_feasible = k
-            while True:
-                if _should_stop():
-                    truncated = True
-                    break
-                nxt = lo_feasible - 4
-                if nxt < 1:
-                    break
-                st, _ = level(nxt)
-                if st == "FEASIBLE":
-                    lo_feasible = nxt
-                else:
-                    break
+            if self.concurrent_levels > 1:
+                while True:
+                    if _should_stop():
+                        truncated = True
+                        break
+                    batch_ks = [kk for kk in
+                               (lo_feasible - 4 * i for i in range(1, self.concurrent_levels + 1))
+                               if kk >= 1]
+                    if not batch_ks:
+                        break
+                    batch = levels(batch_ks)
+                    feasible_ks = [kk for kk in batch_ks if batch[kk][0] == "FEASIBLE"]
+                    if len(feasible_ks) == len(batch_ks):
+                        lo_feasible = min(batch_ks)
+                    elif feasible_ks:
+                        lo_feasible = min(feasible_ks)
+                        break
+                    else:
+                        break
+            else:
+                while True:
+                    if _should_stop():
+                        truncated = True
+                        break
+                    nxt = lo_feasible - 4
+                    if nxt < 1:
+                        break
+                    st, _ = level(nxt)
+                    if st == "FEASIBLE":
+                        lo_feasible = nxt
+                    else:
+                        break
 
             lo, hi = lo_feasible - 4, lo_feasible
             while hi - lo > 1:
