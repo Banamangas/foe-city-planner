@@ -158,6 +158,71 @@ def test_stub_priority_preserves_status_across_patterns():
     assert checked >= 3, f"expected several surviving patterns to check, got {checked}"
 
 
+def test_solver_overrides_reach_the_real_solver_parameters():
+    """solver_overrides must actually apply to solver.parameters, not be a
+    silent no-op -- proven by an invalid field name raising (a stub/no-op
+    could never raise this way, since it never touches a real protobuf
+    message)."""
+    pytest.importorskip("ortools")
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
+                  False, 1, True, None, None, "TH")
+    consumer = Building(10, "c10", "g", Footprint(0, 0, 2, 2), True, 1, False, None, None, "a")
+    region = Region(frozenset((x, y) for x in range(6) for y in range(6)))
+    region_set = set(region.cells)
+    pats = list(generate_patterns(region_set, 2, 2, 1, random.Random(0), 5))
+    pat = next(p for p in pats if prefilter(p, region_set, [consumer]) is None)
+    with pytest.raises(AttributeError):
+        probe(pat, region_set, [consumer], probe_limit=5.0,
+             solver_overrides={"this_is_not_a_real_cp_sat_parameter": 1})
+
+
+def test_solver_overrides_can_shrink_the_effective_time_budget():
+    """A solver_overrides entry must be applied *after* (and so can override)
+    the probe_limit-derived default -- proven by overriding
+    max_time_in_seconds to a near-zero value on a pattern that normally
+    resolves within probe_limit, and observing UNKNOWN instead."""
+    pytest.importorskip("ortools")
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
+                  False, 1, True, None, None, "TH")
+    consumers = [
+        Building(10 + i, f"c1{i}", "g", Footprint(0, 0, 2, 2), True, 1, False, None, None, "a")
+        for i in range(3)
+    ]
+    region = Region(frozenset((x, y) for x in range(8) for y in range(8)))
+    region_set = set(region.cells)
+    pats = list(generate_patterns(region_set, 2, 2, 2, random.Random(0), 30))
+    pat = next(p for p in pats if prefilter(p, region_set, consumers) is None)
+    st_normal, _ = probe(pat, region_set, consumers, probe_limit=10.0)
+    assert st_normal in ("SAT", "UNSAT"), (
+        "test setup needs a pattern that normally decides within 10s")
+    st_starved, _ = probe(pat, region_set, consumers, probe_limit=10.0,
+                          solver_overrides={"max_time_in_seconds": 1e-6})
+    assert st_starved == "UNKNOWN", (
+        "solver_overrides did not take effect: expected the near-zero override "
+        "to starve the solver into UNKNOWN")
+
+
+def test_solver_overrides_default_none_preserves_status():
+    """solver_overrides=None (the default) must behave exactly like omitting
+    the kwarg entirely -- no accidental behavior change for every existing
+    call site."""
+    pytest.importorskip("ortools")
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
+                  False, 1, True, None, None, "TH")
+    consumers = [
+        Building(10 + i, f"c1{i}", "g", Footprint(0, 0, 2, 2), True, 1, False, None, None, "a")
+        for i in range(3)
+    ]
+    region = Region(frozenset((x, y) for x in range(8) for y in range(8)))
+    region_set = set(region.cells)
+    pats = list(generate_patterns(region_set, 2, 2, 2, random.Random(0), 30))
+    pat = next(p for p in pats if prefilter(p, region_set, consumers) is None)
+    st_omitted, _ = probe(pat, region_set, consumers, probe_limit=10.0)
+    st_explicit_none, _ = probe(pat, region_set, consumers, probe_limit=10.0,
+                                solver_overrides=None)
+    assert st_omitted == st_explicit_none
+
+
 def test_validate_returns_ok_on_simple_satisfiable():
     """End-to-end: a 6x6 region with TH + 1 consumer at k=1 should validate OK
     when probe finds a SAT placement. Requires ortools."""

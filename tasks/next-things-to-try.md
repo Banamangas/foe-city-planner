@@ -45,6 +45,13 @@ reproducibly *backfire* (CP-SAT thread contention), so the win came specifically
 the per-level dispatch barrier (`concurrent_levels=N`), not from raw core count. #8 and #9 (CP-SAT
 parameter portfolio, assumption-based incremental solving) remain the only untested items.
 
+**Update 2026-07-21:** #8 (CP-SAT parameter portfolio) closed — clean null across every candidate,
+see item 8 below and `tasks/lessons.md` 2026-07-20/21. Useful side-finding: CP-SAT's parallel
+portfolio isn't perfectly reproducible run-to-run even with a fixed seed (a no-override control
+arm itself flipped 1/20 samples), which sets a real noise floor — none of the 5 candidate
+strategies cleared it. **Every item in this document is now closed except #9** (assumption-based
+incremental solving across a level), the last unexplored idea.
+
 ## Cheapest — reuse existing infra (hours)
 
 1. ~~**Prune-mode guided walk.**~~ **TESTED 2026-07-16 — no gain, closed.** Swept
@@ -144,9 +151,17 @@ parameter portfolio, assumption-based incremental solving) remain the only untes
    the first lever in the whole next-things-to-try line whose entire point was speed rather than a
    different search outcome. Full details: `tasks/lessons.md` 2026-07-19/20 entry.
 
-8. **CP-SAT parameter portfolio for the hard frontier.** The autopsy's 4/8 UNKNOWNs stayed
-   undecided at 15 min. Try alternate CP-SAT strategies specifically on frontier probes (more
-   LNS workers, different branching, `use_lns_only`, longer-but-fewer). Small tuning study.
+8. ~~**CP-SAT parameter portfolio for the hard frontier.**~~ **TESTED 2026-07-20/21 — clean null,
+   closed.** Added an opt-in `probe(..., solver_overrides={...})` hook and re-solved 20 sampled
+   frontier UNKNOWN patterns (reused from the existing darkzig corpus, k=107–123) under 5
+   candidates (`portfolio_search`, `lp_search`, `linearization_max`, `more_probe_workers_4` — the
+   literal "longer-but-fewer" lever — and `use_lns_only`) at the walk's real 30s/probe_workers=2
+   budget. A `default_reconfirm` control (no override, re-solved fresh) itself flipped 1/20 (5%)
+   to decided — CP-SAT's parallel portfolio isn't perfectly reproducible run-to-run even with a
+   fixed seed, setting a real noise floor. No candidate cleared it: 4 of 5 landed at or below the
+   control's 5%. Consistent with, and reinforcing, the Stage 1.5 autopsy's reading that this
+   frontier is genuinely hard for CP-SAT at this problem size, not a strategy artifact. Full
+   details: `tasks/lessons.md` 2026-07-20/21 entry.
 
 9. **Assumption-based incremental solving across a level.** Patterns at one k share region +
    building set; only the road skeleton differs. Explore CP-SAT assumptions / clause reuse to

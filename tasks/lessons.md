@@ -1509,3 +1509,65 @@ real lever, and it works, cheaply, without the contention risk Phase 0 exposed. 
 `concurrent_levels` parameter (default 1, zero risk to any existing call site) rather than changing
 the default -- consistent with every other lever this session (`pattern_family`, `stub_priority`,
 `lane_cap`) being explicit opt-in.
+
+## next-things-to-try #8: CP-SAT parameter portfolio for the hard frontier -- clean null across every candidate, closed (2026-07-20/21)
+**Setup:** the last untested item. Backlog: "the autopsy's 4/8 UNKNOWNs stayed undecided at 15
+min... try alternate CP-SAT strategies... small tuning study." Reframed the question precisely
+before building anything: the Stage 1.5 autopsy (2026-07-15) already showed more *time* (900s vs
+30s) and more *workers* (12 vs 2) only decides half of a hard sample -- idea #8 asks whether
+switching *search strategy* decides more of them within the walk's own real 30s/probe_workers=2
+budget, which the autopsy never varied. Reused `output/corpus/darkzig/instances.jsonl` (663
+UNKNOWN records, k=107-127, confirmed recorded at ~30s each) rather than generating new data --
+exactly the frontier population idea #8 needs, spanning the walk's real operating range.
+**Built:** `probe()` (`foeopt/roads_first.py`) gained an opt-in `solver_overrides: dict | None =
+None` hook, applied via `setattr(solver.parameters, k, v)` right before `solver.Solve()` -- a
+generic pass-through (not named presets), since the candidates span unrelated CP-SAT parameters.
+Threaded through `_run_probe`/`_run_probe_seq`/`_worker_init`/`_WORKER_*` globals exactly like
+every prior opt-in lever (`symmetry_breaking`, `hints`, `stub_priority`). Default `None` is a true
+no-op -- full existing suite (338 tests after adding this session's own new coverage) passes
+unmodified. New tests prove the hook actually reaches the real solver (an invalid parameter name
+raises `AttributeError`, since a stub could never do that; a valid override --
+`max_time_in_seconds` set near zero -- observably starves a normally-decidable pattern into
+`UNKNOWN`) plus worker-global plumbing tests mirroring the existing `symmetry_breaking`/
+`stub_priority` coverage.
+**API surprise:** `search_branching` is a pybind-native enum on this ortools version
+(9.15.6755), not a plain int-settable protobuf field -- `setattr(params, "search_branching", 2)`
+raises `TypeError` (wrong argument type), even though the same int is what
+`sat_parameters_pb2.SatParameters.PORTFOLIO_SEARCH` returns. The working value has to come from
+the parameter object's own class (`cp_model_helper.SatParameters.PORTFOLIO_SEARCH`, a typed enum
+instance), discovered empirically since neither ortools' own enum module nor `dir()` on a fresh
+`CpSolver().parameters` made this obvious ahead of time -- worth remembering if this hook is ever
+reused for another enum-typed parameter.
+**Diagnostic (`scripts/exp_frontier_portfolio.py`, smoke-tested N=4 first, then real N=20):**
+5 candidates (`portfolio_search`, `lp_search`, `linearization_max`, `more_probe_workers_4` --
+the literal "longer-but-fewer" lever, giving each probe 4 internal threads instead of 2 at the
+same 30s wall-clock -- and `use_lns_only`) plus a `default_reconfirm` control (the same config as
+recording time, re-solved fresh), each re-solving the same 20 sampled frontier patterns
+sequentially (no outer parallelism, per idea #7 Phase 0's contention lesson).
+**Result -- and an important calibration finding from the control arm itself:**
+| config | decided / 20 |
+|---|---|
+| default_reconfirm (control) | 1 (5%) |
+| portfolio_search | 0 (0%) |
+| lp_search | 0 (0%) |
+| linearization_max | 1 (5%) |
+| more_probe_workers_4 | 0 (0%) |
+| lns_only | 0 (0%) |
+The `default_reconfirm` control -- re-solving with *no* override at all, the exact same config
+these patterns were originally recorded UNKNOWN under -- itself flipped 1/20 to a decided status.
+CP-SAT's parallel portfolio is **not perfectly reproducible run-to-run even with a fixed
+`random_seed`**, because real-time thread-scheduling races between workers aren't controlled by
+the logical seed. This sets a ~5% noise floor that any real candidate needs to clear to claim
+signal -- `linearization_max` merely matched it (not evidence of a real effect), and every other
+candidate landed at or below it. **No candidate showed real signal.** `use_lns_only=True` ran
+without error on this no-objective feasibility model (worth noting since LNS is documented as an
+incumbent-improvement strategy needing an objective) but produced no observable difference either.
+**Verdict: clean, decisive null across the whole small candidate set -- closed, no real k-walk A/B
+warranted** (per the plan's own gate: nothing cleared the noise floor). Consistent with, and
+reinforcing, the Stage 1.5 autopsy's reading: this frontier is genuinely hard for CP-SAT at this
+problem size, not an artifact of the *particular* search strategy in use -- neither more time,
+more workers, nor a different strategy shakes it loose. `solver_overrides` is kept as a tested,
+harmless, opt-in-only primitive (zero risk, zero behavior change by default) in case a future,
+more targeted parameter is worth trying, but this closes next-things-to-try.md item #8 and,
+with it, every item in the document except #9 (assumption-based incremental solving, the one
+remaining unexplored Speed-tier idea).

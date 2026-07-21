@@ -407,7 +407,8 @@ def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
           *, probe_limit: float, probe_workers: int = 1,
           symmetry_breaking: bool = False,
           hints: dict[int, tuple[int, int]] | None = None,
-          stub_priority: bool = False) -> tuple[str, dict | None]:
+          stub_priority: bool = False,
+          solver_overrides: dict[str, object] | None = None) -> tuple[str, dict | None]:
     from ortools.sat.python import cp_model
 
     th_cells = set(pattern.th.cells())
@@ -448,6 +449,9 @@ def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
     solver.parameters.num_search_workers = probe_workers
     solver.parameters.random_seed = 0
     solver.parameters.max_time_in_seconds = probe_limit
+    if solver_overrides:
+        for key, value in solver_overrides.items():
+            setattr(solver.parameters, key, value)
     st = solver.Solve(m)
     if st in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         pos = {}
@@ -505,19 +509,23 @@ _WORKER_PROBE_WORKERS: int = 1
 _WORKER_SYMMETRY_BREAKING: bool = False
 _WORKER_HINTS: dict[int, tuple[int, int]] | None = None
 _WORKER_STUB_PRIORITY: bool = False
+_WORKER_SOLVER_OVERRIDES: dict[str, object] | None = None
 
 
 def _worker_init(layout: Layout, probe_limit: float, probe_workers: int,
                  symmetry_breaking: bool = False, hints=None,
-                 stub_priority: bool = False) -> None:
+                 stub_priority: bool = False,
+                 solver_overrides: dict[str, object] | None = None) -> None:
     global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS
     global _WORKER_SYMMETRY_BREAKING, _WORKER_HINTS, _WORKER_STUB_PRIORITY
+    global _WORKER_SOLVER_OVERRIDES
     _WORKER_LAYOUT = layout
     _WORKER_PROBE_LIMIT = probe_limit
     _WORKER_PROBE_WORKERS = probe_workers
     _WORKER_SYMMETRY_BREAKING = symmetry_breaking
     _WORKER_HINTS = hints
     _WORKER_STUB_PRIORITY = stub_priority
+    _WORKER_SOLVER_OVERRIDES = solver_overrides
 
 
 def _run_probe(payload: tuple) -> dict:
@@ -531,7 +539,8 @@ def _run_probe(payload: tuple) -> dict:
                    probe_workers=_WORKER_PROBE_WORKERS,
                    symmetry_breaking=_WORKER_SYMMETRY_BREAKING,
                    hints=_WORKER_HINTS,
-                   stub_priority=_WORKER_STUB_PRIORITY)
+                   stub_priority=_WORKER_STUB_PRIORITY,
+                   solver_overrides=_WORKER_SOLVER_OVERRIDES)
     secs = round(time.monotonic() - t0, 1)
     if st != "SAT":
         return {"k": k, "params": pat.params, "status": st,
@@ -550,6 +559,7 @@ def _run_probe(payload: tuple) -> dict:
 def _run_probe_seq(payload: tuple) -> dict:
     global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS
     global _WORKER_SYMMETRY_BREAKING, _WORKER_HINTS, _WORKER_STUB_PRIORITY
+    global _WORKER_SOLVER_OVERRIDES
     pat, k, layout, probe_limit, probe_workers, *rest = payload
     _WORKER_LAYOUT = layout
     _WORKER_PROBE_LIMIT = probe_limit
@@ -557,6 +567,7 @@ def _run_probe_seq(payload: tuple) -> dict:
     _WORKER_SYMMETRY_BREAKING = rest[0] if rest else False
     _WORKER_HINTS = rest[1] if len(rest) > 1 else None
     _WORKER_STUB_PRIORITY = rest[2] if len(rest) > 2 else False
+    _WORKER_SOLVER_OVERRIDES = rest[3] if len(rest) > 3 else None
     try:
         return _run_probe((pat, k, 0))
     finally:
