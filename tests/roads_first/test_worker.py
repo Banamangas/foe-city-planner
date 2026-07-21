@@ -53,7 +53,7 @@ def test_run_probe_payload_uses_worker_global_not_embedded_layout(monkeypatch):
         monkeypatch.setattr(mod, "probe",
                             lambda pattern, region, consumers, *, probe_limit, probe_workers=1,
                             symmetry_breaking=False, hints=None,
-                            stub_priority=False: ("UNSAT", None))
+                            stub_priority=False, solver_overrides=None: ("UNSAT", None))
         result = mod._run_probe((pat, 1, 0))
         assert result["pat_index"] == 0
         assert result["k"] == 1
@@ -61,3 +61,59 @@ def test_run_probe_payload_uses_worker_global_not_embedded_layout(monkeypatch):
         mod._WORKER_LAYOUT = None
         del mod._WORKER_PROBE_LIMIT
         del mod._WORKER_PROBE_WORKERS
+
+
+def test_worker_init_threads_solver_overrides_to_probe(monkeypatch):
+    """_worker_init must set _WORKER_SOLVER_OVERRIDES, and _run_probe must
+    forward it into probe() -- mirrors the existing coverage for
+    symmetry_breaking/hints/stub_priority threading through the same path."""
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
+                  False, 1, True, None, None, "TH")
+    c1 = Building(10, "c10", "g", Footprint(0, 0, 2, 2), True, 1, False, None, None, "a")
+    region = Region(frozenset((x, y) for x in range(6) for y in range(6)))
+    lay = Layout(region, [th, c1], th, {})
+
+    import random
+    captured = []
+    def fake_probe(pattern, region, consumers, *, probe_limit, probe_workers=1,
+                   symmetry_breaking=False, hints=None, stub_priority=False,
+                   solver_overrides=None):
+        captured.append(solver_overrides)
+        return ("UNSAT", None)
+    monkeypatch.setattr(mod, "probe", fake_probe)
+
+    overrides = {"linearization_level": 2}
+    mod._worker_init(lay, 30.0, 1, False, None, False, overrides)
+    try:
+        pats = list(mod.generate_patterns(set(region.cells), 2, 2, 1, random.Random(0), 5))
+        pat = next(p for p in pats if mod.prefilter(p, set(region.cells), [c1]) is None)
+        mod._run_probe((pat, 1, 0))
+    finally:
+        mod._WORKER_LAYOUT = None
+    assert captured == [overrides]
+
+
+def test_run_probe_seq_threads_solver_overrides(monkeypatch):
+    """_run_probe_seq's 5-tuple `rest` extension (solver_overrides as the
+    4th optional element) must reach probe() the same way the pool path
+    does via _worker_init."""
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
+                  False, 1, True, None, None, "TH")
+    c1 = Building(10, "c10", "g", Footprint(0, 0, 2, 2), True, 1, False, None, None, "a")
+    region = Region(frozenset((x, y) for x in range(6) for y in range(6)))
+    lay = Layout(region, [th, c1], th, {})
+
+    import random
+    captured = []
+    def fake_probe(pattern, region, consumers, *, probe_limit, probe_workers=1,
+                   symmetry_breaking=False, hints=None, stub_priority=False,
+                   solver_overrides=None):
+        captured.append(solver_overrides)
+        return ("UNSAT", None)
+    monkeypatch.setattr(mod, "probe", fake_probe)
+
+    pats = list(mod.generate_patterns(set(region.cells), 2, 2, 1, random.Random(0), 5))
+    pat = next(p for p in pats if mod.prefilter(p, set(region.cells), [c1]) is None)
+    overrides = {"linearization_level": 2}
+    mod._run_probe_seq((pat, 1, lay, 30.0, 1, False, None, False, overrides))
+    assert captured == [overrides]

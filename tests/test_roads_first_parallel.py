@@ -173,7 +173,7 @@ def test_run_probe_payload_uses_worker_global_not_embedded_layout(monkeypatch):
         monkeypatch.setattr(mod, "probe",
                             lambda pattern, region, consumers, *, probe_limit, probe_workers=1,
                             symmetry_breaking=False, hints=None,
-                            stub_priority=False: ("UNSAT", None))
+                            stub_priority=False, solver_overrides=None: ("UNSAT", None))
         try:
             result = mod._run_probe((pat, 1, 0))  # 3-tuple: pat, k, pat_index
         finally:
