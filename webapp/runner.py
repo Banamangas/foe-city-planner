@@ -27,7 +27,7 @@ class JobManager:
     def submit(self, layout: Layout, *, time_box: float, patterns: int = 200,
                probe_limit: float = 60.0, workers: int = 4,
                probe_workers: int = 4, th_anchors: str = "full",
-               k_start="auto") -> str:
+               k_start="auto", concurrent_levels: int = 1) -> str:
         job_id = uuid.uuid4().hex
         stop_event = threading.Event()
         improvements: queue.Queue = queue.Queue()
@@ -58,7 +58,7 @@ class JobManager:
                     layout, time_box=time_box, patterns=patterns,
                     probe_limit=probe_limit, workers=workers,
                     probe_workers=probe_workers, th_anchors=th_anchors,
-                    k_start=k_start,
+                    k_start=k_start, concurrent_levels=concurrent_levels,
                 )
                 res = search.run(on_improvement=on_improvement,
                                  on_status=on_status,

@@ -105,15 +105,21 @@ def create_app(db_path: str | None = None) -> Flask:
         time_box = float(data.get("time_box", 300))
         patterns = int(data.get("patterns", 200))
         probe_limit = float(data.get("probe_limit", 60))
-        workers = int(data.get("workers", 4))
-        probe_workers = int(data.get("probe_workers", 4))
+        # workers=6/probe_workers=2 (12 threads, not 16) and concurrent_levels=4
+        # are the next-things-to-try-validated defaults (tasks/lessons.md
+        # 2026-07-19/20 + 2026-07-20/21): 16 total CP-SAT threads leaves no core
+        # headroom and reproducibly regresses the walk, while concurrent_levels
+        # is a reproducible same-result/faster win with no observed downside.
+        workers = int(data.get("workers", 6))
+        probe_workers = int(data.get("probe_workers", 2))
+        concurrent_levels = int(data.get("concurrent_levels", 4))
         th_anchors = data.get("th_anchors", "full")
         k_start = data.get("k_start", "auto")
         layout = load_layout_from_dict(city["payload"])
         job_id = jobs.submit(layout, time_box=time_box, patterns=patterns,
                              probe_limit=probe_limit, workers=workers,
                              probe_workers=probe_workers, th_anchors=th_anchors,
-                             k_start=k_start)
+                             k_start=k_start, concurrent_levels=concurrent_levels)
         return jsonify(job_id=job_id)
 
     @app.get("/api/stream/<job_id>")
