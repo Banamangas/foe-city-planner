@@ -1069,16 +1069,76 @@ adds up across the ~2000+ probes run in 30min, and/or the added constraints inte
 automatic symmetry detection during presolve (a built-in feature) rather than complementing it --
 manually-added redundant symmetry-breaking constraints are a known way to *slow down* a modern CP-SAT
 solver that already detects and exploits this exact kind of interchangeable-item symmetry itself.
+> **BOTH of these hypotheses were MEASURED AND REFUTED on 2026-07-22 -- see the amendment at the end
+> of this entry. The A/B regression itself still stands; only the explanation was wrong.**
 **Verdict: closed, stays opt-in/off.** `symmetry_breaking=` kept in `foeopt/roads_first.py` as tested,
 correct, zero-cost-when-off infrastructure (same policy as `reach.py`/`--lns`/`--safe-placements`), but
 the reproducible measurement rules it out as a win. **Lesson for the backlog:** "manually add textbook
 symmetry breaking" is not free against a solver (CP-SAT) that already does this automatically in
 presolve -- measure before assuming a classic OR technique transfers, same standing pattern as
 "expert heuristics bolted onto the greedy constructor lose an equal-wall-clock A/B" (2026-07-06 entry),
-now with a CP-SAT-specific instance: don't fight the presolve. Idea #2 (warm-start hints from the
+now with a CP-SAT-specific instance: ~~don't fight the presolve~~.
+**The "don't fight the presolve" generalization is WITHDRAWN (2026-07-22 amendment):** it was inferred
+from a mechanism nobody had measured, and the branch counts measured later point the opposite way. What
+survives is narrower and more durable: *an equal-wall-clock A/B beat the technique and we did not know
+why -- so scope the verdict to the regime actually measured.* Idea #2 (warm-start hints from the
 classical packer) is now the top remaining cheap-tier candidate; unlike this idea it doesn't add
 constraints, it seeds the search, so it isn't subject to the same presolve-interference risk.
 Artifacts: `output/kwalk/symbreak.log`, `output/kwalk/symbreak-2.log`.
+
+### AMENDMENT 2026-07-22: the mechanism above is refuted; the A/B result is not
+Found while investigating "why are so many richer-skeleton probes UNKNOWN at 300s?" -- that
+investigation needed the real per-probe cost model, which forced a measurement of the two mechanisms
+this entry had only hypothesized. Both are wrong.
+
+**Hypothesis A -- cumulative model-construction cost -- REFUTED by direct timing.** Built the darkzig
+k=105 probe model 20x with and without `_add_symmetry_breaking` (63 consumers, 21 size groups):
+
+| model build | median |
+|---|---|
+| `symmetry_breaking=False` | 2.8 ms |
+| `symmetry_breaking=True` | 3.8 ms |
+
+**1.0 ms of extra Python per probe.** Across the ~2000 probes of a 30min arm that is ~2 seconds out of
+1800 -- **0.1%**. It cannot produce a 3-road regression. The "84 extra bool vars + ~250 constraints
+adds up" story was plausible-sounding arithmetic that nobody had multiplied out.
+
+**Hypothesis B -- interference with CP-SAT's automatic presolve symmetry detection -- REFUTED by
+branch counts.** Re-probed the 4 comb k=105 patterns that this session's diagnostic left UNKNOWN,
+on/off, 60s cap, 1 worker:
+
+| pattern | sym=False | sym=True |
+|---|---|---|
+| pat[2] | UNKNOWN 60s, 1,787,248 branches | **UNSAT in 18.6s**, 456,973 branches |
+| pat[3] | UNKNOWN 60s, 1,744,041 | UNKNOWN 60s, 1,155,820 (-34%) |
+| pat[5] | UNKNOWN 60s, 1,987,799 | UNKNOWN 60s, 1,387,815 (-30%) |
+| pat[7] | UNKNOWN 60s, 1,971,135 | UNKNOWN 60s, 1,564,325 (-21%) |
+
+Branch counts fall 21-34% and one instance *flips to decided*. If the added constraints were fighting
+presolve's own symmetry detection, branches would rise. They fall. Soundness cross-check: `pat[2]`'s
+UNSAT is independently corroborated -- the un-instrumented 12-worker run refuted the same pattern at
+38.1s *without* symmetry breaking, so the flip is a real refutation, not an over-constrained false
+UNSAT. (Note the speedup: 18.6s on 1 worker vs 37.6s of solve on 12.)
+
+**So why did the 30min A/B regress?** *Unknown, and now explicitly recorded as unknown.* Not build
+cost (0.1%), not presolve interference (branches fall). The regression is real and reproducible; its
+cause is unexplained. Do not invent a third mechanism without measuring it.
+
+**Scope correction.** The A/B measured *end-to-end k-walk quality at fixed wall-clock* -- ~2000+ probes
+averaging <1s, throughput-dominated, and its own mechanism check pinned its 2 UNKNOWN probes at a
+**15s cap**, too short to observe the effect above. That verdict is sound **for the k-walk** and stays.
+It should not be read as "symmetry breaking is bad here" in the *big-budget* regime (72 probes x 300s,
+e.g. `scripts/exp_richer_skeleton_probe.py`), where 1ms of build cost is noise and branch efficiency is
+the whole game. Nobody has measured that regime beyond the n=4 above -- which is far weaker evidence
+than the A/B, and is a signal to test, not a result to act on.
+
+**Methodological lesson (the durable one).** This entry said *"Both symmetry-breaking runs landed on the
+exact same k-sequence and numbers -- reproducible, not pool-scheduling noise."* That is true and it does
+rule out scheduling noise -- but re-running a fixed-seed pipeline demonstrates **determinism, not
+independent confirmation**. Same seed -> same patterns -> same trajectory, twice. The evidence was one
+trajectory through pattern space, reported in language ("reproducibly", twice-run table) that reads like
+two samples. **When a repeat run shares the seed, say "deterministic", not "reproducible" -- and get
+independent samples by varying the seed before calling a lever closed.**
 
 ## next-things-to-try #2: CP-SAT warm-start hints from the classical packer also make the k-walk WORSE, reproducibly (2026-07-16)
 **Setup:** idea #2 hypothesized that hinting `probe()`'s CP-SAT model with the classical repack
@@ -1804,3 +1864,75 @@ have caught this before spending 3.85 h probing a range where the answer was for
 
 **Assets:** `scripts/exp_richer_skeleton_probe.py` (6 tests, harness validated by the control),
 `output/richer-skeleton.json`.
+
+## Corrected richer-skeleton run: lane reaches 103 (1 off comb) — and `hybrid` was never a family (2026-07-22)
+**Setup.** The corrected follow-up from the entry above: same harness (`exp_richer_skeleton_probe.py`),
+k ∈ {105,107,109}, families lane + hybrid(cap=24), n=12, **300 s × 12 workers**, seed 0.
+72 probes, **2.96 h**. (comb had been run separately as the control: 0 SAT at k=105/107, corroborating
+the k-walk's existing "k=107 INFEASIBLE".)
+
+**Result: 4 legal SATs; minimum achieved = 103.**
+| family | k | achieved | legal | secs |
+|---|---|---|---|---|
+| lane | 107 | **103** | yes | 272.7 |
+| hybrid | 107 | **103** | yes | 59.1 |
+| lane | 109 | 105 | yes | 161.0 |
+| hybrid | 109 | 108 | yes | 97.9 |
+
+Per family: 36 probes each, 2 SAT / 18 UNSAT / 16 UNKNOWN. Verdict fired **FEASIBILITY_WALL**
+("no legal SAT < 102; 32/72 UNKNOWN").
+
+**The real finding is 103, not the verdict.** The prior record for a non-comb family was **106**
+(lessons: lane/stub/hybrid "all lost to comb"). Lane now lands at **103 — one road off comb's 102**,
+with `rotated_buildings == 0`. Richer families are *not* structurally hopeless here; they are one road
+short. That is the result that justifies sampling the family properly rather than closing the track.
+
+**Three caveats, all against over-reading the verdict.**
+- **Knife-edge.** 32/72 = 44.4 % UNKNOWN against a pre-committed 50 % threshold: four more UNKNOWNs
+  and the same data reads DECIDABILITY_WALL. A verdict that flips on 4 of 72 probes is a mechanical
+  call, not a conclusion — the identical criticism the previous entry made of its own 40 %.
+- **90 % of the 2.96 h went into UNKNOWN probes** (2.67 h). "Decided" overstates what was bought.
+- **The 103 layout is unrecoverable.** `probe_pattern` discards `validate`'s layout and the row schema
+  carries no pattern identity, so a legal 103 exists that we cannot reproduce or inspect. **Any run
+  that can produce a near-record must persist the artifact**; this one couldn't.
+
+**Bug found: `hybrid` is not a family — it is a strict subset of `lane`.**
+`max_lane_len` cannot generate a topology the uncapped generator doesn't already produce. Measured
+across every cap and k tried:
+| k | \|lane\| | \|hybrid(24)\| | novel (in hybrid, not lane) |
+|---|---|---|---|
+| 105 | 67,308 | 67,308 | **0** |
+| 107 | 67,298 | 67,259 | **0** |
+| 109 | 67,285 | 67,225 | **0** |
+Also 0 novel at caps 3/4/6/8/12 (k=105) and at k=120/140. **Mechanism:** fronts grow round-robin
+(`generate_lane_patterns`, roads_first.py:239-253), so lanes come out balanced; a cap either sits above
+the natural lane length (inert) or starves growth so the budget can't be spent and
+`if remaining != 0: continue` rejects the pattern. The cap is a **filter, never a shape knob**.
+At k≈105 it is doubly inert: the trunk consumes ~46 of 105 cells, leaving ~59 across 10-20 fronts, so
+lanes are ~3-6 cells and a cap of 24 is unreachable. (cap=24 came from the earlier k≈115 work and was
+carried into a k-range where it cannot bind.) **Cost: half of this 2.96 h run bought correlated
+samples**, and `classify_verdict`'s `RICHER = ("lane","hybrid")` counted them as independent.
+Locked by `test_max_lane_len_only_filters_never_creates_new_topologies`.
+
+**Lesson (generalizable).** Before spending compute on an "arm B" of an experiment, prove it is
+*distinguishable from arm A* — one set-difference over the generated populations (seconds) would have
+caught this before 1.5 h went into it. A knob that only ever *removes* candidates is a sampling filter,
+not a treatment, and must not be counted as an independent family.
+
+**Assets:** `output/richer-skeleton-lane-hybrid.json`,
+`docs/superpowers/specs/2026-07-22-wide-shallow-skeleton-screen-design.md` (the replacement method).
+
+## Process: check `lessons.md` before proposing a lever, not after (2026-07-22)
+**What happened.** While diagnosing the UNKNOWN-heavy probes I measured that CP-SAT symmetry breaking
+resolved 1 of 4 stuck patterns and cut branches 21-34 %, and recommended enabling it — as if it were an
+untried idea sitting unused in the codebase. The user asked *"So symmetry-breaking existed but was never
+actually used?"* It had been implemented, wired to CLI flags on two scripts, A/B'd twice, and **closed
+as a reproducible negative** eight days earlier (lessons.md:1039). A single `grep -rn symmetry` would
+have surfaced that before I proposed re-running a closed experiment.
+**Why it matters.** The measurement was still worth having — it refuted the recorded *mechanism* (see
+the 2026-07-22 amendment on that entry). But framing it as "this exists and was never used" inverted
+the burden of proof: the honest framing was "this was closed for the k-walk; here is why that verdict
+may not transfer to a different regime," which is a much narrower and more defensible claim.
+**Rule.** Before recommending any lever, `grep` `tasks/lessons.md` + `tasks/next-things-to-try.md` for
+it. If it was tried: state the prior result first, then argue specifically what is different now.
+Never present a previously-closed lever as new.
