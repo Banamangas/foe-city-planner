@@ -366,3 +366,31 @@ def test_run_polish_aborts_on_pattern_identity_mismatch(tmp_path):
     with pytest.raises(SystemExit):
         mod.run_polish(layout, rows_path, threshold=104, n_seeds=2, budget=5.0,
                        workers=2, gen_seed=0, n_per=6, sat_dir=tmp_path / "sats")
+
+
+def test_run_polish_records_winning_seed(tmp_path):
+    """The seed that produced the best result must survive into both the row
+    and the persisted artifact -- it is the reproducibility breadcrumb for a
+    result that may be claimed as a record."""
+    from foeopt.model import Building, Footprint, Layout, Region
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
+                  False, 1, True, None, None, "th")
+    c1 = Building(2, "c2", "g", Footprint(0, 0, 2, 1), True, 1, False, None, None, "a")
+    region = Region(frozenset((x, y) for x in range(10) for y in range(10)))
+    layout = Layout(region, [th, c1], th, {})
+    pats = mod.sample_patterns(set(region.cells), 2, 2, 6, 6, seed=0)
+    rows_path = tmp_path / "rows.jsonl"
+    rows_path.write_text(json.dumps({
+        "k": 6, "idx": 0, "status": "SAT", "achieved": 99, "legal": True,
+        "th": list(pats[0].params["th"])}) + "\n")
+    sat_dir = tmp_path / "sats"
+    res = mod.run_polish(layout, rows_path, threshold=104, n_seeds=3, budget=5.0,
+                         workers=2, gen_seed=0, n_per=6, sat_dir=sat_dir)
+    assert res["improved"] == 1
+    final = {(r["k"], r["idx"]): r for r in mod.read_rows(rows_path)}
+    assert isinstance(final[(6, 0)]["solver_seed"], int)
+    art_files = list(sat_dir.glob("sat-k6-i0-*.json"))
+    assert art_files
+    art = json.loads(art_files[0].read_text())
+    assert isinstance(art["solver_seed"], int)
+    assert art["achieved"] == final[(6, 0)]["achieved"]
