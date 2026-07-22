@@ -14,8 +14,11 @@ def _row(status, achieved=None, legal=None, k=105, idx=0):
 
 def test_rule_of_three_bound():
     assert mod.rule_of_three(5000) == 3.0 / 5000
-    assert mod.rule_of_three(1) == 3.0
-    # n=0 must not divide by zero; an unobserved event after 0 trials is unbounded
+    assert mod.rule_of_three(100) == 0.03
+    # a rate cannot exceed certainty: small n must clamp to 1.0, not exceed it
+    assert mod.rule_of_three(3) == 1.0
+    assert mod.rule_of_three(1) == 1.0
+    # n=0 must not divide by zero
     assert mod.rule_of_three(0) == 1.0
 
 
@@ -56,3 +59,19 @@ def test_verdict_break_floor_wins_over_a_worse_sat():
     verdict, detail = mod.classify_verdict(rows)
     assert verdict == "BREAK_FLOOR"
     assert detail["best_achieved"] == 100
+
+
+def test_detail_n_sat_counts_only_legal_validated_sats():
+    rows = [_row("SAT", achieved=105, legal=True),
+            _row("SAT", achieved=99, legal=False),   # illegal, must not count
+            _row("SAT", achieved=None, legal=True),  # no achieved, must not count
+            _row("UNKNOWN")]
+    _, detail = mod.classify_verdict(rows)
+    assert detail["n_sat"] == 1
+    assert detail["n"] == 4
+
+
+def test_custom_floor_is_respected():
+    rows = [_row("SAT", achieved=101, legal=True)]
+    assert mod.classify_verdict(rows, floor=100)[0] == "FEASIBLE_NOT_SUPERIOR"
+    assert mod.classify_verdict(rows, floor=102)[0] == "BREAK_FLOOR"

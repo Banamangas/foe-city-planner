@@ -32,10 +32,12 @@ def rule_of_three(n: int) -> float:
 
     Reported on a null screen so "we found nothing" becomes a number: 0 SATs
     in 5,000 patterns bounds p*d below 0.06%, where "0 in 12" bounds nothing.
+    The 3/n approximation is only meaningful for large n, so the result is
+    capped at 1.0 -- a rate cannot exceed certainty.
     """
     if n <= 0:
         return 1.0
-    return 3.0 / n
+    return min(1.0, 3.0 / n)
 
 
 def classify_verdict(rows: list[dict], floor: int = FLOOR) -> tuple[str, dict]:
