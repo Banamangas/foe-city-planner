@@ -91,6 +91,28 @@ def load_done(path: pathlib.Path) -> set[tuple[int, int]]:
     return done
 
 
+def read_rows(path: pathlib.Path) -> list[dict]:
+    """All usable rows from a results file, skipping any unparsable or
+    identity-less line -- same tolerance as load_done, so a torn line from a
+    killed run cannot crash the summary after the screening itself survived."""
+    rows: list[dict] = []
+    if not path.exists():
+        return rows
+    with path.open() as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(r, dict) or "k" not in r or "idx" not in r:
+                continue
+            rows.append(r)
+    return rows
+
+
 def append_row(fh, row: dict) -> None:
     """Write and flush immediately: an 8h run must survive a kill -9."""
     fh.write(json.dumps(row) + "\n")
@@ -212,6 +234,9 @@ def run_screen(layout, ks, n_per, budget, workers, seed, out_path, sat_dir,
     return rows
 
 
+_TALLY_STATUSES = ("SAT", "UNSAT", "UNKNOWN", "PREFILTERED")
+
+
 def summarize(rows, floor: int = FLOOR) -> dict:
     per_k: dict = {}
     for r in rows:
@@ -219,7 +244,7 @@ def summarize(rows, floor: int = FLOOR) -> dict:
                                       "PREFILTERED": 0, "other": 0,
                                       "min_achieved": None})
         d["n"] += 1
-        if r["status"] in d:
+        if r["status"] in _TALLY_STATUSES:
             d[r["status"]] += 1
         else:
             d["other"] += 1      # SAT_ROTATED, SAT_FILLER_FAIL, ... (raw JSONL keeps the detail)
@@ -277,7 +302,7 @@ def main() -> int:
     rows = run_screen(layout, ks, args.n, args.budget, args.workers, args.seed,
                       out_path, pathlib.Path(args.sat_dir), resume=args.resume)
     if args.resume:
-        rows = [json.loads(l) for l in out_path.open() if l.strip()]
+        rows = read_rows(out_path)
     summary = summarize(rows, args.floor)
     print("SUMMARY:", json.dumps(summary, indent=2))
     out_path.with_suffix(".summary.json").write_text(json.dumps(summary, indent=2))

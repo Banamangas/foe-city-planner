@@ -199,3 +199,38 @@ def test_summarize_tallies_per_k_and_carries_verdict():
     assert s["per_k"][105]["min_achieved"] is None
     assert s["verdict"] == "BREAK_FLOOR"
     assert s["detail"]["best_achieved"] == 101
+
+
+def test_read_rows_tolerates_torn_and_malformed_lines(tmp_path):
+    """The summary read must survive a kill -9 as load_done does; otherwise an
+    8h screen could complete and still lose its summary to one torn line."""
+    p = tmp_path / "rows.jsonl"
+    p.write_text('{"k": 105, "idx": 0, "status": "UNSAT"}\n'
+                 '\n'
+                 '{"status": "UNSAT"}\n'
+                 '{"k": 105, "idx": 1, "status": "UNKNOWN"}\n'
+                 '{"k": 105, "idx')
+    rows = mod.read_rows(p)
+    assert [(r["k"], r["idx"]) for r in rows] == [(105, 0), (105, 1)]
+
+
+def test_read_rows_missing_file_is_empty(tmp_path):
+    assert mod.read_rows(tmp_path / "nope.jsonl") == []
+
+
+def test_summarize_buckets_unknown_status_names_under_other():
+    """validate()'s terminal statuses and any future status must land in
+    `other`, and must never collide with the 'n'/'min_achieved' bookkeeping."""
+    rows = [
+        {"k": 105, "idx": 0, "status": "SAT_ROTATED", "achieved": None, "legal": None},
+        {"k": 105, "idx": 1, "status": "ROUTE_FAIL", "achieved": None, "legal": None},
+        {"k": 105, "idx": 2, "status": "UNSAT", "achieved": None, "legal": None},
+    ]
+    s = mod.summarize(rows)
+    d = s["per_k"][105]
+    assert d["n"] == 3
+    assert d["other"] == 2
+    assert d["UNSAT"] == 1
+    assert d["SAT"] == 0 and d["UNKNOWN"] == 0 and d["PREFILTERED"] == 0
+    # every row incremented exactly one bucket
+    assert d["SAT"] + d["UNSAT"] + d["UNKNOWN"] + d["PREFILTERED"] + d["other"] == d["n"]
