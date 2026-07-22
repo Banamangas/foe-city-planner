@@ -401,6 +401,7 @@ def run_polish(layout, rows_path, threshold, n_seeds, budget, workers, gen_seed,
 
     best_achieved: dict = {}
     best_art: dict = {}
+    best_solver_seed: dict = {}
     with mp.Pool(workers, initializer=_init_worker,
                  initargs=(layout, budget)) as pool:
         for row, art in pool.imap_unordered(_polish_one, payloads):
@@ -409,10 +410,13 @@ def run_polish(layout, rows_path, threshold, n_seeds, budget, workers, gen_seed,
                 if key not in best_achieved or row["achieved"] < best_achieved[key]:
                     best_achieved[key] = row["achieved"]
                     best_art[key] = art
+                    best_solver_seed[key] = row["solver_seed"]
 
     improved = 0
     best_out: dict = {}
+    rows_to_append = []
     for key, best in best_achieved.items():
+        best_art[key]["solver_seed"] = best_solver_seed[key]
         p = persist_sat(sat_dir, best_art[key])
         print(f"  best k={key[0]} idx={key[1]} achieved={best} -> {p}", flush=True)
         best_out[f"{key[0]}:{key[1]}"] = best
@@ -423,10 +427,13 @@ def run_polish(layout, rows_path, threshold, n_seeds, budget, workers, gen_seed,
             row = {"k": key[0], "idx": key[1], "status": "SAT", "achieved": best,
                    "legal": True, "secs": 0.0, "th": recorded.get("th"),
                    "reason": "polish", "branches": None, "solve_s": None,
-                   "polish_seeds": n_seeds}
-            with rows_path.open("a") as fh:
-                append_row(fh, row)
+                   "polish_seeds": n_seeds, "solver_seed": best_solver_seed[key]}
+            rows_to_append.append(row)
             print(f"  IMPROVED k={key[0]} idx={key[1]}: {original} -> {best}", flush=True)
+
+    with rows_path.open("a") as fh:
+        for row in rows_to_append:
+            append_row(fh, row)
 
     all_rows = read_rows(rows_path)
     verdict, detail = classify_verdict(all_rows)
