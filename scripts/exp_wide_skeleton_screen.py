@@ -139,9 +139,16 @@ def _screen_one(payload):
         return row, None
     vst, vlay, achieved = validate(_W["layout"], pat, pos)
     if vst != "OK":
-        row["status"] = f"SAT_{vst}"
+        # validate() already returns terminal statuses (ROUTE_FAIL, INVALID,
+        # SAT_FILLER_FAIL, SAT_ROTATED) -- re-prefixing them would emit
+        # "SAT_SAT_ROTATED" and break the codebase's status vocabulary.
+        row["status"] = vst
         return row, None
     row["achieved"] = achieved
+    # validate() only returns "OK" when this predicate already holds, so it
+    # can never be False here -- deliberate belt-and-braces recheck, kept
+    # after the project's prior retracted-record incident (rotated buildings
+    # slipping through as a valid SAT).
     row["legal"] = len(rotated_buildings(vlay, canonical_dims(_W["layout"]))) == 0
     return row, _sat_artifact(k, idx, pat, vlay, achieved)
 
