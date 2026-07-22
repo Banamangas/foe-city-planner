@@ -24,6 +24,8 @@ import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+from foeopt.roads_first import generate_lane_patterns, prefilter
+
 FLOOR = 102
 
 
@@ -53,3 +55,39 @@ def classify_verdict(rows: list[dict], floor: int = FLOOR) -> tuple[str, dict]:
         return "FEASIBLE_NOT_SUPERIOR", detail
     detail["p_bound"] = rule_of_three(len(rows))
     return "NULL_WITH_BOUND", detail
+
+
+def sample_patterns(region, tw, tl, k, n, seed):
+    """Uniform sample without replacement from the full lane population.
+
+    `generate_lane_patterns` builds every pattern for this k, shuffles with the
+    supplied rng, then truncates -- so a fixed seed makes the sample and its
+    index order reproducible, which is what `--resume` and `--recheck` rely on.
+    """
+    return generate_lane_patterns(region, tw, tl, k, random.Random(seed), n,
+                                  th_mode="full")
+
+
+def load_done(path: pathlib.Path) -> set[tuple[int, int]]:
+    """(k, idx) pairs already recorded. Tolerates a torn final line from a
+    killed run -- otherwise one interrupted write would strand the whole file."""
+    done: set[tuple[int, int]] = set()
+    if not path.exists():
+        return done
+    with path.open() as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            done.add((r["k"], r["idx"]))
+    return done
+
+
+def append_row(fh, row: dict) -> None:
+    """Write and flush immediately: an 8h run must survive a kill -9."""
+    fh.write(json.dumps(row) + "\n")
+    fh.flush()

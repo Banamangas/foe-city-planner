@@ -75,3 +75,34 @@ def test_custom_floor_is_respected():
     rows = [_row("SAT", achieved=101, legal=True)]
     assert mod.classify_verdict(rows, floor=100)[0] == "FEASIBLE_NOT_SUPERIOR"
     assert mod.classify_verdict(rows, floor=102)[0] == "BREAK_FLOOR"
+
+
+def test_load_done_returns_k_idx_pairs(tmp_path):
+    p = tmp_path / "rows.jsonl"
+    p.write_text('{"k": 105, "idx": 0, "status": "UNSAT"}\n'
+                 '{"k": 105, "idx": 7, "status": "UNKNOWN"}\n')
+    assert mod.load_done(p) == {(105, 0), (105, 7)}
+
+
+def test_load_done_missing_file_is_empty(tmp_path):
+    assert mod.load_done(tmp_path / "nope.jsonl") == set()
+
+
+def test_load_done_tolerates_torn_final_line(tmp_path):
+    """An 8h run killed mid-write leaves a partial last line. Resume must
+    skip it rather than crash, or the whole run is unrecoverable."""
+    p = tmp_path / "rows.jsonl"
+    p.write_text('{"k": 105, "idx": 0, "status": "UNSAT"}\n{"k": 105, "idx')
+    assert mod.load_done(p) == {(105, 0)}
+
+
+def test_sample_patterns_is_deterministic_and_sized():
+    """Resume and the recheck arm both rely on (seed, n, k) reproducing the
+    exact same patterns in the exact same order."""
+    region = {(x, y) for x in range(20) for y in range(20)}
+    a = mod.sample_patterns(region, 2, 2, 20, 5, seed=0)
+    b = mod.sample_patterns(region, 2, 2, 20, 5, seed=0)
+    assert len(a) == 5
+    assert [p.roads for p in a] == [p.roads for p in b]
+    c = mod.sample_patterns(region, 2, 2, 20, 5, seed=1)
+    assert [p.roads for p in a] != [p.roads for p in c]
