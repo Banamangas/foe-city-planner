@@ -1752,3 +1752,55 @@ whose feasibility is rare, reuse the corpus of known-feasible ones — don't sam
 **Assets kept.** `foeopt/placement_proxies.py` (four proxies, unit-tested) and
 `scripts/exp_placement_objective.py` (corpus-driven correlation harness) stay as reference
 tooling — any future placement-proxy idea A/Bs through the same harness.
+
+## Richer-skeleton feasibility diagnostic — PARTIAL (2026-07-22)
+
+**Verdict: no family is feasible at k ≤ 104, and lane/hybrid are indistinguishable from the comb
+control there. But the run did NOT test the decisive band (k ≈ 105–109), so it does NOT settle
+whether a richer family can beat 102. Partial result; corrected re-run specified below.**
+
+`scripts/exp_richer_skeleton_probe.py`, 108 probes = 3 families (comb control, lane,
+hybrid cap=24) × k ∈ {96, 100, 104} × 12 full-TH patterns, **300 s budget, 12 workers, 3.85 h**:
+
+| family | n | SAT | UNSAT | UNKNOWN | min achieved |
+|---|---|---|---|---|---|
+| comb (control) | 36 | **0** | 21 | 15 | — |
+| lane | 36 | **0** | 21 | 15 | — |
+| hybrid (cap 24) | 36 | **0** | 22 | 14 | — |
+
+Every (family, k) cell is 0 SAT (UNSAT 5–9, UNKNOWN 3–7 of 12).
+
+**What this establishes.**
+- **Zero SAT anywhere** at k ≤ 104 even at 300 s / 12 workers — nothing breaks 102 in this range.
+- **Richer ≡ comb here:** lane/hybrid show the same UNSAT/UNKNOWN mix as the control, i.e. no
+  evidence the structurally-better families pack tighter at tight k.
+- The control behaves exactly as known results predict, which **validates the harness**.
+
+**What it does NOT establish — the k-range was misaimed (spec error).**
+The spec chose k ∈ {96,100,104} reasoning "below the 102 floor," **conflating the achieved count
+with k**. Measured on the known-good darkzig layouts, **achieved ≈ k − 9** (range 7–14: k110→102,
+k115→105, k119→110, k123→109, k127→120). Therefore:
+- comb's *feasibility* floor is **k ≈ 110**, not 102 — and the k-walk already records
+  **k=107 INFEASIBLE**. At k ≤ 104 *nothing* fits, for any family. We measured a foregone
+  conclusion.
+- Beating 102 requires feasibility at **k ≈ 105–109** (where achieved would land ~95–101). This
+  run touched only k=104, the top edge, and never probed 105–109.
+So "0 SAT at k ≤ 104" cannot distinguish "richer families are no better than comb" from "richer
+families are better, but not by 6+ cells of k."
+
+**Also: 40% UNKNOWN is not "decided."** `classify_verdict` returned FEASIBILITY_WALL only because
+the richer UNKNOWN fraction (29/72 = 40%) fell under the 0.5 threshold — a mechanical call. 40%
+undecided at 300 s is evidence, not proof.
+
+**Corrected follow-up (the actual test).** Re-run the *same harness* at **k ∈ {105, 107, 109}**
+for comb vs lane vs hybrid, to locate each family's **feasibility floor**. The real question is
+whether a richer family is feasible at a k where comb is not — e.g. a lane SAT at k=106 would
+achieve ~97 and beat 102. No new code; corrected k-levels only.
+
+**Lesson (generalizable).** When a search reports two coupled numbers (here the skeleton budget
+`k` and the achieved `route()` count), pin the empirical relationship between them *before*
+choosing the sweep range. A one-line check against existing artifacts (`achieved ≈ k − 9`) would
+have caught this before spending 3.85 h probing a range where the answer was foreordained.
+
+**Assets:** `scripts/exp_richer_skeleton_probe.py` (6 tests, harness validated by the control),
+`output/richer-skeleton.json`.
