@@ -1936,3 +1936,64 @@ may not transfer to a different regime," which is a much narrower and more defen
 **Rule.** Before recommending any lever, `grep` `tasks/lessons.md` + `tasks/next-things-to-try.md` for
 it. If it was tried: state the prior result first, then argue specifically what is different now.
 Never present a previously-closed lever as new.
+
+## Measured `d`: the wide screen's 30s budget would have found NOTHING — and a lane skeleton TIES 102 (2026-07-22)
+**Why measured.** The wide-shallow screen spec justified a 30 s probe budget with "all 34 corpus SATs
+finished within 29.2 s". A whole-branch review challenged that. Checking where those SATs live:
+`corpus SAT k-values = {123:20, 119:6, 127:3, 115:3, 111:1, 110:1}` -- **zero in the 105-107 band the
+screen targets.** The statistic came entirely from the loose-k regime.
+
+**Direct measurement of `d`** (detection probability on patterns KNOWN to be feasible). The 4 legal SATs
+from the completed deep run are regenerable (seed 0, one shared rng across the family/k loop); the
+replay was verified by reproducing the recorded per-index status vector.
+
+| arm | setting | found |
+|---|---|---|
+| the screen | 30 s x 1 worker | **0 / 4** |
+| the screen, more threads | 30 s x 12 workers | **0 / 4** |
+| the recheck arm | 300 s x 1 worker | **4 / 4** (102-170 s) |
+
+**Budget is the binding axis, not parallelism.** 30 s misses every known-feasible pattern even at 12
+threads; 300 s on one worker finds all four. Had the 8.3 h screen run, it would have reported
+"0 SATs in 15,000 patterns, feasibility < 0.06%" while structurally unable to detect four patterns we
+already knew were feasible. **`rule_of_three` bounds `p*d`, not `p` -- with `d = 0` the bound is
+vacuous, and the spec's gloss ("feasibility below 0.06%") would have been simply false.**
+
+**Refined `d` at the usable budget: 0.77**, not 1.0 -- across 96 re-solves of known-feasible patterns at
+300 s x 1, only 74 resolved SAT. A feasible pattern is still missed ~23% of the time per attempt.
+
+**Second finding: `achieved` is luck-of-the-solution, worth up to 10 roads.** `probe()` is pure
+feasibility with no objective, so it returns an arbitrary satisfying placement and the `route()` count
+depends on which one CP-SAT lands on. Re-solving each known-feasible pattern across 24 CP-SAT seeds
+(`solver_overrides={"random_seed": s}`), 300 s x 1, 26 min total:
+
+| pattern | SAT/24 | achieved min / median / max |
+|---|---|---|
+| lane k=107 i5 | 21 | **102** / 103 / 106 |
+| lane k=109 i10 | 17 | 105 / 105 / 108 |
+| hybrid k=107 i11 | 15 | 103 / 104 / **112** |
+| hybrid k=109 i4 | 21 | 103 / 105 / 107 |
+
+**A lane skeleton reached 102 -- TYING the all-time best**, which until now only the comb family had
+produced. Verified end-to-end: reproduced deterministically (gen seed 0, pattern index 5, CP-SAT seed
+15), `validate -> OK`, and independently re-routed from the persisted artifact via
+`exp_exact_router.reconstruct_fixed` -> `route() == 102`, `is_valid True`, `rotated_buildings 0`.
+Artifact: `output/spread/TIE-lane-k107-i5-s15-a102.json`.
+
+**But the seed lever's tail is thin.** 74 achieved samples, minimum 102, hit **once**. The same skeleton
+that yields 102 yields 103 eleven times. Re-solving buys ~1 road over the median and then plateaus;
+it is not a route to 101 on its own.
+
+**Lessons.**
+1. **A budget justified by a censored distribution is not justified.** The 30 s figure was the cap of
+   the corpus that produced it -- and worse, that corpus had no observations at all in the target band.
+   Before trusting a "resolves fast" statistic, check *where the observations live*, not just their max.
+2. **When a null result's bound is on a product (`p*d`), measure the other factor before spending the
+   compute.** One 26-minute measurement invalidated an 8.3-hour run.
+3. This is the **same failure mode** as the k-range error two entries above -- committing hours to a
+   configuration where the answer was foreordained -- caught this time by the branch's own artifacts.
+   The pattern to internalize: *the recorded results of the previous experiment are the cheapest
+   available critique of the next one.*
+4. **Persist the notable artifact, not just the record-breaking one.** The 102 tie was nearly lost
+   because the script only persisted `achieved < 102`; it was recoverable only because the seed was
+   logged. Persist anything at or near the frontier.
