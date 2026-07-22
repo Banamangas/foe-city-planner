@@ -69,7 +69,7 @@ def sample_patterns(region, tw, tl, k, n, seed):
 
 
 def load_done(path: pathlib.Path) -> set[tuple[int, int]]:
-    """(k, idx) pairs already recorded. Tolerates a torn final line from a
+    """(k, idx) pairs already recorded. Tolerates any unusable line from a
     killed run -- otherwise one interrupted write would strand the whole file."""
     done: set[tuple[int, int]] = set()
     if not path.exists():
@@ -83,6 +83,8 @@ def load_done(path: pathlib.Path) -> set[tuple[int, int]]:
                 r = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if not isinstance(r, dict) or "k" not in r or "idx" not in r:
+                continue      # unusable row: skip rather than strand the whole file
             done.add((r["k"], r["idx"]))
     return done
 

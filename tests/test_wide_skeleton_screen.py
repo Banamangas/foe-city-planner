@@ -106,3 +106,15 @@ def test_sample_patterns_is_deterministic_and_sized():
     assert [p.roads for p in a] == [p.roads for p in b]
     c = mod.sample_patterns(region, 2, 2, 20, 5, seed=1)
     assert [p.roads for p in a] != [p.roads for p in c]
+
+
+def test_load_done_skips_rows_missing_identity_keys(tmp_path):
+    """load_done must never raise on a malformed results file -- a valid-JSON
+    row missing k/idx would otherwise crash resume with KeyError, which is the
+    exact failure this function exists to prevent."""
+    p = tmp_path / "rows.jsonl"
+    p.write_text('{"status": "UNSAT"}\n'
+                 '{"k": 105, "idx": 2, "status": "UNSAT"}\n'
+                 '[1, 2, 3]\n'
+                 '{"k": 106, "status": "UNKNOWN"}\n')
+    assert mod.load_done(p) == {(105, 2)}
