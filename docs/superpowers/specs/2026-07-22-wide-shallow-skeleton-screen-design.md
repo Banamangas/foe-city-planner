@@ -65,11 +65,11 @@ at 30 s, expected discoveries are `n·p·d`. Against the prior run:
 | | patterns | budget | threads |
 |---|---|---|---|
 | deep probe (prior) | 72 | 300 s | 12 per probe |
-| wide screen (this) | ~8,000/k-level | 30 s | 1 per probe, 12 concurrent |
+| wide screen (this) | ~5,000/k-level | 30 s | 1 per probe, 12 concurrent |
 
-Two orders of magnitude more patterns, against a `d` that the corpus says is high for genuinely
-feasible instances. Crucially this also makes a **null result meaningful**: 0 SATs in n = 8,000 bounds
-`p·d < 3/8000` by the rule of three (95 %), i.e. feasibility below ~0.04 % — an actual bound, where
+Nearly two orders of magnitude more patterns, against a `d` that the corpus says is high for genuinely
+feasible instances. Crucially this also makes a **null result meaningful**: 0 SATs in n = 5,000 bounds
+`p·d < 3/5000` by the rule of three (95 %), i.e. feasibility below ~0.06 % — an actual bound, where
 "0 SATs in 12 patterns" bounds nothing.
 
 ## 4a. Throughput calibration — RUN 2026-07-22, assumption confirmed
@@ -99,7 +99,7 @@ Rule-of-three power at n=5,000: a null bounds `p·d < 3/5000` = **0.06 %**.
 - **Legal SATs found, all achieving ≥ 102** → lane is **feasible but not superior**; the family caps at
   or just above comb. Report the minimum achieved (the prior run's 103 is the number to beat). Combined
   with a tight `p` bound, this closes parametric lane skeletons as a route below 102.
-- **Zero SATs across ~8,000/k-level** → report the rule-of-three bound on `p`. This is a genuine
+- **Zero SATs across ~5,000/k-level** → report the rule-of-three bound on `p`. This is a genuine
   negative for the family, and the first one with quantified power.
 
 The 50 %-UNKNOWN decidability/feasibility split of the prior spec is **retired**: at a 30 s budget
