@@ -36,7 +36,7 @@
  "solve_s": float | None}
 ```
 
-`status` ∈ `"SAT" | "UNSAT" | "UNKNOWN" | "PREFILTERED" | "SAT_ROUTE_FAIL" | "SAT_INVALID" | "SAT_FILLER_FAIL" | "SAT_ROTATED"`.
+`status` ∈ `"SAT" | "UNSAT" | "UNKNOWN" | "PREFILTERED"` plus `validate()`'s own terminal statuses passed through verbatim: `"ROUTE_FAIL" | "INVALID" | "SAT_FILLER_FAIL" | "SAT_ROTATED"`. (Corrected during Task 3 review: `validate()` already returns these pre-prefixed, so re-prefixing them emitted `"SAT_SAT_ROTATED"` and broke the vocabulary used by `foeopt/roads_first.py:handle_result` and `tests/test_kwalk_data.py`.)
 
 ---
 
