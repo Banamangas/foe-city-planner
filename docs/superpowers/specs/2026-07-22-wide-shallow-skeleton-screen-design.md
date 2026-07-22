@@ -46,8 +46,11 @@ one probe**.
   patterns in flight, rather than today's one pattern with 12 CP-SAT threads. Reuses the existing
   `_worker_init` / `_run_probe` plumbing in `foeopt/roads_first.py`.
 - **Sample:** draw uniformly without replacement from the full generated population per (k, family)
-  — ~67.3k patterns at each of k ∈ {105, 107, 109} — with a fixed seed. Target **~8,000 patterns per
-  k-level**, adjustable to the wall-clock budget.
+  — ~67.3k patterns per k-level — with a fixed seed. **k ∈ {105, 106, 107}** at **~5,000 patterns
+  each** (~2.8 h/level, ~8.3 h total at the measured rate; see §4a).
+  **k=109 is dropped as unwinnable:** the deep run's SATs landed at 103/103 for k=107 and 105/108 for
+  k=109, so at k=109 the achieved count cannot reach ≤101 whatever we sample. k=106 is added — it was
+  never probed and sits in the middle of the live band.
 - **Prefilter:** apply `prefilter()` before dispatch (the prior diagnostic skipped it). It is free and
   removes provably-dead patterns without a solver call.
 - **Persist every SAT.** For each SAT, write the achieved count **and the full layout + pattern
@@ -68,6 +71,25 @@ Two orders of magnitude more patterns, against a `d` that the corpus says is hig
 feasible instances. Crucially this also makes a **null result meaningful**: 0 SATs in n = 8,000 bounds
 `p·d < 3/8000` by the rule of three (95 %), i.e. feasibility below ~0.04 % — an actual bound, where
 "0 SATs in 12 patterns" bounds nothing.
+
+## 4a. Throughput calibration — RUN 2026-07-22, assumption confirmed
+
+§6 required this before committing to a long sweep. Same 50 lane k=107 patterns (prefilter kept
+50/50), same 30 s budget, both dispatch strategies:
+
+| arm | wall | throughput | decided | outcomes |
+|---|---|---|---|---|
+| A: 1 pattern × 12 workers (today) | 16.48 min | 3.0 probes/min | 18/50 | 18 UNSAT, 32 UNKNOWN |
+| B: 12 patterns × 1 worker (proposed) | **1.60 min** | **31.2 probes/min** | 16/50 | 16 UNSAT, 34 UNKNOWN |
+
+**Wall speedup 10.29x; decided-per-minute 9.14x.** The parallelism is sublinear as predicted (10.3x of
+a theoretical 12x) and the resolution cost is **2 probes in 50** — both of them *search*-refuted UNSATs,
+the expensive infeasibility proofs the screen does not need. Both arms found the identical 16
+presolve-refuted UNSATs; neither found a SAT. Arm B is adopted.
+
+**Sizing.** ~30 probes/min sustained (24/min if every probe pinned the full 30 s; the ~30 % that
+presolve-refute instantly lift the average). 5,000 patterns/k-level ≈ 2.8 h; three levels ≈ 8.3 h.
+Rule-of-three power at n=5,000: a null bounds `p·d < 3/5000` = **0.06 %**.
 
 ## 5. Pre-committed verdict
 
@@ -91,11 +113,10 @@ The verdict now rests on SATs found and the bound on `p`, not on the UNSAT/UNKNO
   (~30) of the screen's UNKNOWNs at 300 s. If ~0 convert, `d` is high and the screen is sound; if many
   convert, the budget must rise and the power calculation be redone. This is cheap (~2.5 h worst case)
   and is the only place a long budget is justified.
-- **Throughput assumption untested.** 12×1-worker is assumed near-linear vs 1×12-worker. CP-SAT's
-  portfolio does help — 12 workers refuted a pattern in 38 s that 1 worker could not in 60 s — so the
-  gain is real but sublinear and unmeasured. **Calibrate first:** time ~50 patterns both ways and set
-  the sample size from the measured rate, before committing to a long run.
-- **Sampling still isn't exhaustive.** ~8k of 67.3k is ~12 %. The rule-of-three bound is the honest
+- ~~**Throughput assumption untested.**~~ **RESOLVED 2026-07-22** — measured at **10.29× wall /
+  9.14× decided-per-minute**, resolution cost 2 probes in 50 (both search-refuted UNSATs). Sublinear as
+  suspected, but nowhere near enough to change the design. See §4a.
+- **Sampling still isn't exhaustive.** ~5k of 67.3k is ~7 %. The rule-of-three bound is the honest
   claim; "no feasible lane skeleton exists" is not.
 - **Uniform sampling may be weak.** The generator's population is dominated by TH anchors; if
   feasibility concentrates in a small TH region, uniform draws waste effort. Out of scope here, but a
