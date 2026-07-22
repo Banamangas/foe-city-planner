@@ -234,3 +234,19 @@ def test_summarize_buckets_unknown_status_names_under_other():
     assert d["SAT"] == 0 and d["UNKNOWN"] == 0 and d["PREFILTERED"] == 0
     # every row incremented exactly one bucket
     assert d["SAT"] + d["UNSAT"] + d["UNKNOWN"] + d["PREFILTERED"] + d["other"] == d["n"]
+
+
+def test_pick_recheck_targets_samples_only_unknowns(tmp_path):
+    p = tmp_path / "rows.jsonl"
+    p.write_text("\n".join(json.dumps(r) for r in [
+        {"k": 105, "idx": 0, "status": "UNSAT"},
+        {"k": 105, "idx": 1, "status": "UNKNOWN"},
+        {"k": 106, "idx": 2, "status": "UNKNOWN"},
+        {"k": 106, "idx": 3, "status": "SAT"},
+        {"k": 106, "idx": 4, "status": "PREFILTERED"},
+    ]) + "\n")
+    picked = mod.pick_recheck_targets(p, sample_n=2, seed=0)
+    assert len(picked) == 2
+    assert set(picked) <= {(105, 1), (106, 2)}
+    # deterministic for a fixed seed
+    assert picked == mod.pick_recheck_targets(p, sample_n=2, seed=0)

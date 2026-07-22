@@ -234,6 +234,58 @@ def run_screen(layout, ks, n_per, budget, workers, seed, out_path, sat_dir,
     return rows
 
 
+def pick_recheck_targets(rows_path: pathlib.Path, sample_n: int, seed: int):
+    """A random subsample of the screen's UNKNOWNs, as (k, idx) pairs."""
+    unknown = []
+    with rows_path.open() as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if r["status"] == "UNKNOWN":
+                unknown.append((r["k"], r["idx"]))
+    unknown.sort()
+    random.Random(seed).shuffle(unknown)
+    return unknown[:sample_n]
+
+
+def run_recheck(layout, rows_path, sample_n, budget, workers, seed, n_per):
+    """Re-probe screen UNKNOWNs at a LONG budget to test whether the 30s cut
+    is hiding slow-resolving SATs. `n_per`/`seed` must match the screen run --
+    that is what regenerates the same patterns from (k, idx)."""
+    targets = pick_recheck_targets(rows_path, sample_n, seed)
+    if not targets:
+        print("no UNKNOWN rows to recheck")
+        return {"n": 0, "converted": 0, "rows": []}
+    region = set(layout.region.cells)
+    th = layout.townhall.footprint
+    by_k: dict = {}
+    for k, idx in targets:
+        by_k.setdefault(k, []).append(idx)
+    payloads = []
+    for k, idxs in sorted(by_k.items()):
+        pats = sample_patterns(region, th.width, th.length, k, n_per, seed)
+        for idx in idxs:
+            payloads.append((k, idx, pats[idx]))
+    print(f"recheck: {len(payloads)} UNKNOWNs at {budget:.0f}s each", flush=True)
+    out = []
+    with mp.Pool(workers, initializer=_init_worker,
+                 initargs=(layout, budget)) as pool:
+        for row, art in pool.imap_unordered(_screen_one, payloads):
+            out.append(row)
+            print(f"  k={row['k']} idx={row['idx']} -> {row['status']} "
+                  f"in {row['secs']}s", flush=True)
+    converted = sum(1 for r in out if r["status"] != "UNKNOWN")
+    res = {"n": len(out), "converted": converted,
+           "sat": sum(1 for r in out if r["status"] == "SAT"), "rows": out}
+    print("RECHECK:", json.dumps({k: v for k, v in res.items() if k != "rows"}))
+    return res
+
+
 _TALLY_STATUSES = ("SAT", "UNSAT", "UNKNOWN", "PREFILTERED")
 
 
@@ -290,6 +342,9 @@ def main() -> int:
     ap.add_argument("--out", default="output/wide-screen.jsonl")
     ap.add_argument("--sat-dir", default="output/wide-screen-sats")
     ap.add_argument("--resume", action="store_true")
+    ap.add_argument("--recheck", type=int, default=0,
+                   help="re-probe N screen UNKNOWNs at --recheck-budget (spec section 6)")
+    ap.add_argument("--recheck-budget", type=float, default=300.0)
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
     if args.selftest:
@@ -297,6 +352,12 @@ def main() -> int:
     if not args.city:
         ap.error("city file required (or --selftest)")
     layout = load_layout(args.city)
+    if args.recheck:
+        res = run_recheck(layout, pathlib.Path(args.out), args.recheck,
+                          args.recheck_budget, args.workers, args.seed, args.n)
+        pathlib.Path(args.out).with_suffix(".recheck.json").write_text(
+            json.dumps(res, indent=2))
+        return 0
     ks = [int(x) for x in args.k_levels.split(",")]
     out_path = pathlib.Path(args.out)
     rows = run_screen(layout, ks, args.n, args.budget, args.workers, args.seed,
