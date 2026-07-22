@@ -195,6 +195,37 @@ def _screen_one(payload):
                  "branches": None, "solve_s": None}, None)
 
 
+def _polish_one(payload):
+    """Re-solve one known-feasible pattern under a specific CP-SAT seed.
+
+    probe() has no objective, so the placement it returns -- and therefore the
+    route() count -- varies with the solver's random seed. Never raises, for
+    the same reason _screen_one doesn't.
+    """
+    k, idx, pat, solver_seed = payload
+    t0 = time.monotonic()
+    base = {"k": k, "idx": idx, "solver_seed": solver_seed, "achieved": None,
+            "legal": None, "th": list(pat.params.get("th", ()))}
+    try:
+        st, pos = probe(pat, _W["region"], _W["consumers"],
+                        probe_limit=_W["budget"], probe_workers=1,
+                        solver_overrides={"random_seed": solver_seed})
+        if st != "SAT":
+            return {**base, "status": st,
+                    "secs": round(time.monotonic() - t0, 2)}, None
+        vst, vlay, achieved = validate(_W["layout"], pat, pos)
+        if vst != "OK":
+            return {**base, "status": vst,
+                    "secs": round(time.monotonic() - t0, 2)}, None
+        legal = len(rotated_buildings(vlay, canonical_dims(_W["layout"]))) == 0
+        return ({**base, "status": "SAT", "achieved": achieved, "legal": legal,
+                 "secs": round(time.monotonic() - t0, 2)},
+                _sat_artifact(k, idx, pat, vlay, achieved))
+    except Exception as exc:      # noqa: BLE001
+        return {**base, "status": "ERROR", "reason": f"{type(exc).__name__}: {exc}",
+                "secs": round(time.monotonic() - t0, 2)}, None
+
+
 def persist_sat(sat_dir: pathlib.Path, art: dict) -> pathlib.Path:
     sat_dir.mkdir(parents=True, exist_ok=True)
     p = sat_dir / f"sat-k{art['k']}-i{art['idx']}-a{art['achieved']}.json"
@@ -322,6 +353,87 @@ def run_recheck(layout, rows_path, sample_n, budget, workers, seed, n_per, sat_d
     return res
 
 
+def pick_polish_targets(rows_path: pathlib.Path, threshold: int):
+    """Every legal SAT with achieved <= threshold, as (k, idx, achieved),
+    sorted so the most promising (lowest achieved) is dispatched first."""
+    targets = [(r["k"], r["idx"], r["achieved"]) for r in read_rows(rows_path)
+               if r.get("status") == "SAT" and r.get("legal")
+               and r.get("achieved") is not None and r["achieved"] <= threshold]
+    targets.sort(key=lambda t: (t[2], t[0], t[1]))
+    return targets
+
+
+def run_polish(layout, rows_path, threshold, n_seeds, budget, workers, gen_seed,
+               n_per, sat_dir):
+    """Re-solve the screen's most promising hits across several solver seeds
+    and keep the best -- probe() has no objective, so a single seed's
+    `achieved` is luck of which satisfying placement CP-SAT lands on."""
+    targets = pick_polish_targets(rows_path, threshold)
+    if not targets:
+        print("no polish targets")
+        return {"n": 0, "improved": 0, "best": {}, "rows": []}
+    by_key = {(r["k"], r["idx"]): r for r in read_rows(rows_path)}
+    region = set(layout.region.cells)
+    th = layout.townhall.footprint
+    by_k: dict = {}
+    for k, idx, _achieved in targets:
+        by_k.setdefault(k, []).append(idx)
+    payloads = []
+    for k, idxs in sorted(by_k.items()):
+        pats = sample_patterns(region, th.width, th.length, k, n_per, gen_seed)
+        for idx in idxs:
+            if idx >= len(pats):
+                raise SystemExit(
+                    f"polish aborted: idx={idx} out of range for k={k} "
+                    f"(only {len(pats)} patterns regenerated). --seed/--n must "
+                    f"match the screen run.")
+            recorded = by_key.get((k, idx))
+            if recorded is not None and recorded.get("th") is not None:
+                if list(pats[idx].params["th"]) != list(recorded["th"]):
+                    raise SystemExit(
+                        f"polish aborted: regenerated pattern for k={k} idx={idx} does not "
+                        f"match the screen's record (th {list(pats[idx].params['th'])} != "
+                        f"{list(recorded['th'])}). --seed/--n must match the screen run.")
+            for s in range(n_seeds):
+                payloads.append((k, idx, pats[idx], s))
+    print(f"polish: {len(targets)} patterns x {n_seeds} seeds "
+          f"({len(payloads)} probes) at {budget:.0f}s each", flush=True)
+
+    best_achieved: dict = {}
+    best_art: dict = {}
+    with mp.Pool(workers, initializer=_init_worker,
+                 initargs=(layout, budget)) as pool:
+        for row, art in pool.imap_unordered(_polish_one, payloads):
+            key = (row["k"], row["idx"])
+            if row["status"] == "SAT" and row.get("legal") and row.get("achieved") is not None:
+                if key not in best_achieved or row["achieved"] < best_achieved[key]:
+                    best_achieved[key] = row["achieved"]
+                    best_art[key] = art
+
+    improved = 0
+    best_out: dict = {}
+    for key, best in best_achieved.items():
+        p = persist_sat(sat_dir, best_art[key])
+        print(f"  best k={key[0]} idx={key[1]} achieved={best} -> {p}", flush=True)
+        best_out[f"{key[0]}:{key[1]}"] = best
+        recorded = by_key.get(key)
+        original = recorded.get("achieved") if recorded is not None else None
+        if original is not None and best < original:
+            improved += 1
+            row = {"k": key[0], "idx": key[1], "status": "SAT", "achieved": best,
+                   "legal": True, "secs": 0.0, "th": recorded.get("th"),
+                   "reason": "polish", "branches": None, "solve_s": None,
+                   "polish_seeds": n_seeds}
+            with rows_path.open("a") as fh:
+                append_row(fh, row)
+            print(f"  IMPROVED k={key[0]} idx={key[1]}: {original} -> {best}", flush=True)
+
+    all_rows = read_rows(rows_path)
+    verdict, detail = classify_verdict(all_rows)
+    print(f"POLISH verdict now: {verdict} {json.dumps(detail)}", flush=True)
+    return {"n": len(targets), "improved": improved, "best": best_out, "rows": all_rows}
+
+
 _TALLY_STATUSES = ("SAT", "UNSAT", "UNKNOWN", "PREFILTERED")
 
 
@@ -381,6 +493,10 @@ def main() -> int:
     ap.add_argument("--recheck", type=int, default=0,
                    help="re-probe N screen UNKNOWNs at --recheck-budget (spec section 6)")
     ap.add_argument("--recheck-budget", type=float, default=300.0)
+    ap.add_argument("--polish", type=int, default=0,
+                   help="re-solve screen SATs with achieved <= threshold across "
+                        "--polish-seeds solver seeds and keep the best (stage 2)")
+    ap.add_argument("--polish-seeds", type=int, default=12)
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
     if args.selftest:
@@ -393,6 +509,13 @@ def main() -> int:
                           args.recheck_budget, args.workers, args.seed, args.n,
                           pathlib.Path(args.sat_dir))
         pathlib.Path(args.out).with_suffix(".recheck.json").write_text(
+            json.dumps(res, indent=2))
+        return 0
+    if args.polish:
+        res = run_polish(layout, pathlib.Path(args.out), args.polish,
+                         args.polish_seeds, args.budget, args.workers, args.seed,
+                         args.n, pathlib.Path(args.sat_dir))
+        pathlib.Path(args.out).with_suffix(".polish.json").write_text(
             json.dumps(res, indent=2))
         return 0
     ks = [int(x) for x in args.k_levels.split(",")]
