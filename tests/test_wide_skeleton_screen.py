@@ -151,3 +151,35 @@ def test_persist_sat_writes_identifiable_filename(tmp_path):
     assert p.exists()
     assert p.name == "sat-k106-i42-a101.json"
     assert json.loads(p.read_text())["achieved"] == 101
+
+
+def test_screen_one_uses_validate_status_verbatim(monkeypatch):
+    """validate() already returns terminal statuses; re-prefixing them would
+    emit SAT_SAT_ROTATED and corrupt an unattended run's record."""
+    from foeopt.model import Footprint
+    from foeopt.roads_first import Pattern
+    pat = Pattern(th=Footprint(0, 0, 2, 2), roads=frozenset({(0, 2)}),
+                  params={"th": (0, 0), "k": 1})
+    mod._W.update({"layout": object(), "region": set(), "consumers": [], "budget": 1.0})
+    monkeypatch.setattr(mod, "probe", lambda *a, **k: ("SAT", {}))
+    monkeypatch.setattr(mod, "validate", lambda *a: ("SAT_ROTATED", None, 0))
+    row, art = mod._screen_one((105, 0, pat))
+    assert row["status"] == "SAT_ROTATED"
+    assert art is None
+    monkeypatch.setattr(mod, "validate", lambda *a: ("ROUTE_FAIL", None, 0))
+    row, art = mod._screen_one((105, 0, pat))
+    assert row["status"] == "ROUTE_FAIL"
+    assert art is None
+
+
+def test_screen_one_passes_through_non_sat_probe_status(monkeypatch):
+    from foeopt.model import Footprint
+    from foeopt.roads_first import Pattern
+    pat = Pattern(th=Footprint(0, 0, 2, 2), roads=frozenset({(0, 2)}),
+                  params={"th": (0, 0), "k": 1})
+    mod._W.update({"layout": object(), "region": set(), "consumers": [], "budget": 1.0})
+    monkeypatch.setattr(mod, "probe", lambda *a, **k: ("UNKNOWN", None))
+    row, art = mod._screen_one((106, 4, pat))
+    assert row["status"] == "UNKNOWN" and art is None
+    assert row["k"] == 106 and row["idx"] == 4
+    assert row["achieved"] is None and row["legal"] is None
