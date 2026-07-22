@@ -24,7 +24,9 @@ import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from foeopt.roads_first import generate_lane_patterns, prefilter
+from foeopt.loader import load_layout
+from foeopt.roads_first import generate_lane_patterns, prefilter, probe, validate
+from foeopt.validate import canonical_dims, rotated_buildings
 
 FLOOR = 102
 
@@ -93,3 +95,111 @@ def append_row(fh, row: dict) -> None:
     """Write and flush immediately: an 8h run must survive a kill -9."""
     fh.write(json.dumps(row) + "\n")
     fh.flush()
+
+
+_W: dict = {}
+
+
+def _init_worker(layout, budget):
+    """Pool initializer: each worker holds the layout once, not per task."""
+    _W["layout"] = layout
+    _W["region"] = set(layout.region.cells)
+    _W["consumers"] = layout.road_needing()
+    _W["budget"] = budget
+
+
+def _sat_artifact(k, idx, pat, vlay, achieved) -> dict:
+    """Serialize a SAT in the existing best-k*.json schema (plus pattern
+    identity) so scripts/exp_exact_router.py:reconstruct_fixed consumes it
+    unchanged. Built inside the worker so no Layout crosses the process
+    boundary."""
+    return {
+        "k": k, "idx": idx, "achieved": achieved,
+        "th": [pat.th.x, pat.th.y, pat.th.width, pat.th.length],
+        "pattern_roads": sorted([x, y] for (x, y) in pat.roads),
+        "roads": sorted([x, y] for (x, y) in vlay.roads),
+        "buildings": {str(b.entity_id): [b.footprint.x, b.footprint.y,
+                                         b.footprint.width, b.footprint.length]
+                      for b in vlay.buildings},
+    }
+
+
+def _screen_one(payload):
+    """Probe one pattern at probe_workers=1. Returns (row, sat_artifact|None)."""
+    k, idx, pat = payload
+    diag: dict = {}
+    t0 = time.monotonic()
+    st, pos = probe(pat, _W["region"], _W["consumers"],
+                    probe_limit=_W["budget"], probe_workers=1, diag=diag)
+    row = {"k": k, "idx": idx, "status": st, "achieved": None, "legal": None,
+           "secs": round(time.monotonic() - t0, 2),
+           "th": list(pat.params["th"]), "reason": diag.get("reason"),
+           "branches": diag.get("branches"), "solve_s": diag.get("solve_s")}
+    if st != "SAT":
+        return row, None
+    vst, vlay, achieved = validate(_W["layout"], pat, pos)
+    if vst != "OK":
+        row["status"] = f"SAT_{vst}"
+        return row, None
+    row["achieved"] = achieved
+    row["legal"] = len(rotated_buildings(vlay, canonical_dims(_W["layout"]))) == 0
+    return row, _sat_artifact(k, idx, pat, vlay, achieved)
+
+
+def persist_sat(sat_dir: pathlib.Path, art: dict) -> pathlib.Path:
+    sat_dir.mkdir(parents=True, exist_ok=True)
+    p = sat_dir / f"sat-k{art['k']}-i{art['idx']}-a{art['achieved']}.json"
+    p.write_text(json.dumps(art, indent=1), encoding="utf-8")
+    return p
+
+
+def run_screen(layout, ks, n_per, budget, workers, seed, out_path, sat_dir,
+               resume=False):
+    region = set(layout.region.cells)
+    consumers = layout.road_needing()
+    th = layout.townhall.footprint
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    done = load_done(out_path) if resume else set()
+    if done:
+        print(f"resume: skipping {len(done)} already-recorded probes", flush=True)
+
+    rows: list[dict] = []
+    payloads = []
+    with out_path.open("a") as fh:
+        for k in ks:
+            pats = sample_patterns(region, th.width, th.length, k, n_per, seed)
+            print(f"k={k}: sampled {len(pats)} lane patterns", flush=True)
+            for idx, pat in enumerate(pats):
+                if (k, idx) in done:
+                    continue
+                reason = prefilter(pat, region, consumers)
+                if reason is not None:
+                    # provably dead without a solver call; still a determination,
+                    # so it counts toward n in the rule-of-three bound
+                    row = {"k": k, "idx": idx, "status": "PREFILTERED",
+                           "achieved": None, "legal": None, "secs": 0.0,
+                           "th": list(pat.params["th"]),
+                           "reason": f"prefilter:{reason}",
+                           "branches": None, "solve_s": None}
+                    append_row(fh, row)
+                    rows.append(row)
+                    continue
+                payloads.append((k, idx, pat))
+
+        print(f"dispatching {len(payloads)} probes on {workers} workers "
+              f"at {budget:.0f}s each", flush=True)
+        t0 = time.monotonic()
+        with mp.Pool(workers, initializer=_init_worker,
+                     initargs=(layout, budget)) as pool:
+            for i, (row, art) in enumerate(pool.imap_unordered(_screen_one, payloads), 1):
+                append_row(fh, row)
+                rows.append(row)
+                if art is not None:
+                    p = persist_sat(sat_dir, art)
+                    print(f"  SAT k={art['k']} idx={art['idx']} "
+                          f"achieved={art['achieved']} legal={row['legal']} -> {p}",
+                          flush=True)
+                if i % 200 == 0:
+                    rate = i / ((time.monotonic() - t0) / 60)
+                    print(f"  [{i}/{len(payloads)}] {rate:.1f} probes/min", flush=True)
+    return rows

@@ -1,4 +1,4 @@
-import importlib.util, pathlib
+import importlib.util, json, pathlib
 
 _spec = importlib.util.spec_from_file_location(
     "exp_wide_skeleton_screen",
@@ -118,3 +118,36 @@ def test_load_done_skips_rows_missing_identity_keys(tmp_path):
                  '[1, 2, 3]\n'
                  '{"k": 106, "status": "UNKNOWN"}\n')
     assert mod.load_done(p) == {(105, 2)}
+
+
+def test_sat_artifact_matches_best_k_schema(tmp_path):
+    """SAT artifacts must be consumable by exp_exact_router.reconstruct_fixed
+    unchanged -- that is how a floor-breaking layout gets independently
+    re-verified. reconstruct_fixed reads best["buildings"] as
+    {str(entity_id): [x, y, w, l]}."""
+    from foeopt.model import Building, Footprint, Layout, Region
+    from foeopt.roads_first import Pattern
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
+                  False, 1, True, None, None, "th")
+    c1 = Building(2, "c2", "g", Footprint(2, 0, 2, 1), True, 1, False, None, None, "a")
+    region = Region(frozenset((x, y) for x in range(6) for y in range(6)))
+    vlay = Layout(region, [th, c1], th, {})
+    vlay.roads = [(0, 2), (1, 2)]
+    pat = Pattern(th=Footprint(0, 0, 2, 2), roads=frozenset({(0, 2), (1, 2)}),
+                  params={"th": (0, 0), "k": 2})
+    art = mod._sat_artifact(105, 3, pat, vlay, 2)
+    assert art["k"] == 105 and art["idx"] == 3 and art["achieved"] == 2
+    assert art["buildings"] == {"1": [0, 0, 2, 2], "2": [2, 0, 2, 1]}
+    assert sorted(art["roads"]) == [[0, 2], [1, 2]]
+    assert sorted(art["pattern_roads"]) == [[0, 2], [1, 2]]
+    # every key reconstruct_fixed touches must be JSON round-trippable
+    assert json.loads(json.dumps(art))["buildings"]["1"] == [0, 0, 2, 2]
+
+
+def test_persist_sat_writes_identifiable_filename(tmp_path):
+    art = {"k": 106, "idx": 42, "achieved": 101, "th": [1, 1, 2, 2],
+           "pattern_roads": [], "roads": [], "buildings": {}}
+    p = mod.persist_sat(tmp_path, art)
+    assert p.exists()
+    assert p.name == "sat-k106-i42-a101.json"
+    assert json.loads(p.read_text())["achieved"] == 101
