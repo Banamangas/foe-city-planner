@@ -309,3 +309,60 @@ def test_read_rows_dedups_on_k_idx_last_wins(tmp_path):
     assert len(rows) == 2
     assert {(r["k"], r["idx"]): r["status"] for r in rows} == {
         (105, 0): "SAT", (105, 1): "UNSAT"}
+
+
+def test_pick_polish_targets_selects_only_legal_sats_within_threshold(tmp_path):
+    p = tmp_path / "rows.jsonl"
+    p.write_text("\n".join(json.dumps(r) for r in [
+        {"k": 107, "idx": 0, "status": "SAT", "achieved": 103, "legal": True},
+        {"k": 107, "idx": 1, "status": "SAT", "achieved": 109, "legal": True},   # over threshold
+        {"k": 107, "idx": 2, "status": "SAT", "achieved": 100, "legal": False},  # illegal
+        {"k": 106, "idx": 3, "status": "UNKNOWN", "achieved": None, "legal": None},
+        {"k": 106, "idx": 4, "status": "SAT", "achieved": 102, "legal": True},
+    ]) + "\n")
+    got = mod.pick_polish_targets(p, threshold=104)
+    assert [(k, i) for k, i, _ in got] == [(106, 4), (107, 0)]   # best achieved first
+
+
+def test_run_polish_keeps_best_and_records_improvement(tmp_path):
+    """The polished result must become the pattern's recorded achieved, or the
+    verdict would keep using the worse first solve."""
+    from foeopt.model import Building, Footprint, Layout, Region
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
+                  False, 1, True, None, None, "th")
+    c1 = Building(2, "c2", "g", Footprint(0, 0, 2, 1), True, 1, False, None, None, "a")
+    region = Region(frozenset((x, y) for x in range(10) for y in range(10)))
+    layout = Layout(region, [th, c1], th, {})
+    pats = mod.sample_patterns(set(region.cells), 2, 2, 6, 6, seed=0)
+
+    rows_path = tmp_path / "rows.jsonl"
+    rows_path.write_text(json.dumps({
+        "k": 6, "idx": 0, "status": "SAT", "achieved": 99, "legal": True,
+        "th": list(pats[0].params["th"])}) + "\n")
+    res = mod.run_polish(layout, rows_path, threshold=104, n_seeds=3, budget=5.0,
+                         workers=2, gen_seed=0, n_per=6,
+                         sat_dir=tmp_path / "sats")
+    assert res["n"] == 1
+    # the toy solves to a small road count, well under the seeded 99
+    assert res["improved"] == 1
+    final = {(r["k"], r["idx"]): r for r in mod.read_rows(rows_path)}
+    assert final[(6, 0)]["achieved"] < 99
+    assert final[(6, 0)]["reason"] == "polish"
+    assert list((tmp_path / "sats").glob("sat-k6-i0-*.json")), "best artifact not persisted"
+
+
+def test_run_polish_aborts_on_pattern_identity_mismatch(tmp_path):
+    """A --seed/--n mismatch would silently polish the WRONG pattern."""
+    from foeopt.model import Building, Footprint, Layout, Region
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
+                  False, 1, True, None, None, "th")
+    c1 = Building(2, "c2", "g", Footprint(0, 0, 2, 1), True, 1, False, None, None, "a")
+    region = Region(frozenset((x, y) for x in range(10) for y in range(10)))
+    layout = Layout(region, [th, c1], th, {})
+    rows_path = tmp_path / "rows.jsonl"
+    rows_path.write_text(json.dumps({
+        "k": 6, "idx": 0, "status": "SAT", "achieved": 99, "legal": True,
+        "th": [999, 999]}) + "\n")
+    with pytest.raises(SystemExit):
+        mod.run_polish(layout, rows_path, threshold=104, n_seeds=2, budget=5.0,
+                       workers=2, gen_seed=0, n_per=6, sat_dir=tmp_path / "sats")
