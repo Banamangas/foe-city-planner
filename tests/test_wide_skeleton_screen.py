@@ -1,5 +1,7 @@
 import importlib.util, json, pathlib, sys
 
+import pytest
+
 _spec = importlib.util.spec_from_file_location(
     "exp_wide_skeleton_screen",
     pathlib.Path(__file__).resolve().parent.parent / "scripts" / "exp_wide_skeleton_screen.py",
@@ -10,6 +12,14 @@ mod = importlib.util.module_from_spec(_spec)
 # test, which is the first test in this file to actually dispatch a Pool).
 sys.modules[_spec.name] = mod
 _spec.loader.exec_module(mod)
+
+
+@pytest.fixture(autouse=True)
+def _restore_worker_globals():
+    saved = dict(mod._W)
+    yield
+    mod._W.clear()
+    mod._W.update(saved)
 
 
 def _row(status, achieved=None, legal=None, k=105, idx=0):
@@ -278,9 +288,24 @@ def test_run_recheck_regenerates_by_index_and_persists_sats(tmp_path):
                           seed=0, n_per=6, sat_dir=sat_dir)
     assert res["n"] == 2
     assert {(r["k"], r["idx"]) for r in res["rows"]} == {(6, 0), (6, 1)}
-    assert res["converted"] == sum(1 for r in res["rows"] if r["status"] != "UNKNOWN")
     # any SAT the recheck finds must leave a reconstructable artifact on disk
     for r in res["rows"]:
         if r["status"] == "SAT":
             assert list(sat_dir.glob(f"sat-k{r['k']}-i{r['idx']}-*.json")), \
                 "recheck found a SAT but persisted no artifact"
+
+
+def test_read_rows_dedups_on_k_idx_last_wins(tmp_path):
+    """A re-run appends rather than truncates and the recheck deliberately
+    re-records rows. Without dedup the summary's n inflates and the
+    rule-of-three bound is reported falsely tight."""
+    p = tmp_path / "rows.jsonl"
+    p.write_text("\n".join(json.dumps(r) for r in [
+        {"k": 105, "idx": 0, "status": "UNKNOWN"},
+        {"k": 105, "idx": 1, "status": "UNSAT"},
+        {"k": 105, "idx": 0, "status": "SAT"},     # recheck resolved it: must win
+    ]) + "\n")
+    rows = mod.read_rows(p)
+    assert len(rows) == 2
+    assert {(r["k"], r["idx"]): r["status"] for r in rows} == {
+        (105, 0): "SAT", (105, 1): "UNSAT"}

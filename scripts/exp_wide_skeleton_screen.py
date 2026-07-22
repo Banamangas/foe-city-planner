@@ -94,10 +94,15 @@ def load_done(path: pathlib.Path) -> set[tuple[int, int]]:
 def read_rows(path: pathlib.Path) -> list[dict]:
     """All usable rows from a results file, skipping any unparsable or
     identity-less line -- same tolerance as load_done, so a torn line from a
-    killed run cannot crash the summary after the screening itself survived."""
-    rows: list[dict] = []
+    killed run cannot crash the summary after the screening itself survived.
+
+    De-duplicated on (k, idx), LAST occurrence winning: a re-run appends rather
+    than truncates, and a recheck deliberately re-records a pattern it resolved.
+    Without this the summary would double-count and report a falsely tight bound.
+    """
+    rows: dict[tuple, dict] = {}
     if not path.exists():
-        return rows
+        return []
     with path.open() as fh:
         for line in fh:
             line = line.strip()
@@ -109,8 +114,8 @@ def read_rows(path: pathlib.Path) -> list[dict]:
                 continue
             if not isinstance(r, dict) or "k" not in r or "idx" not in r:
                 continue
-            rows.append(r)
-    return rows
+            rows[(r["k"], r["idx"])] = r
+    return list(rows.values())
 
 
 def append_row(fh, row: dict) -> None:
@@ -146,11 +151,7 @@ def _sat_artifact(k, idx, pat, vlay, achieved) -> dict:
     }
 
 
-def _screen_one(payload):
-    """Probe one pattern at probe_workers=1. Returns (row, sat_artifact|None)."""
-    k, idx, pat = payload
-    diag: dict = {}
-    t0 = time.monotonic()
+def _screen_one_inner(k, idx, pat, diag, t0):
     st, pos = probe(pat, _W["region"], _W["consumers"],
                     probe_limit=_W["budget"], probe_workers=1, diag=diag)
     row = {"k": k, "idx": idx, "status": st, "achieved": None, "legal": None,
@@ -173,6 +174,25 @@ def _screen_one(payload):
     # slipping through as a valid SAT).
     row["legal"] = len(rotated_buildings(vlay, canonical_dims(_W["layout"]))) == 0
     return row, _sat_artifact(k, idx, pat, vlay, achieved)
+
+
+def _screen_one(payload):
+    """Probe one pattern at probe_workers=1. Returns (row, sat_artifact|None).
+
+    Never raises: one bad pattern in ~15,000 must not kill an 8h unattended
+    run. A failure is recorded as an ERROR row and the sweep continues.
+    """
+    k, idx, pat = payload
+    diag: dict = {}
+    t0 = time.monotonic()
+    try:
+        return _screen_one_inner(k, idx, pat, diag, t0)
+    except Exception as exc:      # noqa: BLE001 -- deliberate catch-all, see docstring
+        return ({"k": k, "idx": idx, "status": "ERROR", "achieved": None,
+                 "legal": None, "secs": round(time.monotonic() - t0, 2),
+                 "th": list(pat.params.get("th", ())),
+                 "reason": f"{type(exc).__name__}: {exc}",
+                 "branches": None, "solve_s": None}, None)
 
 
 def persist_sat(sat_dir: pathlib.Path, art: dict) -> pathlib.Path:
@@ -256,6 +276,7 @@ def run_recheck(layout, rows_path, sample_n, budget, workers, seed, n_per, sat_d
     if not targets:
         print("no UNKNOWN rows to recheck")
         return {"n": 0, "converted": 0, "rows": []}
+    by_key = {(r["k"], r["idx"]): r for r in read_rows(rows_path)}
     region = set(layout.region.cells)
     th = layout.townhall.footprint
     by_k: dict = {}
@@ -265,6 +286,18 @@ def run_recheck(layout, rows_path, sample_n, budget, workers, seed, n_per, sat_d
     for k, idxs in sorted(by_k.items()):
         pats = sample_patterns(region, th.width, th.length, k, n_per, seed)
         for idx in idxs:
+            if idx >= len(pats):
+                raise SystemExit(
+                    f"recheck aborted: idx={idx} out of range for k={k} "
+                    f"(only {len(pats)} patterns regenerated). --n must be at "
+                    f"least as large as the screen's.")
+            recorded = by_key.get((k, idx))
+            if recorded is not None and recorded.get("th") is not None:
+                if list(pats[idx].params["th"]) != list(recorded["th"]):
+                    raise SystemExit(
+                        f"recheck aborted: regenerated pattern for k={k} idx={idx} does not "
+                        f"match the screen's record (th {list(pats[idx].params['th'])} != "
+                        f"{list(recorded['th'])}). --seed/--n must match the screen run.")
             payloads.append((k, idx, pats[idx]))
     print(f"recheck: {len(payloads)} UNKNOWNs at {budget:.0f}s each", flush=True)
     out = []
@@ -278,6 +311,11 @@ def run_recheck(layout, rows_path, sample_n, budget, workers, seed, n_per, sat_d
                 p = persist_sat(sat_dir, art)
                 print(f"  PERSISTED SAT -> {p}", flush=True)
     converted = sum(1 for r in out if r["status"] != "UNKNOWN")
+    with rows_path.open("a") as fh:
+        for r in out:
+            append_row(fh, r)
+    verdict, detail = classify_verdict(read_rows(rows_path))
+    print(f"RECHECK verdict now: {verdict} {json.dumps(detail)}", flush=True)
     res = {"n": len(out), "converted": converted,
            "sat": sum(1 for r in out if r["status"] == "SAT"), "rows": out}
     print("RECHECK:", json.dumps({k: v for k, v in res.items() if k != "rows"}))

@@ -51,7 +51,9 @@ def probe_pattern(layout, region, consumers, pat, budget, workers):
         return st, None, None, diag
     vst, vlay, achieved = validate(layout, pat, pos)
     if vst != "OK":
-        return f"SAT_{vst}", None, None, diag    # SAT placement but not a placeable full layout
+        # validate() already returns terminal statuses (ROUTE_FAIL, INVALID,
+        # SAT_FILLER_FAIL, SAT_ROTATED); re-prefixing would emit "SAT_SAT_ROTATED".
+        return vst, None, None, diag
     legal = len(rotated_buildings(vlay, canonical_dims(layout))) == 0
     return "SAT", achieved, legal, diag
 
