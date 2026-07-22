@@ -3,6 +3,49 @@
 _2026-07-22. Track: R&D (can any lane skeleton beat 102 roads?). Status: spec, not yet planned._
 _Supersedes the deep-probe method of `2026-07-21-richer-skeleton-diagnostic-design.md` (not its question)._
 
+## 0. REVISION 2026-07-22 — the 30 s budget is REFUTED; this spec is retargeted
+
+Everything below §1 was written before `d` (the probability of detecting a genuinely feasible
+pattern) was measured. It has now been measured, and it invalidates the original design:
+
+| arm | setting | found, of 4 known-feasible patterns |
+|---|---|---|
+| this spec's screen | 30 s x 1 worker | **0 / 4** |
+| this spec's screen, more threads | 30 s x 12 workers | **0 / 4** |
+| this spec's recheck arm | 300 s x 1 worker | **4 / 4** (102-170 s) |
+
+**Budget is the binding axis, not parallelism.** The "all 34 corpus SATs finished within 29.2 s"
+justification in §1 is drawn from corpus SATs that sit at k = 110-127 — **zero of them in the 105-107
+band this screen targets**. As specified, the 8.3 h run would have reported "feasibility < 0.06 %"
+while structurally unable to detect four patterns already known to be feasible: `rule_of_three` bounds
+`p*d`, and `d` was 0.
+
+**Binding parameters, all now measured:**
+- **Budget: 300 s** (not 30 s). At 300 s x 1 worker, `d = 0.77` — 74 of 96 re-solves of
+  known-feasible patterns resolved SAT. Even at the usable budget a feasible pattern is missed ~23 %
+  of the time, so `d` must stay in the power calculation.
+- **Throughput: ~2.4 patterns/min** (12 concurrent x 300 s), not 31/min. Faster at k where UNSAT
+  dominates, since presolve-refuted patterns cost ~0 s.
+- **k-levels: 105 and 106 primary, 107 as a positive control.** Measured `achieved ≈ k - 5` at best
+  for lane (k=107 -> 102). Beating 102 needs `achieved <= 101`, so **k <= 106 is the winnable band**;
+  k=107 tops out at a tie and k=109 cannot win. k=105 has never produced a SAT (0 of 12) but that
+  bounds nothing at n=12. The k=107 arm doubles as the **positive control this spec previously
+  lacked** — it must reproduce SATs, or the harness is mis-wired.
+- **The question changed.** Feasibility is not rare (`p ≈ 8 %` at k=107), so the goal is no longer a
+  null bound but the **distribution of `achieved`**. Current minimum is 102 (a tie, from lane).
+
+**Stage 2 — seed-polish.** `probe()` has no objective, so `achieved` is luck-of-the-solution: re-solving
+one fixed skeleton across 24 CP-SAT seeds moved `achieved` by up to 10 roads and took lane k=107 from
+103 to **102**. Any screen SAT achieving <= 104 should therefore be re-solved across ~12 seeds
+(`solver_overrides={"random_seed": s}`) before it is judged. This is cheap — few patterns qualify —
+and it is the only measured way to squeeze the last roads out of a skeleton. Note its tail is thin:
+over 74 samples the minimum was hit once, so polish buys ~1 road, not 3.
+
+**Superseded below:** §3's "Budget: 30 s" and its sample sizes; §4/§4a's throughput and power
+arithmetic; §5's `NULL_WITH_BOUND`-centred verdict; §6's censoring bullet (now resolved by direct
+measurement). The *method* — wide sampling with concurrency across patterns rather than threads within
+one probe — survives unchanged, and the 10.29x dispatch calibration in §4a still holds.
+
 ## 1. Why the deep probe was the wrong instrument
 
 The richer-skeleton diagnostic ran 72 probes at 300 s (2.96 h) and spent **90 % of its wall clock on
