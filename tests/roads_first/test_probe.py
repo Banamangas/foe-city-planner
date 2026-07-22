@@ -19,6 +19,59 @@ def test_probe_returns_unsat_when_no_anchors():
     assert pos is None
 
 
+def test_diag_records_no_anchor_shortcut_without_solving():
+    """The zero-anchor early return must be labelled as such: it is an UNSAT
+    that never reaches CP-SAT, so it says nothing about the pattern's real
+    (in)feasibility and must not be read as a solver refutation."""
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 1, 1),
+                  False, 1, True, None, None, "TH")
+    consumer = Building(10, "c10", "g", Footprint(0, 0, 2, 2), True, 1, False, None, None, "a")
+    region = Region(frozenset((x, y) for x in range(2) for y in range(2)))
+    pat = list(generate_patterns(set(region.cells), 1, 1, 1, random.Random(0), 5))[0]
+    diag = {}
+    st, _ = probe(pat, set(region.cells), [consumer], probe_limit=5.0, diag=diag)
+    assert st == "UNSAT"
+    assert diag["reason"] == "no_anchor"
+    assert diag["no_anchor_entity"] == consumer.entity_id
+    assert diag["branches"] == 0 and diag["solve_s"] == 0.0
+
+
+def test_diag_distinguishes_presolve_from_search():
+    """A decided probe must report whether CP-SAT searched at all. branches==0
+    means presolve closed it; that is the difference between the ~0.4s UNSATs
+    and the ones that cost minutes."""
+    pytest.importorskip("ortools")
+    consumers = [
+        Building(10 + i, f"c1{i}", "g", Footprint(0, 0, 2, 2), True, 1, False, None, None, "a")
+        for i in range(3)
+    ]
+    region = Region(frozenset((x, y) for x in range(8) for y in range(8)))
+    region_set = set(region.cells)
+    pats = list(generate_patterns(region_set, 2, 2, 2, random.Random(0), 30))
+    pat = next(p for p in pats if prefilter(p, region_set, consumers) is None)
+    diag = {}
+    probe(pat, region_set, consumers, probe_limit=10.0, diag=diag)
+    assert diag["reason"] in ("presolve", "search")
+    assert (diag["branches"] == 0) == (diag["reason"] == "presolve")
+    assert "cand_s" in diag and "solve_s" in diag and "opts_min" in diag
+
+
+def test_diag_default_none_leaves_probe_unchanged():
+    """diag must be pure instrumentation: passing it cannot change the verdict."""
+    pytest.importorskip("ortools")
+    consumers = [
+        Building(10 + i, f"c1{i}", "g", Footprint(0, 0, 2, 2), True, 1, False, None, None, "a")
+        for i in range(3)
+    ]
+    region = Region(frozenset((x, y) for x in range(8) for y in range(8)))
+    region_set = set(region.cells)
+    pats = list(generate_patterns(region_set, 2, 2, 2, random.Random(0), 30))
+    pat = next(p for p in pats if prefilter(p, region_set, consumers) is None)
+    st_plain, _ = probe(pat, region_set, consumers, probe_limit=10.0)
+    st_diag, _ = probe(pat, region_set, consumers, probe_limit=10.0, diag={})
+    assert st_plain == st_diag
+
+
 def test_symmetry_breaking_preserves_status_across_patterns():
     """symmetry_breaking must never turn a SAT pattern into UNSAT (or vice
     versa) -- it only orders interchangeable same-size buildings, it must not

@@ -408,17 +408,36 @@ def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
           symmetry_breaking: bool = False,
           hints: dict[int, tuple[int, int]] | None = None,
           stub_priority: bool = False,
-          solver_overrides: dict[str, object] | None = None) -> tuple[str, dict | None]:
+          solver_overrides: dict[str, object] | None = None,
+          diag: dict | None = None) -> tuple[str, dict | None]:
+    """`diag`, if given a dict, is filled with why this probe ended the way it
+    did -- `reason` is one of:
+      no_anchor  some consumer has zero road-adjacent anchors; returns UNSAT
+                 without ever building a model (pure python cost).
+      presolve   CP-SAT closed the problem with *zero* search branches.
+      search     CP-SAT actually searched (branches > 0).
+    plus the python-vs-solver time split and branch/conflict counts. Without
+    this, a fast UNSAT and a slow one are indistinguishable in the logs even
+    though they mean completely different things about the pattern."""
     from ortools.sat.python import cp_model
 
+    t_start = time.monotonic()
     th_cells = set(pattern.th.cells())
     blocked = set(pattern.roads) | th_cells
     cand = []
     for b in consumers:
         opts = _anchor_candidates(b, region, blocked, pattern.roads)
         if not opts:
+            if diag is not None:
+                diag.update(reason="no_anchor", no_anchor_entity=b.entity_id,
+                            cand_s=round(time.monotonic() - t_start, 3),
+                            solve_s=0.0, branches=0, conflicts=0)
             return ("UNSAT", None)
         cand.append((b, opts))
+    if diag is not None:
+        diag.update(cand_s=round(time.monotonic() - t_start, 3),
+                    opts_total=sum(len(o) for _, o in cand),
+                    opts_min=min(len(o) for _, o in cand))
 
     stub_hints = _stub_priority_hints(pattern, cand) if stub_priority else {}
 
@@ -452,7 +471,14 @@ def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
     if solver_overrides:
         for key, value in solver_overrides.items():
             setattr(solver.parameters, key, value)
+    t_solve = time.monotonic()
     st = solver.Solve(m)
+    if diag is not None:
+        branches = solver.NumBranches()
+        diag.update(reason="presolve" if branches == 0 else "search",
+                    solve_s=round(time.monotonic() - t_solve, 3),
+                    branches=branches, conflicts=solver.NumConflicts(),
+                    solver_status=solver.status_name(st))
     if st in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         pos = {}
         for i, (b, _) in enumerate(cand):
