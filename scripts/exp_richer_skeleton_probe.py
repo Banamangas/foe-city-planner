@@ -42,15 +42,18 @@ def gen_family(family, region, tw, tl, k, rng, n):
 
 
 def probe_pattern(layout, region, consumers, pat, budget, workers):
-    """Returns (status, achieved, legal). achieved/legal set only for a valid SAT layout."""
-    st, pos = probe(pat, region, consumers, probe_limit=budget, probe_workers=workers)
+    """Returns (status, achieved, legal, diag). achieved/legal set only for a
+    valid SAT layout; diag records why the probe ended (see probe()'s `diag`)."""
+    diag = {}
+    st, pos = probe(pat, region, consumers, probe_limit=budget,
+                    probe_workers=workers, diag=diag)
     if st != "SAT":
-        return st, None, None
+        return st, None, None, diag
     vst, vlay, achieved = validate(layout, pat, pos)
     if vst != "OK":
-        return f"SAT_{vst}", None, None          # SAT placement but not a placeable full layout
+        return f"SAT_{vst}", None, None, diag    # SAT placement but not a placeable full layout
     legal = len(rotated_buildings(vlay, canonical_dims(layout))) == 0
-    return "SAT", achieved, legal
+    return "SAT", achieved, legal, diag
 
 
 def run_diagnostic(layout, families, ks, n_per, budget, workers, seed):
@@ -64,10 +67,12 @@ def run_diagnostic(layout, families, ks, n_per, budget, workers, seed):
             pats = gen_family(family, region, tw, tl, k, rng, n_per)
             for pat in pats:
                 t0 = time.monotonic()
-                status, achieved, legal = probe_pattern(layout, region, consumers, pat, budget, workers)
+                status, achieved, legal, diag = probe_pattern(
+                    layout, region, consumers, pat, budget, workers)
                 rows.append({"family": family, "k": k, "status": status,
                              "achieved": achieved, "legal": legal,
-                             "secs": round(time.monotonic() - t0, 1)})
+                             "secs": round(time.monotonic() - t0, 1),
+                             "th": pat.params.get("th"), **diag})
                 print(json.dumps(rows[-1]), flush=True)
     return rows
 
@@ -91,11 +96,19 @@ def _summary(rows, floor=102):
     for fam in sorted({r["family"] for r in rows}):
         fr = [r for r in rows if r["family"] == fam]
         sats = [r["achieved"] for r in fr if r["status"] == "SAT" and r["achieved"] is not None]
+        # `reason` splits UNSAT into the two very different things it can mean:
+        # presolve-refuted (no search at all) vs proved by real search.
+        reasons = {}
+        for r in fr:
+            reasons[r.get("reason", "n/a")] = reasons.get(r.get("reason", "n/a"), 0) + 1
+        searched = [r["branches"] for r in fr if r.get("branches")]
         out[fam] = {"n": len(fr),
                     "SAT": sum(1 for r in fr if r["status"] == "SAT"),
                     "UNSAT": sum(1 for r in fr if r["status"] == "UNSAT"),
                     "UNKNOWN": sum(1 for r in fr if r["status"] == "UNKNOWN"),
-                    "min_achieved": (min(sats) if sats else None)}
+                    "min_achieved": (min(sats) if sats else None),
+                    "reason": reasons,
+                    "max_branches": (max(searched) if searched else 0)}
     verdict, reason = classify_verdict(rows, floor)
     return {"per_family": out, "verdict": verdict, "reason": reason}
 
