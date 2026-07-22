@@ -1,10 +1,14 @@
-import importlib.util, json, pathlib
+import importlib.util, json, pathlib, sys
 
 _spec = importlib.util.spec_from_file_location(
     "exp_wide_skeleton_screen",
     pathlib.Path(__file__).resolve().parent.parent / "scripts" / "exp_wide_skeleton_screen.py",
 )
 mod = importlib.util.module_from_spec(_spec)
+# Register under its own name before exec so multiprocessing can pickle
+# module-level functions by reference (needed for the Pool-based recheck
+# test, which is the first test in this file to actually dispatch a Pool).
+sys.modules[_spec.name] = mod
 _spec.loader.exec_module(mod)
 
 
@@ -250,3 +254,33 @@ def test_pick_recheck_targets_samples_only_unknowns(tmp_path):
     assert set(picked) <= {(105, 1), (106, 2)}
     # deterministic for a fixed seed
     assert picked == mod.pick_recheck_targets(p, sample_n=2, seed=0)
+
+
+def test_run_recheck_regenerates_by_index_and_persists_sats(tmp_path):
+    """The recheck regenerates patterns from (k, idx) alone. If that mapping
+    broke, the arm would confidently re-probe the WRONG patterns and give a
+    wrong answer about whether the 30s budget is sound."""
+    from foeopt.model import Building, Footprint, Layout, Region
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
+                  False, 1, True, None, None, "th")
+    c1 = Building(2, "c2", "g", Footprint(0, 0, 2, 1), True, 1, False, None, None, "a")
+    region = Region(frozenset((x, y) for x in range(10) for y in range(10)))
+    layout = Layout(region, [th, c1], th, {})
+
+    rows_path = tmp_path / "rows.jsonl"
+    rows_path.write_text("\n".join(json.dumps(r) for r in [
+        {"k": 6, "idx": 0, "status": "UNKNOWN"},
+        {"k": 6, "idx": 1, "status": "UNKNOWN"},
+        {"k": 6, "idx": 2, "status": "UNSAT"},   # must not be picked
+    ]) + "\n")
+    sat_dir = tmp_path / "sats"
+    res = mod.run_recheck(layout, rows_path, sample_n=2, budget=5.0, workers=2,
+                          seed=0, n_per=6, sat_dir=sat_dir)
+    assert res["n"] == 2
+    assert {(r["k"], r["idx"]) for r in res["rows"]} == {(6, 0), (6, 1)}
+    assert res["converted"] == sum(1 for r in res["rows"] if r["status"] != "UNKNOWN")
+    # any SAT the recheck finds must leave a reconstructable artifact on disk
+    for r in res["rows"]:
+        if r["status"] == "SAT":
+            assert list(sat_dir.glob(f"sat-k{r['k']}-i{r['idx']}-*.json")), \
+                "recheck found a SAT but persisted no artifact"
