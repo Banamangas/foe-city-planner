@@ -183,3 +183,19 @@ def test_screen_one_passes_through_non_sat_probe_status(monkeypatch):
     assert row["status"] == "UNKNOWN" and art is None
     assert row["k"] == 106 and row["idx"] == 4
     assert row["achieved"] is None and row["legal"] is None
+
+
+def test_summarize_tallies_per_k_and_carries_verdict():
+    rows = [
+        {"k": 105, "idx": 0, "status": "UNSAT", "achieved": None, "legal": None, "reason": "presolve"},
+        {"k": 105, "idx": 1, "status": "UNKNOWN", "achieved": None, "legal": None, "reason": "search"},
+        {"k": 106, "idx": 0, "status": "SAT", "achieved": 101, "legal": True, "reason": "search"},
+        {"k": 106, "idx": 1, "status": "PREFILTERED", "achieved": None, "legal": None, "reason": "prefilter:area"},
+    ]
+    s = mod.summarize(rows)
+    assert s["per_k"][105]["UNSAT"] == 1 and s["per_k"][105]["UNKNOWN"] == 1
+    assert s["per_k"][106]["SAT"] == 1 and s["per_k"][106]["PREFILTERED"] == 1
+    assert s["per_k"][106]["min_achieved"] == 101
+    assert s["per_k"][105]["min_achieved"] is None
+    assert s["verdict"] == "BREAK_FLOOR"
+    assert s["detail"]["best_achieved"] == 101

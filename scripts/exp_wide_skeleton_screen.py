@@ -210,3 +210,79 @@ def run_screen(layout, ks, n_per, budget, workers, seed, out_path, sat_dir,
                     rate = i / ((time.monotonic() - t0) / 60)
                     print(f"  [{i}/{len(payloads)}] {rate:.1f} probes/min", flush=True)
     return rows
+
+
+def summarize(rows, floor: int = FLOOR) -> dict:
+    per_k: dict = {}
+    for r in rows:
+        d = per_k.setdefault(r["k"], {"n": 0, "SAT": 0, "UNSAT": 0, "UNKNOWN": 0,
+                                      "PREFILTERED": 0, "other": 0,
+                                      "min_achieved": None})
+        d["n"] += 1
+        if r["status"] in d:
+            d[r["status"]] += 1
+        else:
+            d["other"] += 1      # SAT_ROTATED, SAT_FILLER_FAIL, ... (raw JSONL keeps the detail)
+        if r["status"] == "SAT" and r.get("achieved") is not None:
+            if d["min_achieved"] is None or r["achieved"] < d["min_achieved"]:
+                d["min_achieved"] = r["achieved"]
+    verdict, detail = classify_verdict(rows, floor)
+    return {"per_k": per_k, "verdict": verdict, "detail": detail}
+
+
+def _selftest() -> int:
+    """End-to-end on a toy layout: exercises sampling -> prefilter -> pool ->
+    JSONL -> summary, which the unit tests deliberately do not (no solver)."""
+    import tempfile
+    from foeopt.model import Building, Footprint, Layout, Region
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
+                  False, 1, True, None, None, "th")
+    c1 = Building(2, "c2", "g", Footprint(0, 0, 2, 1), True, 1, False, None, None, "a")
+    region = Region(frozenset((x, y) for x in range(10) for y in range(10)))
+    layout = Layout(region, [th, c1], th, {})
+    with tempfile.TemporaryDirectory() as td:
+        out = pathlib.Path(td) / "rows.jsonl"
+        rows = run_screen(layout, [6], n_per=6, budget=5.0, workers=2, seed=0,
+                          out_path=out, sat_dir=pathlib.Path(td) / "sats")
+        assert rows, "selftest produced no rows"
+        assert out.exists() and out.read_text().strip(), "no JSONL written"
+        assert load_done(out) == {(r["k"], r["idx"]) for r in rows}, "resume keys mismatch"
+        s = summarize(rows)
+        assert s["verdict"] in ("BREAK_FLOOR", "FEASIBLE_NOT_SUPERIOR", "NULL_WITH_BOUND")
+    print("SELFTEST OK:", json.dumps(s))
+    return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("city", nargs="?")
+    ap.add_argument("--k-levels", default="105,106,107")
+    ap.add_argument("--n", type=int, default=5000)
+    ap.add_argument("--budget", type=float, default=30.0)
+    ap.add_argument("--workers", type=int, default=12)
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--floor", type=int, default=FLOOR)
+    ap.add_argument("--out", default="output/wide-screen.jsonl")
+    ap.add_argument("--sat-dir", default="output/wide-screen-sats")
+    ap.add_argument("--resume", action="store_true")
+    ap.add_argument("--selftest", action="store_true")
+    args = ap.parse_args()
+    if args.selftest:
+        return _selftest()
+    if not args.city:
+        ap.error("city file required (or --selftest)")
+    layout = load_layout(args.city)
+    ks = [int(x) for x in args.k_levels.split(",")]
+    out_path = pathlib.Path(args.out)
+    rows = run_screen(layout, ks, args.n, args.budget, args.workers, args.seed,
+                      out_path, pathlib.Path(args.sat_dir), resume=args.resume)
+    if args.resume:
+        rows = [json.loads(l) for l in out_path.open() if l.strip()]
+    summary = summarize(rows, args.floor)
+    print("SUMMARY:", json.dumps(summary, indent=2))
+    out_path.with_suffix(".summary.json").write_text(json.dumps(summary, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
