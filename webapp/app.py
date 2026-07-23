@@ -115,11 +115,18 @@ def create_app(db_path: str | None = None) -> Flask:
         concurrent_levels = int(data.get("concurrent_levels", 4))
         th_anchors = data.get("th_anchors", "full")
         k_start = data.get("k_start", "auto")
+        # Opt-in (default 0 = off): after the walk, re-solve the best skeleton
+        # under this many CP-SAT seeds and keep a strictly-lower legal road
+        # count. probe() has no objective so its placement -- and thus the road
+        # count -- varies by solver seed. Adds up to seed_polish x probe_limit
+        # seconds, which is why it is off by default.
+        seed_polish = int(data.get("seed_polish", 0))
         layout = load_layout_from_dict(city["payload"])
         job_id = jobs.submit(layout, time_box=time_box, patterns=patterns,
                              probe_limit=probe_limit, workers=workers,
                              probe_workers=probe_workers, th_anchors=th_anchors,
-                             k_start=k_start, concurrent_levels=concurrent_levels)
+                             k_start=k_start, concurrent_levels=concurrent_levels,
+                             seed_polish=seed_polish)
         return jsonify(job_id=job_id)
 
     @app.get("/api/stream/<job_id>")
