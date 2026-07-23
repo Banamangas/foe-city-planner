@@ -184,3 +184,22 @@ def test_prefilter_area_rejects_impossible():
     big = Building(1, "c", "g", Footprint(0, 0, 4, 4), True, 1, False, None, None, "big")
     reason = prefilter(pat, region, [big])
     assert reason == "area"
+
+def test_max_lane_len_only_filters_never_creates_new_topologies():
+    """`max_lane_len` cannot make a skeleton the uncapped generator wouldn't
+    already produce: fronts grow round-robin, so a cap either sits above the
+    natural lane length (inert) or starves growth until `remaining != 0`
+    rejects the pattern outright. The capped set is therefore always a strict
+    SUBSET of the uncapped one -- so treating a capped run as a separate
+    "hybrid family" probes a subsample of `lane`, not a different structure.
+    """
+    import random
+    from foeopt.roads_first import generate_lane_patterns
+    region = {(x, y) for x in range(20) for y in range(20)}
+    uncapped = {p.roads for p in generate_lane_patterns(
+        region, 2, 2, 20, random.Random(0), 10**9, th_mode="full")}
+    capped = {p.roads for p in generate_lane_patterns(
+        region, 2, 2, 20, random.Random(0), 10**9, th_mode="full", max_lane_len=3)}
+    assert capped, "test needs a cap that still yields patterns"
+    assert not (capped - uncapped), "cap produced a topology lane cannot produce"
+    assert len(capped) < len(uncapped), "test needs a cap that actually binds"
