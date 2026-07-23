@@ -8,6 +8,7 @@ export function OptimizePanel() {
   const applyImprovement = useCityStore((s) => s.applyImprovement);
   const setJob = useCityStore((s) => s.setJob);
   const [minutes, setMinutes] = useState(5);
+  const [seedPolish, setSeedPolish] = useState(0);
   const [error, setError] = useState("");
   const esRef = useRef<EventSource | null>(null);
 
@@ -17,7 +18,11 @@ export function OptimizePanel() {
     if (!city) return;
     setError("");
     try {
-      const { job_id } = await apiOptimize({ city_id: city.city_id, time_box: minutes * 60 });
+      const { job_id } = await apiOptimize({
+        city_id: city.city_id,
+        time_box: minutes * 60,
+        ...(seedPolish > 0 ? { seed_polish: seedPolish } : {}),
+      });
       setJob({ id: job_id, state: "running", elapsed: 0 });
       esRef.current = openStream(job_id, {
         onImprovement: (imp) => applyImprovement(imp),
@@ -41,6 +46,11 @@ export function OptimizePanel() {
         Time-box (min)
         <input type="number" min={1} max={120} value={minutes}
           onChange={(e) => setMinutes(Math.max(1, Number(e.target.value) || 1))} disabled={running} />
+      </label>
+      <label className="row" title="After the search, re-solve the best skeleton under this many solver seeds and keep a lower road count. 0 = off. Adds up to this many probe budgets of extra time.">
+        Seed-polish (0 = off)
+        <input type="number" min={0} max={64} value={seedPolish}
+          onChange={(e) => setSeedPolish(Math.max(0, Number(e.target.value) || 0))} disabled={running} />
       </label>
       <div className="row">
         <button onClick={start} disabled={running}>Optimize</button>
