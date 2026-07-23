@@ -1997,3 +1997,47 @@ it is not a route to 101 on its own.
 4. **Persist the notable artifact, not just the record-breaking one.** The 102 tie was nearly lost
    because the script only persisted `achieved < 102`; it was recoverable only because the seed was
    logged. Persist anything at or near the frontier.
+
+## NEW RECORD: 98 roads on darkzig (was 102) — the wide screen at the corrected budget (2026-07-23)
+**The result.** The wide-shallow lane screen at the *measured* settings (300 s budget, 12x1-worker,
+k=105/106, 700 patterns/level, 1400 probes, ~7.7 h) found a legal layout at **98 roads** — four under
+the standing record of 102, which until now only the comb family had reached (and lane had only tied,
+at 102, earlier the same day). Verdict fired **BREAK_FLOOR**.
+
+**Independently verified** (the standing rule after the retracted-127 incident): reconstructed the
+persisted artifact via `exp_exact_router.reconstruct_fixed`, then
+- `route()` from the placement = **98**,
+- `exact_route()` = **OPTIMAL 98** (greedy and exact agree — no undercounting),
+- `is_valid` True, `rotated_buildings` **0**, all **224** buildings placed.
+Record layout preserved (with provenance) at `docs/records/darkzig-98-roads-lane-k105.json`
+(the `output/` artifacts are gitignored). Provenance: family lane, skeleton k=105, gen seed 0,
+pattern index 542, CP-SAT seed 0.
+
+**Full frontier (all legal, all independently re-verified):**
+| roads | k | idx | source |
+|---|---|---|---|
+| **98** | 105 | 542 | base screen |
+| 99 | 105 | 368 | polish (102 -> 99, seed 9) |
+| 99 | 106 | 660 | polish (102 -> 99, seed 6) |
+| 101 | 105 | 432 | base screen |
+| 101 | 105 | 633 | base screen |
+| 101 | 106 | 167 | base screen |
+
+**What actually broke the floor: statistical power, not a new idea.** Feasibility at these k is
+~1.1 % (k=105: 8 SAT/700) to ~1.7 % (k=106: 12 SAT/700), and detection is capped at d~0.77 with an
+UNKNOWN majority. The 98 is the extreme left tail of the k=105 achieved distribution
+`[98,101,101,102,105,106,106,108]`. n=12 (the old deep run) had ~zero chance of sampling it; n=700 did.
+The lever that worked was **screening ~120x more patterns at the budget where feasible patterns are
+actually detectable** — the whole point of measuring d first.
+
+**Stage-2 seed-polish: real but secondary.** Re-solving the 11 SATs achieving <=104 across 12 CP-SAT
+seeds improved 4 of them (two 102->99, two 103->102), confirming `achieved` is luck-of-the-solution —
+but it did **not** beat the base screen's 98. Polish tightens the frontier; the screen finds it. Both
+matter, in that order.
+
+**The decisive lesson, restated.** This record exists because the 8.3 h run was *halted* before
+launch, `d` was measured directly (0/4 known-feasible patterns found at the spec'd 30 s, 4/4 at 300 s),
+and the experiment was retargeted onto the winnable band. Had the original spec run as written, it
+would have burned 8 h and reported "feasibility < 0.06 %" — while a 98-road layout sat undiscovered in
+the exact population it was sampling. *Measure the thing the conclusion depends on before spending the
+compute.* The whole-branch review that forced the d-measurement paid for itself many times over.
