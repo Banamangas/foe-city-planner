@@ -656,6 +656,9 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
                 st["best_achieved"] = achieved
                 if on_improvement is not None:
                     on_improvement(vlay, k, achieved)
+                recorder = getattr(params, "best_recorder", None)
+                if recorder is not None:
+                    recorder(k, achieved, pat, vlay)
         elif status in ("UNKNOWN", "ROUTE_FAIL", "INVALID", "SAT_FILLER_FAIL", "SAT_ROTATED"):
             st["saw_nonproof_failure"] = True
         return time.monotonic() > params.deadline
@@ -712,7 +715,8 @@ class RoadsFirstSearch:
                  k_start="auto", corpus_dir=None, scorer=None, score_threshold=None,
                  symmetry_breaking: bool = False, hint_layout: Layout | None = None,
                  pattern_family: str = "comb", stub_priority: bool = False,
-                 lane_cap: int | None = None, concurrent_levels: int = 1):
+                 lane_cap: int | None = None, concurrent_levels: int = 1,
+                 seed_polish: int = 0):
         self.layout = layout
         self.time_box = time_box
         self.patterns = patterns
@@ -731,6 +735,32 @@ class RoadsFirstSearch:
         self.stub_priority = stub_priority
         self.lane_cap = lane_cap
         self.concurrent_levels = concurrent_levels
+        self.seed_polish = seed_polish
+
+    def _apply_seed_polish(self, best_holder: dict, on_improvement) -> dict | None:
+        """Opt-in (seed_polish>0): re-solve the best skeleton under N CP-SAT
+        seeds and keep a strictly-lower legal road count. probe() has no
+        objective, so the placement it returns -- and thus route()'s count --
+        varies with the solver seed; this samples that spread on the single
+        best skeleton found. Returns an info dict (or None if it didn't run),
+        and emits the improved layout through on_improvement so streaming
+        callers see it. Costs up to seed_polish x probe_limit seconds, which is
+        why it is off by default."""
+        if self.seed_polish <= 0 or best_holder.get("pattern") is None:
+            return None
+        from foeopt.seed_search import seed_minimize_roads
+        res = seed_minimize_roads(self.layout, best_holder["pattern"],
+                                  seeds=range(self.seed_polish),
+                                  probe_limit=self.probe_limit,
+                                  probe_workers=self.probe_workers)
+        baseline = best_holder.get("achieved")
+        improved = (res.achieved is not None and baseline is not None
+                    and res.achieved < baseline)
+        if improved and on_improvement is not None:
+            on_improvement(res.layout, best_holder.get("k"), res.achieved)
+        return {"before": baseline, "after": res.achieved if improved else baseline,
+                "improved": improved, "seed": res.seed if improved else None,
+                "seeds_tried": res.n_tried, "n_legal": res.n_legal}
 
     def run(self, on_improvement=None, on_status=None, should_stop=None) -> dict:
         layout = self.layout
@@ -763,6 +793,19 @@ class RoadsFirstSearch:
         )
 
         results: dict[int, tuple[str, int | None]] = {}
+
+        # Capture the single best skeleton for optional seed-polish. Read off
+        # `params` by handle_result via getattr, so no probe-plumbing signature
+        # changes -- and it only records when seed_polish is on.
+        best_holder: dict = {"achieved": None, "pattern": None, "k": None,
+                             "layout": None}
+
+        def _record_best(k, achieved, pat, vlay):
+            if best_holder["achieved"] is None or achieved < best_holder["achieved"]:
+                best_holder.update(achieved=achieved, pattern=pat, k=k, layout=vlay)
+
+        if self.seed_polish > 0:
+            params.best_recorder = _record_best
 
         def _should_stop():
             if should_stop is not None and should_stop():
@@ -882,11 +925,17 @@ class RoadsFirstSearch:
                     lo = mid
 
             best = min((r[1] for r in results.values() if r[1] is not None), default=None)
+            polish_info = None
+            if best is not None and self.seed_polish > 0:
+                polish_info = self._apply_seed_polish(best_holder, on_improvement)
+                if polish_info is not None and polish_info["improved"]:
+                    best = polish_info["after"]
             unknowns = sum(1 for r in results.values() if r[0] == "INCONCLUSIVE")
             return {"verdict": "DONE",
                     "lowest_feasible_k_probed": hi if best is not None else None,
                     "best_achieved": best, "inconclusive_levels": unknowns,
                     "walk_complete": not truncated, "deadline_hit": _should_stop(),
+                    "seed_polish": polish_info,
                     "results": results}
         finally:
             if corpus is not None:
