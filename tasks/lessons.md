@@ -1069,16 +1069,76 @@ adds up across the ~2000+ probes run in 30min, and/or the added constraints inte
 automatic symmetry detection during presolve (a built-in feature) rather than complementing it --
 manually-added redundant symmetry-breaking constraints are a known way to *slow down* a modern CP-SAT
 solver that already detects and exploits this exact kind of interchangeable-item symmetry itself.
+> **BOTH of these hypotheses were MEASURED AND REFUTED on 2026-07-22 -- see the amendment at the end
+> of this entry. The A/B regression itself still stands; only the explanation was wrong.**
 **Verdict: closed, stays opt-in/off.** `symmetry_breaking=` kept in `foeopt/roads_first.py` as tested,
 correct, zero-cost-when-off infrastructure (same policy as `reach.py`/`--lns`/`--safe-placements`), but
 the reproducible measurement rules it out as a win. **Lesson for the backlog:** "manually add textbook
 symmetry breaking" is not free against a solver (CP-SAT) that already does this automatically in
 presolve -- measure before assuming a classic OR technique transfers, same standing pattern as
 "expert heuristics bolted onto the greedy constructor lose an equal-wall-clock A/B" (2026-07-06 entry),
-now with a CP-SAT-specific instance: don't fight the presolve. Idea #2 (warm-start hints from the
+now with a CP-SAT-specific instance: ~~don't fight the presolve~~.
+**The "don't fight the presolve" generalization is WITHDRAWN (2026-07-22 amendment):** it was inferred
+from a mechanism nobody had measured, and the branch counts measured later point the opposite way. What
+survives is narrower and more durable: *an equal-wall-clock A/B beat the technique and we did not know
+why -- so scope the verdict to the regime actually measured.* Idea #2 (warm-start hints from the
 classical packer) is now the top remaining cheap-tier candidate; unlike this idea it doesn't add
 constraints, it seeds the search, so it isn't subject to the same presolve-interference risk.
 Artifacts: `output/kwalk/symbreak.log`, `output/kwalk/symbreak-2.log`.
+
+### AMENDMENT 2026-07-22: the mechanism above is refuted; the A/B result is not
+Found while investigating "why are so many richer-skeleton probes UNKNOWN at 300s?" -- that
+investigation needed the real per-probe cost model, which forced a measurement of the two mechanisms
+this entry had only hypothesized. Both are wrong.
+
+**Hypothesis A -- cumulative model-construction cost -- REFUTED by direct timing.** Built the darkzig
+k=105 probe model 20x with and without `_add_symmetry_breaking` (63 consumers, 21 size groups):
+
+| model build | median |
+|---|---|
+| `symmetry_breaking=False` | 2.8 ms |
+| `symmetry_breaking=True` | 3.8 ms |
+
+**1.0 ms of extra Python per probe.** Across the ~2000 probes of a 30min arm that is ~2 seconds out of
+1800 -- **0.1%**. It cannot produce a 3-road regression. The "84 extra bool vars + ~250 constraints
+adds up" story was plausible-sounding arithmetic that nobody had multiplied out.
+
+**Hypothesis B -- interference with CP-SAT's automatic presolve symmetry detection -- REFUTED by
+branch counts.** Re-probed the 4 comb k=105 patterns that this session's diagnostic left UNKNOWN,
+on/off, 60s cap, 1 worker:
+
+| pattern | sym=False | sym=True |
+|---|---|---|
+| pat[2] | UNKNOWN 60s, 1,787,248 branches | **UNSAT in 18.6s**, 456,973 branches |
+| pat[3] | UNKNOWN 60s, 1,744,041 | UNKNOWN 60s, 1,155,820 (-34%) |
+| pat[5] | UNKNOWN 60s, 1,987,799 | UNKNOWN 60s, 1,387,815 (-30%) |
+| pat[7] | UNKNOWN 60s, 1,971,135 | UNKNOWN 60s, 1,564,325 (-21%) |
+
+Branch counts fall 21-34% and one instance *flips to decided*. If the added constraints were fighting
+presolve's own symmetry detection, branches would rise. They fall. Soundness cross-check: `pat[2]`'s
+UNSAT is independently corroborated -- the un-instrumented 12-worker run refuted the same pattern at
+38.1s *without* symmetry breaking, so the flip is a real refutation, not an over-constrained false
+UNSAT. (Note the speedup: 18.6s on 1 worker vs 37.6s of solve on 12.)
+
+**So why did the 30min A/B regress?** *Unknown, and now explicitly recorded as unknown.* Not build
+cost (0.1%), not presolve interference (branches fall). The regression is real and reproducible; its
+cause is unexplained. Do not invent a third mechanism without measuring it.
+
+**Scope correction.** The A/B measured *end-to-end k-walk quality at fixed wall-clock* -- ~2000+ probes
+averaging <1s, throughput-dominated, and its own mechanism check pinned its 2 UNKNOWN probes at a
+**15s cap**, too short to observe the effect above. That verdict is sound **for the k-walk** and stays.
+It should not be read as "symmetry breaking is bad here" in the *big-budget* regime (72 probes x 300s,
+e.g. `scripts/exp_richer_skeleton_probe.py`), where 1ms of build cost is noise and branch efficiency is
+the whole game. Nobody has measured that regime beyond the n=4 above -- which is far weaker evidence
+than the A/B, and is a signal to test, not a result to act on.
+
+**Methodological lesson (the durable one).** This entry said *"Both symmetry-breaking runs landed on the
+exact same k-sequence and numbers -- reproducible, not pool-scheduling noise."* That is true and it does
+rule out scheduling noise -- but re-running a fixed-seed pipeline demonstrates **determinism, not
+independent confirmation**. Same seed -> same patterns -> same trajectory, twice. The evidence was one
+trajectory through pattern space, reported in language ("reproducibly", twice-run table) that reads like
+two samples. **When a repeat run shares the seed, say "deterministic", not "reproducible" -- and get
+independent samples by varying the seed before calling a lever closed.**
 
 ## next-things-to-try #2: CP-SAT warm-start hints from the classical packer also make the k-walk WORSE, reproducibly (2026-07-16)
 **Setup:** idea #2 hypothesized that hinting `probe()`'s CP-SAT model with the classical repack
@@ -1752,3 +1812,232 @@ whose feasibility is rare, reuse the corpus of known-feasible ones — don't sam
 **Assets kept.** `foeopt/placement_proxies.py` (four proxies, unit-tested) and
 `scripts/exp_placement_objective.py` (corpus-driven correlation harness) stay as reference
 tooling — any future placement-proxy idea A/Bs through the same harness.
+
+## Richer-skeleton feasibility diagnostic — PARTIAL (2026-07-22)
+
+**Verdict: no family is feasible at k ≤ 104, and lane/hybrid are indistinguishable from the comb
+control there. But the run did NOT test the decisive band (k ≈ 105–109), so it does NOT settle
+whether a richer family can beat 102. Partial result; corrected re-run specified below.**
+
+`scripts/exp_richer_skeleton_probe.py`, 108 probes = 3 families (comb control, lane,
+hybrid cap=24) × k ∈ {96, 100, 104} × 12 full-TH patterns, **300 s budget, 12 workers, 3.85 h**:
+
+| family | n | SAT | UNSAT | UNKNOWN | min achieved |
+|---|---|---|---|---|---|
+| comb (control) | 36 | **0** | 21 | 15 | — |
+| lane | 36 | **0** | 21 | 15 | — |
+| hybrid (cap 24) | 36 | **0** | 22 | 14 | — |
+
+Every (family, k) cell is 0 SAT (UNSAT 5–9, UNKNOWN 3–7 of 12).
+
+**What this establishes.**
+- **Zero SAT anywhere** at k ≤ 104 even at 300 s / 12 workers — nothing breaks 102 in this range.
+- **Richer ≡ comb here:** lane/hybrid show the same UNSAT/UNKNOWN mix as the control, i.e. no
+  evidence the structurally-better families pack tighter at tight k.
+- The control behaves exactly as known results predict, which **validates the harness**.
+
+**What it does NOT establish — the k-range was misaimed (spec error).**
+The spec chose k ∈ {96,100,104} reasoning "below the 102 floor," **conflating the achieved count
+with k**. Measured on the known-good darkzig layouts, **achieved ≈ k − 9** (range 7–14: k110→102,
+k115→105, k119→110, k123→109, k127→120). Therefore:
+- comb's *feasibility* floor is **k ≈ 110**, not 102 — and the k-walk already records
+  **k=107 INFEASIBLE**. At k ≤ 104 *nothing* fits, for any family. We measured a foregone
+  conclusion.
+- Beating 102 requires feasibility at **k ≈ 105–109** (where achieved would land ~95–101). This
+  run touched only k=104, the top edge, and never probed 105–109.
+So "0 SAT at k ≤ 104" cannot distinguish "richer families are no better than comb" from "richer
+families are better, but not by 6+ cells of k."
+
+**Also: 40% UNKNOWN is not "decided."** `classify_verdict` returned FEASIBILITY_WALL only because
+the richer UNKNOWN fraction (29/72 = 40%) fell under the 0.5 threshold — a mechanical call. 40%
+undecided at 300 s is evidence, not proof.
+
+**Corrected follow-up (the actual test).** Re-run the *same harness* at **k ∈ {105, 107, 109}**
+for comb vs lane vs hybrid, to locate each family's **feasibility floor**. The real question is
+whether a richer family is feasible at a k where comb is not — e.g. a lane SAT at k=106 would
+achieve ~97 and beat 102. No new code; corrected k-levels only.
+
+**Lesson (generalizable).** When a search reports two coupled numbers (here the skeleton budget
+`k` and the achieved `route()` count), pin the empirical relationship between them *before*
+choosing the sweep range. A one-line check against existing artifacts (`achieved ≈ k − 9`) would
+have caught this before spending 3.85 h probing a range where the answer was foreordained.
+
+**Assets:** `scripts/exp_richer_skeleton_probe.py` (6 tests, harness validated by the control),
+`output/richer-skeleton.json`.
+
+## Corrected richer-skeleton run: lane reaches 103 (1 off comb) — and `hybrid` was never a family (2026-07-22)
+**Setup.** The corrected follow-up from the entry above: same harness (`exp_richer_skeleton_probe.py`),
+k ∈ {105,107,109}, families lane + hybrid(cap=24), n=12, **300 s × 12 workers**, seed 0.
+72 probes, **2.96 h**. (comb had been run separately as the control: 0 SAT at k=105/107, corroborating
+the k-walk's existing "k=107 INFEASIBLE".)
+
+**Result: 4 legal SATs; minimum achieved = 103.**
+| family | k | achieved | legal | secs |
+|---|---|---|---|---|
+| lane | 107 | **103** | yes | 272.7 |
+| hybrid | 107 | **103** | yes | 59.1 |
+| lane | 109 | 105 | yes | 161.0 |
+| hybrid | 109 | 108 | yes | 97.9 |
+
+Per family: 36 probes each, 2 SAT / 18 UNSAT / 16 UNKNOWN. Verdict fired **FEASIBILITY_WALL**
+("no legal SAT < 102; 32/72 UNKNOWN").
+
+**The real finding is 103, not the verdict.** The prior record for a non-comb family was **106**
+(lessons: lane/stub/hybrid "all lost to comb"). Lane now lands at **103 — one road off comb's 102**,
+with `rotated_buildings == 0`. Richer families are *not* structurally hopeless here; they are one road
+short. That is the result that justifies sampling the family properly rather than closing the track.
+
+**Three caveats, all against over-reading the verdict.**
+- **Knife-edge.** 32/72 = 44.4 % UNKNOWN against a pre-committed 50 % threshold: four more UNKNOWNs
+  and the same data reads DECIDABILITY_WALL. A verdict that flips on 4 of 72 probes is a mechanical
+  call, not a conclusion — the identical criticism the previous entry made of its own 40 %.
+- **90 % of the 2.96 h went into UNKNOWN probes** (2.67 h). "Decided" overstates what was bought.
+- **The 103 layout is unrecoverable.** `probe_pattern` discards `validate`'s layout and the row schema
+  carries no pattern identity, so a legal 103 exists that we cannot reproduce or inspect. **Any run
+  that can produce a near-record must persist the artifact**; this one couldn't.
+
+**Bug found: `hybrid` is not a family — it is a strict subset of `lane`.**
+`max_lane_len` cannot generate a topology the uncapped generator doesn't already produce. Measured
+across every cap and k tried:
+| k | \|lane\| | \|hybrid(24)\| | novel (in hybrid, not lane) |
+|---|---|---|---|
+| 105 | 67,308 | 67,308 | **0** |
+| 107 | 67,298 | 67,259 | **0** |
+| 109 | 67,285 | 67,225 | **0** |
+Also 0 novel at caps 3/4/6/8/12 (k=105) and at k=120/140. **Mechanism:** fronts grow round-robin
+(`generate_lane_patterns`, roads_first.py:239-253), so lanes come out balanced; a cap either sits above
+the natural lane length (inert) or starves growth so the budget can't be spent and
+`if remaining != 0: continue` rejects the pattern. The cap is a **filter, never a shape knob**.
+At k≈105 it is doubly inert: the trunk consumes ~46 of 105 cells, leaving ~59 across 10-20 fronts, so
+lanes are ~3-6 cells and a cap of 24 is unreachable. (cap=24 came from the earlier k≈115 work and was
+carried into a k-range where it cannot bind.) **Cost: half of this 2.96 h run bought correlated
+samples**, and `classify_verdict`'s `RICHER = ("lane","hybrid")` counted them as independent.
+Locked by `test_max_lane_len_only_filters_never_creates_new_topologies`.
+
+**Lesson (generalizable).** Before spending compute on an "arm B" of an experiment, prove it is
+*distinguishable from arm A* — one set-difference over the generated populations (seconds) would have
+caught this before 1.5 h went into it. A knob that only ever *removes* candidates is a sampling filter,
+not a treatment, and must not be counted as an independent family.
+
+**Assets:** `output/richer-skeleton-lane-hybrid.json`,
+`docs/superpowers/specs/2026-07-22-wide-shallow-skeleton-screen-design.md` (the replacement method).
+
+## Process: check `lessons.md` before proposing a lever, not after (2026-07-22)
+**What happened.** While diagnosing the UNKNOWN-heavy probes I measured that CP-SAT symmetry breaking
+resolved 1 of 4 stuck patterns and cut branches 21-34 %, and recommended enabling it — as if it were an
+untried idea sitting unused in the codebase. The user asked *"So symmetry-breaking existed but was never
+actually used?"* It had been implemented, wired to CLI flags on two scripts, A/B'd twice, and **closed
+as a reproducible negative** eight days earlier (lessons.md:1039). A single `grep -rn symmetry` would
+have surfaced that before I proposed re-running a closed experiment.
+**Why it matters.** The measurement was still worth having — it refuted the recorded *mechanism* (see
+the 2026-07-22 amendment on that entry). But framing it as "this exists and was never used" inverted
+the burden of proof: the honest framing was "this was closed for the k-walk; here is why that verdict
+may not transfer to a different regime," which is a much narrower and more defensible claim.
+**Rule.** Before recommending any lever, `grep` `tasks/lessons.md` + `tasks/next-things-to-try.md` for
+it. If it was tried: state the prior result first, then argue specifically what is different now.
+Never present a previously-closed lever as new.
+
+## Measured `d`: the wide screen's 30s budget would have found NOTHING — and a lane skeleton TIES 102 (2026-07-22)
+**Why measured.** The wide-shallow screen spec justified a 30 s probe budget with "all 34 corpus SATs
+finished within 29.2 s". A whole-branch review challenged that. Checking where those SATs live:
+`corpus SAT k-values = {123:20, 119:6, 127:3, 115:3, 111:1, 110:1}` -- **zero in the 105-107 band the
+screen targets.** The statistic came entirely from the loose-k regime.
+
+**Direct measurement of `d`** (detection probability on patterns KNOWN to be feasible). The 4 legal SATs
+from the completed deep run are regenerable (seed 0, one shared rng across the family/k loop); the
+replay was verified by reproducing the recorded per-index status vector.
+
+| arm | setting | found |
+|---|---|---|
+| the screen | 30 s x 1 worker | **0 / 4** |
+| the screen, more threads | 30 s x 12 workers | **0 / 4** |
+| the recheck arm | 300 s x 1 worker | **4 / 4** (102-170 s) |
+
+**Budget is the binding axis, not parallelism.** 30 s misses every known-feasible pattern even at 12
+threads; 300 s on one worker finds all four. Had the 8.3 h screen run, it would have reported
+"0 SATs in 15,000 patterns, feasibility < 0.06%" while structurally unable to detect four patterns we
+already knew were feasible. **`rule_of_three` bounds `p*d`, not `p` -- with `d = 0` the bound is
+vacuous, and the spec's gloss ("feasibility below 0.06%") would have been simply false.**
+
+**Refined `d` at the usable budget: 0.77**, not 1.0 -- across 96 re-solves of known-feasible patterns at
+300 s x 1, only 74 resolved SAT. A feasible pattern is still missed ~23% of the time per attempt.
+
+**Second finding: `achieved` is luck-of-the-solution, worth up to 10 roads.** `probe()` is pure
+feasibility with no objective, so it returns an arbitrary satisfying placement and the `route()` count
+depends on which one CP-SAT lands on. Re-solving each known-feasible pattern across 24 CP-SAT seeds
+(`solver_overrides={"random_seed": s}`), 300 s x 1, 26 min total:
+
+| pattern | SAT/24 | achieved min / median / max |
+|---|---|---|
+| lane k=107 i5 | 21 | **102** / 103 / 106 |
+| lane k=109 i10 | 17 | 105 / 105 / 108 |
+| hybrid k=107 i11 | 15 | 103 / 104 / **112** |
+| hybrid k=109 i4 | 21 | 103 / 105 / 107 |
+
+**A lane skeleton reached 102 -- TYING the all-time best**, which until now only the comb family had
+produced. Verified end-to-end: reproduced deterministically (gen seed 0, pattern index 5, CP-SAT seed
+15), `validate -> OK`, and independently re-routed from the persisted artifact via
+`exp_exact_router.reconstruct_fixed` -> `route() == 102`, `is_valid True`, `rotated_buildings 0`.
+Artifact: `output/spread/TIE-lane-k107-i5-s15-a102.json`.
+
+**But the seed lever's tail is thin.** 74 achieved samples, minimum 102, hit **once**. The same skeleton
+that yields 102 yields 103 eleven times. Re-solving buys ~1 road over the median and then plateaus;
+it is not a route to 101 on its own.
+
+**Lessons.**
+1. **A budget justified by a censored distribution is not justified.** The 30 s figure was the cap of
+   the corpus that produced it -- and worse, that corpus had no observations at all in the target band.
+   Before trusting a "resolves fast" statistic, check *where the observations live*, not just their max.
+2. **When a null result's bound is on a product (`p*d`), measure the other factor before spending the
+   compute.** One 26-minute measurement invalidated an 8.3-hour run.
+3. This is the **same failure mode** as the k-range error two entries above -- committing hours to a
+   configuration where the answer was foreordained -- caught this time by the branch's own artifacts.
+   The pattern to internalize: *the recorded results of the previous experiment are the cheapest
+   available critique of the next one.*
+4. **Persist the notable artifact, not just the record-breaking one.** The 102 tie was nearly lost
+   because the script only persisted `achieved < 102`; it was recoverable only because the seed was
+   logged. Persist anything at or near the frontier.
+
+## NEW RECORD: 98 roads on darkzig (was 102) — the wide screen at the corrected budget (2026-07-23)
+**The result.** The wide-shallow lane screen at the *measured* settings (300 s budget, 12x1-worker,
+k=105/106, 700 patterns/level, 1400 probes, ~7.7 h) found a legal layout at **98 roads** — four under
+the standing record of 102, which until now only the comb family had reached (and lane had only tied,
+at 102, earlier the same day). Verdict fired **BREAK_FLOOR**.
+
+**Independently verified** (the standing rule after the retracted-127 incident): reconstructed the
+persisted artifact via `exp_exact_router.reconstruct_fixed`, then
+- `route()` from the placement = **98**,
+- `exact_route()` = **OPTIMAL 98** (greedy and exact agree — no undercounting),
+- `is_valid` True, `rotated_buildings` **0**, all **224** buildings placed.
+Record layout preserved (with provenance) at `docs/records/darkzig-98-roads-lane-k105.json`
+(the `output/` artifacts are gitignored). Provenance: family lane, skeleton k=105, gen seed 0,
+pattern index 542, CP-SAT seed 0.
+
+**Full frontier (all legal, all independently re-verified):**
+| roads | k | idx | source |
+|---|---|---|---|
+| **98** | 105 | 542 | base screen |
+| 99 | 105 | 368 | polish (102 -> 99, seed 9) |
+| 99 | 106 | 660 | polish (102 -> 99, seed 6) |
+| 101 | 105 | 432 | base screen |
+| 101 | 105 | 633 | base screen |
+| 101 | 106 | 167 | base screen |
+
+**What actually broke the floor: statistical power, not a new idea.** Feasibility at these k is
+~1.1 % (k=105: 8 SAT/700) to ~1.7 % (k=106: 12 SAT/700), and detection is capped at d~0.77 with an
+UNKNOWN majority. The 98 is the extreme left tail of the k=105 achieved distribution
+`[98,101,101,102,105,106,106,108]`. n=12 (the old deep run) had ~zero chance of sampling it; n=700 did.
+The lever that worked was **screening ~120x more patterns at the budget where feasible patterns are
+actually detectable** — the whole point of measuring d first.
+
+**Stage-2 seed-polish: real but secondary.** Re-solving the 11 SATs achieving <=104 across 12 CP-SAT
+seeds improved 4 of them (two 102->99, two 103->102), confirming `achieved` is luck-of-the-solution —
+but it did **not** beat the base screen's 98. Polish tightens the frontier; the screen finds it. Both
+matter, in that order.
+
+**The decisive lesson, restated.** This record exists because the 8.3 h run was *halted* before
+launch, `d` was measured directly (0/4 known-feasible patterns found at the spec'd 30 s, 4/4 at 300 s),
+and the experiment was retargeted onto the winnable band. Had the original spec run as written, it
+would have burned 8 h and reported "feasibility < 0.06 %" — while a 98-road layout sat undiscovered in
+the exact population it was sampling. *Measure the thing the conclusion depends on before spending the
+compute.* The whole-branch review that forced the d-measurement paid for itself many times over.
