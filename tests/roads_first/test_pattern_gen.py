@@ -1,6 +1,6 @@
 import random
 from foeopt.roads_first import (
-    Pattern, generate_patterns, generate_lane_patterns, prefilter,
+    LANE_PITCHES, Pattern, generate_patterns, generate_lane_patterns, prefilter,
     th_anchor_candidates, _check_pattern,
 )
 
@@ -203,3 +203,48 @@ def test_max_lane_len_only_filters_never_creates_new_topologies():
     assert capped, "test needs a cap that still yields patterns"
     assert not (capped - uncapped), "cap produced a topology lane cannot produce"
     assert len(capped) < len(uncapped), "test needs a cap that actually binds"
+
+
+def test_generate_lane_patterns_pitches_none_matches_hardcoded_default():
+    """pitches=None (the default) must produce byte-identical output to calling
+    without the kwarg -- widening the pitch range is strictly opt-in and must
+    not perturb the already-measured lane-family results (the 98-road darkzig
+    record was produced by the default range)."""
+    region = set((x, y) for x in range(16) for y in range(16))
+    for k in (20, 40):
+        a = generate_lane_patterns(region, 2, 2, k, random.Random(0), 50, th_mode="full")
+        b = generate_lane_patterns(region, 2, 2, k, random.Random(0), 50, th_mode="full",
+                                   pitches=None)
+        assert a == b
+        c = generate_lane_patterns(region, 2, 2, k, random.Random(0), 50, th_mode="full",
+                                   pitches=LANE_PITCHES)
+        assert a == c
+
+
+def test_generate_lane_patterns_pitches_restricts_to_requested_values():
+    region = set((x, y) for x in range(20) for y in range(20))
+    pats = generate_lane_patterns(region, 2, 2, 30, random.Random(0), 200,
+                                  th_mode="full", pitches=(7, 13))
+    assert pats, "expected patterns for the requested pitches"
+    assert {p.params["pitch"] for p in pats} <= {7, 13}
+
+
+def test_generate_lane_patterns_widened_pitches_stay_valid_and_are_novel():
+    """Pitches beyond the default cap of 11 must (a) still satisfy
+    _check_pattern's invariants and (b) actually reach topologies the default
+    range does not produce -- the mistake made by `max_lane_len`, which turned
+    out to be a filter that could never create a new shape
+    (test_max_lane_len_only_filters_never_creates_new_topologies)."""
+    region = set((x, y) for x in range(28) for y in range(28))
+    wide = (12, 14, 16)
+    novel_total = 0
+    for k in (30, 45, 60):
+        pats = generate_lane_patterns(region, 2, 2, k, random.Random(0), 10 ** 9,
+                                      th_mode="full", pitches=wide)
+        for p in pats:
+            _check_pattern(p, region, k)
+            assert p.params["pitch"] in wide
+        base = generate_lane_patterns(region, 2, 2, k, random.Random(0), 10 ** 9,
+                                      th_mode="full")
+        novel_total += len({p.roads for p in pats} - {p.roads for p in base})
+    assert novel_total > 0, "widened pitches produced no topology the default range lacks"

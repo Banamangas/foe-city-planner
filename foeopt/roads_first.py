@@ -182,10 +182,14 @@ def _th_anchor_cell(th: Footprint, side: str) -> Cell:
     return (th.x + th.width, th.y)
 
 
+LANE_PITCHES = (5, 6, 7, 8, 9, 10, 11)
+
+
 def generate_lane_patterns(region: set[Cell], tw: int, tl: int, k: int,
                            rng: random.Random, max_patterns: int,
                            th_mode: str = "coarse",
-                           max_lane_len: int | None = None) -> list[Pattern]:
+                           max_lane_len: int | None = None,
+                           pitches: tuple[int, ...] | None = None) -> list[Pattern]:
     """Parallel double-loaded-lane family: unlike generate_patterns's comb
     (single trunk consuming budget//2 regardless of need, short teeth), this
     grows a *minimal* trunk -- only as long as needed to connect the TH to
@@ -199,7 +203,16 @@ def generate_lane_patterns(region: set[Cell], tw: int, tl: int, k: int,
     family's uncapped lanes (structurally efficient but harder for CP-SAT to
     decide, per the idea #5 mechanism finding) and the comb family's short
     teeth (easier to decide). Capping only bounds individual lane length; the
-    trunk and seed spacing are unaffected."""
+    trunk and seed spacing are unaffected.
+
+    `pitches` (default None = today's exact `LANE_PITCHES` = 5..11) sets which
+    trunk-seed spacings to enumerate. The default range is truncated at exactly
+    the value that performs best: on darkzig the measured SAT rate rises
+    monotonically with pitch (0/0/0/0/1.0/3.2/6.2% for 5->11, tasks/todo.md
+    Track F step 1), and FR16's comb analogue (`spacing`) shows the same shape
+    at its own cap of 7. Larger pitches mean fewer, longer lanes; they generate
+    a large population that has never been probed (93,284 extra patterns per k
+    at pitch 12-24 on darkzig, vs 67,308 for the whole default range)."""
     out: list[Pattern] = []
     seen: set[frozenset[Cell]] = set()
     for th in th_anchor_candidates(region, tw, tl, mode=th_mode):
@@ -214,7 +227,7 @@ def generate_lane_patterns(region: set[Cell], tw: int, tl: int, k: int,
                 continue
             anchor_idx = trunk_raw.index(anchor)
             horiz = trunk_raw[0][1] == trunk_raw[-1][1]
-            for pitch in (5, 6, 7, 8, 9, 10, 11):
+            for pitch in (LANE_PITCHES if pitches is None else pitches):
                 for use_stubs in (False, True):
                     roads: set[Cell] = set()
                     stubs = _stub_cells(reg, th, roads) if use_stubs else []

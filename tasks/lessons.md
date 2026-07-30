@@ -2041,3 +2041,95 @@ and the experiment was retargeted onto the winnable band. Had the original spec 
 would have burned 8 h and reported "feasibility < 0.06 %" — while a 98-road layout sat undiscovered in
 the exact population it was sampling. *Measure the thing the conclusion depends on before spending the
 compute.* The whole-branch review that forced the d-measurement paid for itself many times over.
+
+## NEW RECORD: 95 roads on darkzig (was 98) — a truncated parameter range plus two free filters (2026-07-30)
+
+**The result: 98 -> 97 -> 95 in one session.** Three legal layouts under the standing record,
+from two independently-configured screens plus a seed-polish pass. **95 roads is the all-time
+best — 120% road efficiency vs the Sigma/2 = 114 estimate.** Preserved with provenance at
+`docs/records/darkzig-95-roads-lane-k105.json` (plus the two 97s: `…-97-…-k106.json` and
+`…-97-…-k105-alt.json`, distinct skeletons AND placements).
+
+The 95 was found by the screen at **99** and improved to **95 by seed-polish** — a 4-road jump
+on a fixed skeleton from CP-SAT seed variation alone. Polish improved **6 of 12** targets
+(99->95, 100->97, 100->98, 99->98, 100->99, 98->97), against 4-of-11 historically: the quality
+filter hands it a far better target set than it has ever had.
+
+**Independently verified** (the standing rule after the retracted-127 incident), for the 95 and
+both 97s: reconstructed via `exp_exact_router.reconstruct_fixed`, then for the 95 — `route()`
+from the placement = **95** (matches the artifact's 95-entry roads array and the claimed
+`achieved`), **`exact_route()` = 95 OPTIMAL** (greedy and exact agree, no undercounting),
+`is_valid` True, **`rotated_buildings` = 0**, 0 overlapping cells, 0 out-of-region, **0
+unsatisfied consumers**, **224/224** buildings placed.
+Provenance of the 95: family lane, **k=105, pitch 14**, stubs=True, trunk_len 29, TH (21,28),
+gen seed 1, pattern index 25, `--prefilter-top 0.10 --quality-top 0.40`,
+`mean_free_adjacency` 1.9698.
+
+**What broke the floor: pitch 17 — six steps outside the generator's hardcoded ceiling of 11.**
+`generate_lane_patterns` enumerated `for pitch in (5,…,11)`. Measured SAT rate on darkzig rises
+monotonically across that whole range (0/0/0/0/1.0/3.2/**6.2**%), i.e. **the range was truncated
+at exactly its best value and the entire default family sat on the rising flank.** FR16's comb
+analogue (`spacing`, capped at 7) shows the same shape. Widening to 12–24 exposes **93,284
+patterns per k** on darkzig — more than the entire previously-enumerated population (67,308) —
+none of which had ever been probed. `pitches=` is opt-in and byte-identical when unset.
+
+**Two free filters, both computable before probing, both from data the code already had.**
+1. **`opts_total` (feasibility).** `probe()` enumerates each consumer's road-adjacent anchor
+   options *before building the CP-SAT model*, records the total into `diag`, and discards it.
+   That number separates SAT from non-SAT at **ROC-AUC 0.990** (0.993 within the strongest
+   parameter bucket). `foeopt/skeleton_score.py` recomputes it with per-row integer bitmasks —
+   **507x faster** (0.71 ms vs 359 ms), so scoring a 160k population costs 1.9 min instead of
+   16 core-hours. Oracle-equivalence tested against `_anchor_candidates` (the `reach.py` rule).
+2. **`mean_free_adjacency` (quality).** Average free cells orthogonally adjacent to each road
+   cell. **The project's first measured quality predictor**: Spearman **+0.76** vs `achieved` on
+   the 20 SATs of the 98-road baseline run and **+0.64** on held-out SATs of the widened-pitch
+   screen — two independent datasets, different pitch ranges, different sampling. Lower is
+   better; mechanism is double-loading (a road cell in open ground makes `route()` rebuild a
+   bigger network). Deciles are monotone: lowest → median 102 / 85% at ≤102; highest → median
+   106 / 0%.
+
+**Measured arms (equal-wall-clock design; arm A is the recorded 98-road run, not re-run):**
+
+| arm | config | probes | SAT | SAT% | core-h | SAT/core-h | best |
+|---|---|---|---|---|---|---|---|
+| A baseline | default pitch, no filter | 1400 | 20 | 1.4% | 72.8 | 0.27 | 98 |
+| B1 | + `opts_total` top 10% | 300 | 51 | 17.0% | 22.5 | 2.26 (8.4x) | 98 |
+| B2 | + pitch 12-18 | 300 | **242** | **80.7%** | 8.6 | **28.2 (104x)** | 97 |
+| C | + `mean_free_adjacency` lowest 40% | 300 | 224 | 74.7% | 10.9 | **20.6 (76x)** | **97 -> 95 after polish** |
+
+B2 and C returned **zero UNSAT** in 300 probes each — every probe was SAT or UNKNOWN. Gate
+(>=3x SAT/core-h AND min achieved <= 98): **PASS on all three arms.**
+**C is the configuration to keep:** the quality filter costs ~27% of the SAT rate and buys 3
+roads of median (102 vs 105) — **129 layouts at <=102, against 7 in the entire 1400-probe
+baseline** — and its frontier is what let seed-polish reach 95.
+
+**The trade-off that matters for tuning: feasibility and quality pull apart, and both proxies
+have interior optima.** `opts_total` is an excellent *feasibility* ranker but among SATs it
+correlates with `achieved` at **+0.50 — the wrong sign**; a top-5% rank-and-take would have
+missed the 98 (rank 26/320). And the *tightest* skeletons are genuinely harder to pack:
+by `mean_free_adjacency` quintile, SAT rate is 36% / 93% / 98% / 84% / 100% while median
+`achieved` is 102 / 102 / 104 / 106 / 106 — **quintile 2 is the sweet spot** (near-full SAT rate
+*and* the best road counts; the 97 came from it). Both filters must therefore keep a *loose*
+cut and sample **uniformly inside** the survivors, never rank-and-take.
+Widening pitch is a **feasibility** lever only — `achieved` is flat across pitch 12–18
+(median 102–105), so there is no sharper sub-range to find.
+
+**Lessons.**
+1. **When every measured knob's optimum sits at the boundary of its hardcoded range, the range
+   is the bug.** Three cities and two families all said "more pitch/spacing is better" right up
+   to the cap. One `for pitch in (...)` tuple was costing more than every search-strategy idea
+   in `next-things-to-try.md` combined (nine ideas, one small win).
+2. **Check what the hot path already computes and throws away before building a model.** The
+   feasibility signal was inside `probe()` all along; C-bis trained a CNN (AUC 0.999) to
+   predict the same thing and delivered zero end-to-end benefit.
+3. **A ranker only helps where it selects the sample, not where it reorders one that will be
+   consumed in full.** C-bis Stage 1 and next-things #1 both ranked inside an already-sampled
+   200 that `_probe_levels_batch` then probed entirely — a no-op by construction. Same models,
+   applied to the 160k population instead, are the difference between 0.27 and 19 SAT/core-h.
+4. **Existing artifacts answered the "does it generalise" question for free.** The planned 2 h
+   FR16 screen was unnecessary: `output/roads-first/FR{16,17,24}/probes.jsonl` already held
+   2,444 labelled probes with full params. Stratifying within k-level (so "SAT lives at loose k"
+   can't fake a signal) confirmed the structure on two other cities in minutes.
+5. **`mode` is a third free bit, never recorded:** pooled FR16+FR17, `mode=alternate` holds
+   **9 of 9 SATs**, `mode=both` is **0 SAT / 528**. Consistent with the same mechanism — fewer,
+   longer branches. Untested on darkzig/lane (lane has no `mode`); a comb-family lever.
