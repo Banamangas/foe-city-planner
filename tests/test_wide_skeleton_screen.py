@@ -394,3 +394,122 @@ def test_run_polish_records_winning_seed(tmp_path):
     art = json.loads(art_files[0].read_text())
     assert isinstance(art["solver_seed"], int)
     assert art["achieved"] == final[(6, 0)]["achieved"]
+
+
+def _consumers(sizes):
+    from foeopt.model import Building, Footprint
+    return [Building(10 + i, f"c{i}", "g", Footprint(0, 0, w, l), True, 1, False,
+                     None, None, f"b{i}")
+            for i, (w, l) in enumerate(sizes)]
+
+
+def test_parse_pitches_accepts_lists_ranges_and_none():
+    assert mod.parse_pitches(None) is None
+    assert mod.parse_pitches("") is None
+    assert mod.parse_pitches("9,11,15") == (9, 11, 15)
+    assert mod.parse_pitches("10-13") == (10, 11, 12, 13)
+    assert mod.parse_pitches("15,10-12,10") == (10, 11, 12, 15)
+
+
+def test_sample_patterns_default_path_is_unchanged_by_new_kwargs():
+    """The 98-road run's (k, idx) identity must survive this change: passing the
+    new kwargs at their defaults has to reproduce the old sample exactly, or
+    --resume against the existing results file silently probes other patterns."""
+    region = {(x, y) for x in range(20) for y in range(20)}
+    base = mod.sample_patterns(region, 2, 2, 20, 5, seed=0)
+    same = mod.sample_patterns(region, 2, 2, 20, 5, seed=0,
+                               pitches=None, prefilter_top=None,
+                               consumers=_consumers([(2, 2)]))
+    assert [p.roads for p in base] == [p.roads for p in same]
+
+
+def test_sample_patterns_restricts_to_requested_pitches():
+    region = {(x, y) for x in range(24) for y in range(24)}
+    pats = mod.sample_patterns(region, 2, 2, 30, 20, seed=0, pitches=(13, 14))
+    assert pats
+    assert {p.params["pitch"] for p in pats} <= {13, 14}
+
+
+def test_prefilter_top_keeps_high_scorers_and_stays_deterministic():
+    from foeopt.skeleton_score import SkeletonScorer
+    region = {(x, y) for x in range(24) for y in range(24)}
+    cons = _consumers([(2, 2), (3, 2), (2, 4)])
+    a = mod.sample_patterns(region, 2, 2, 30, 8, seed=0, prefilter_top=0.25,
+                            consumers=cons)
+    b = mod.sample_patterns(region, 2, 2, 30, 8, seed=0, prefilter_top=0.25,
+                            consumers=cons)
+    assert a and [p.roads for p in a] == [p.roads for p in b]
+    # every survivor must score at least as high as the worst survivor of the
+    # full population's top quartile -- i.e. the cut really is a score cut
+    pop = mod.generate_lane_patterns(region, 2, 2, 30, __import__("random").Random(0),
+                                     10 ** 9, th_mode="full")
+    scorer = SkeletonScorer(region, cons)
+    scores = sorted((scorer.opts_total(p.th, p.roads) for p in pop), reverse=True)
+    threshold = scores[max(1, int(0.25 * len(pop))) - 1]
+    assert all(scorer.opts_total(p.th, p.roads) >= threshold for p in a)
+
+
+def test_prefilter_top_preserves_shuffled_order_not_score_order():
+    """The sample must be uniform WITHIN the survivors, not the top-n by score:
+    opts_total is anti-correlated with the final road count among SATs
+    (Spearman +0.50), so rank-and-take would bias away from the good tail."""
+    from foeopt.skeleton_score import SkeletonScorer
+    region = {(x, y) for x in range(24) for y in range(24)}
+    cons = _consumers([(2, 2), (3, 2), (2, 4)])
+    pats = mod.sample_patterns(region, 2, 2, 30, 40, seed=0, prefilter_top=0.5,
+                              consumers=cons)
+    scorer = SkeletonScorer(region, cons)
+    seq = [scorer.opts_total(p.th, p.roads) for p in pats]
+    assert len(seq) > 5
+    assert seq != sorted(seq, reverse=True), "sample is in score order, not shuffled order"
+
+
+def test_prefilter_top_requires_consumers_and_valid_fraction():
+    region = {(x, y) for x in range(16) for y in range(16)}
+    with pytest.raises(ValueError):
+        mod.sample_patterns(region, 2, 2, 20, 5, seed=0, prefilter_top=0.1)
+    with pytest.raises(ValueError):
+        mod.sample_patterns(region, 2, 2, 20, 5, seed=0, prefilter_top=0.0,
+                            consumers=_consumers([(2, 2)]))
+    with pytest.raises(ValueError):
+        mod.sample_patterns(region, 2, 2, 20, 5, seed=0, prefilter_top=1.5,
+                            consumers=_consumers([(2, 2)]))
+
+
+def test_quality_top_keeps_lowest_mean_free_adjacency():
+    from foeopt.skeleton_score import mean_free_adjacency
+    region = {(x, y) for x in range(24) for y in range(24)}
+    cons = _consumers([(2, 2), (3, 2)])
+    pats = mod.sample_patterns(region, 2, 2, 30, 10, seed=0, quality_top=0.25,
+                               consumers=cons)
+    assert pats
+    pop = mod.generate_lane_patterns(region, 2, 2, 30, __import__("random").Random(0),
+                                     10 ** 9, th_mode="full")
+    quals = sorted(mean_free_adjacency(region, p.th, p.roads) for p in pop)
+    threshold = quals[max(1, int(0.25 * len(pop))) - 1]
+    assert all(mean_free_adjacency(region, p.th, p.roads) <= threshold for p in pats)
+
+
+def test_quality_top_composes_with_prefilter_top_and_is_deterministic():
+    region = {(x, y) for x in range(24) for y in range(24)}
+    cons = _consumers([(2, 2), (3, 2)])
+    kw = dict(seed=0, prefilter_top=0.5, quality_top=0.4, consumers=cons)
+    a = mod.sample_patterns(region, 2, 2, 30, 8, **kw)
+    b = mod.sample_patterns(region, 2, 2, 30, 8, **kw)
+    assert a and [p.roads for p in a] == [p.roads for p in b]
+    # composing must be at least as restrictive as either filter alone
+    only_pre = mod.sample_patterns(region, 2, 2, 30, 10 ** 9, seed=0,
+                                   prefilter_top=0.5, consumers=cons)
+    both = mod.sample_patterns(region, 2, 2, 30, 10 ** 9, **kw)
+    assert len(both) <= len(only_pre)
+    assert {p.roads for p in both} <= {p.roads for p in only_pre}
+
+
+def test_quality_top_rejects_bad_fraction():
+    region = {(x, y) for x in range(16) for y in range(16)}
+    with pytest.raises(ValueError):
+        mod.sample_patterns(region, 2, 2, 20, 5, seed=0, quality_top=0.0,
+                            consumers=_consumers([(2, 2)]))
+    with pytest.raises(ValueError):
+        mod.sample_patterns(region, 2, 2, 20, 5, seed=0, quality_top=2.0,
+                            consumers=_consumers([(2, 2)]))

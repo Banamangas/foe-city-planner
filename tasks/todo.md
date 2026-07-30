@@ -533,3 +533,139 @@ insight", "Productionization analysis + RL verdict"):
 from classical; (2) Richer pattern family — full-TH sampling (shipped) + lane/stub topologies
 to push below 105. Artifacts: `output/roads-first/best-k112-a105.json`/`.html` (verified 105);
 targeted baseline in `output/roads-first/targeted-baseline-2026-07-07/`.
+
+---
+
+# Track F — Population-level skeleton selection (opened 2026-07-30)
+
+Follows `tasks/rl-situation-report.md` §8. The user approved the recommended sequence.
+Discipline: A/B at equal wall-clock, ≥2 repeats (the #8 noise floor), independently
+re-verify any near-record artifact (the retracted-127 rule), state prior results before
+proposing a lever.
+
+## Step 1 — Confirm the pitch/stubs structure off darkzig — **DONE for free (2026-07-30)**
+
+- [x] Planned as a 2 h FR16 screen. **Not needed** — `output/roads-first/FR16|FR17|FR24-2026-07-07/probes.jsonl`
+      (2,444 comb-family probes, 3 cities) already carry full `params`. Stratified
+      *within-k-level* so "SAT lives at loose k" can't fake a signal:
+      - **FR16:** `spacing` 3–4 → **0 SAT / 292**; `spacing` 5–7 → **7 SAT / 308**.
+        `stubs=True` 1.68 % vs `False` 0.41 % (same 4× direction as darkzig's 2.8 %/0.6 %).
+      - **FR17:** `spacing` 3–5 → **0 SAT / 189**; `spacing` 6 → 2 SAT / 52. Same direction,
+        n=2 SATs (weak). `stubs` null here (1 vs 1).
+      - **FR24:** 0 SAT at any k in 1,047 probes → uninformative, excluded.
+      **Verdict: the structure generalises across cities AND across families** (comb `spacing`
+      is the analogue of lane `pitch`). Gate passed on zero compute.
+- [x] **Unplanned finding A — `mode` is a third free bit.** Pooled FR16+FR17:
+      `mode=alternate` holds **9 of 9 SATs** (7/250 and 2/117); `mode=both` is **0 SAT / 528**.
+      Never recorded before. Comb-only parameter.
+- [x] **Unplanned finding B (the important one) — every knob's best value is the boundary of
+      its hardcoded range.** darkzig lane SAT rate rises monotonically with pitch
+      (0/0/0/0/1.0/3.2/**6.2** % for pitch 5→11) and `generate_lane_patterns` stops at 11.
+      Comb `spacing` stops at 7, where FR16 sits at 93 % UNKNOWN. Coherent mechanism across
+      both families and 3 cities: **the productive skeletons have FEW, LONG branches** —
+      ↑pitch, ↑spacing and `alternate` (which halves the branch count) all do the same thing.
+      Measured: extending pitch to 12–24 yields **93,284 additional patterns per k** on darkzig
+      — more than the entire currently-enumerated population (67,308) — in a range never probed.
+
+## Step 1b — Unlock the truncated pitch range (NEW, cheapest lever, do with Step 2)
+
+- [x] `foeopt/roads_first.py`: `generate_lane_patterns(..., pitches=None)`, default `None` →
+      today's exact `LANE_PITCHES = (5,…,11)`. Opt-in, byte-identical when unset (the
+      `reach.py`/`--lns` precedent). 3 tests: default output identical with/without the kwarg,
+      restriction to the requested values, and — the `max_lane_len` lesson — that widened
+      pitches produce topologies the default range **cannot** (`novel_total > 0`), so this is a
+      real treatment and not another sampling filter.
+- [x] **Pre-flight scoring of the widened population** (no CP-SAT, 2 min): the new range is
+      where the anchor-rich skeletons live. Fraction of patterns scoring above the 98-road
+      record's own `opts_total` (12,578), k=105: pitch 10 → **3.6 %**, pitch 11 → 11.2 %,
+      pitch 12 → **22.6 %**, pitch 15 → 18.3 %, pitch 16 → **20.6 %**, decaying to 0 % by 24.
+      Max score reachable rises from 13,755 (pitch 11) to **14,129** (pitch 15) — the widened
+      range contains skeletons strictly more anchor-rich than anything ever probed. The curve
+      is unimodal with an interior peak at 15–17, so **the default range sat entirely on the
+      rising flank.** `prefilter()` rejects **0** of the top-2000, so none of this is
+      arithmetically dead.
+
+## Step 2 — `opts_tot` population prefilter + uniform sampling inside survivors
+
+- [ ] `foeopt/skeleton_score.py`: pure-stdlib bitset scorer for
+      `opts_tot = Σ_b |road-adjacent, all-free anchor positions|` — the quantity `probe()`
+      already computes and discards. Python-int row bitmasks + shift/AND, grouped by distinct
+      footprint size. Target ≥100× faster than the 0.37 s/pattern reference loop, since the
+      population is ~160 k patterns per k, not 700.
+- [ ] **Oracle-equivalence test** against `sum(len(_anchor_candidates(...)))` on random
+      patterns/regions — the `reach.py` discipline. A scorer that disagrees with the thing it
+      approximates is worthless.
+- [ ] `scripts/exp_wide_skeleton_screen.py`: `--pitches`, `--prefilter-top Q` (score the whole
+      population, keep the top Q fraction, then **sample uniformly inside it**).
+      ⚠️ **Not rank-and-take-the-top:** among SATs, `opts_tot` correlates with `achieved` at
+      Spearman **+0.50** (wrong sign) and a top-5 % cut would have missed the 98-road record
+      (rank 26/320 = top 8.1 %). Loose cut + uniform sampling inside is the measured-safe design.
+- [ ] Prior art stated: next-things #1 (score-threshold pruning) and Track C-bis Stage 1 both
+      closed null, but both ranked *inside an already-uniformly-sampled 200*, which
+      `_probe_levels_batch` then probes in full — a no-op by construction. This lever changes
+      **which patterns are drawn from the 160 k population**. Different lever, never tested.
+
+## Step 2 gate — **PASSED; record 98 -> 95 (2026-07-30)**
+
+Gate was: SATs/core-hour >= 3x baseline AND `min(achieved) <= 98`, vs the recorded 98-road run
+(1400 probes / 72.8 core-h / 20 SATs / min 98), which was reused rather than re-run.
+
+| arm | config | probes | SAT | SAT% | SAT/core-h | best achieved |
+|---|---|---|---|---|---|---|
+| A (recorded baseline) | default pitch, no filter | 1400 | 20 | 1.4% | 0.27 | 98 |
+| B1 | + `opts_total` top 10% | 300 | ~25 | ~8% | ~1.1 | 98 |
+| B2 | + pitch 12-18 | 300 | **242** | **80.7%** | **~19** | **97 (NEW RECORD)** |
+
+- [x] **97 roads, independently verified LEGAL** — `route()`=97, `exact_route()`=**97 OPTIMAL**,
+      `is_valid` True, `rotated_buildings`=0, 0 overlaps, 224/224 placed. Preserved at
+      `docs/records/darkzig-97-roads-lane-k106.json`. From **pitch 17** — six steps outside the
+      generator's old ceiling of 11. B2 returned **zero UNSAT** in 300 probes.
+- [x] Both arms independently re-found 98 as well (different k, different pitch ranges), so the
+      record is reproducible rather than a single lucky draw.
+
+## Step 3 — quality filter + seed-polish
+
+- [x] **`mean_free_adjacency` shipped in `foeopt/skeleton_score.py`** with `--quality-top`
+      (applied after `--prefilter-top`, uniform sampling inside the survivors).
+- [x] **Tuning measured, and it has an interior optimum** — by mfa quintile: SAT rate
+      36/93/98/84/100 %, median achieved 102/102/104/106/106. The *tightest* skeletons are
+      harder to pack, so the bottom decile is the wrong cut; **quintile 2 is the sweet spot**
+      and is where the 97 came from (mfa 1.9717). Run C uses `--quality-top 0.4`.
+- [x] Run C: 300 probes, 224 SAT (74.7%), 0 UNSAT, median 102, **129 layouts at <=102**
+      (baseline had 7 in 1400 probes). Best 97 from the screen.
+- [x] **Seed-polish on C's 12 sub-100 targets: 6 improved, best 99 -> 95.** New all-time record,
+      verified (`route()`=95, `exact_route()`=95 OPTIMAL, `is_valid`, rotated=0, 224/224,
+      0 unsatisfied). `docs/records/darkzig-95-roads-lane-k105.json`. **120% road efficiency**
+      vs the Sigma/2=114 estimate.
+
+## Step 4 — quality model: **PASSED (2026-07-30)**
+
+`scripts/exp_quality_model.py`, pre-committed bar |rho| >= 0.4 on held-out SATs:
+
+| feature | rho(train) | rho(holdout) | |
+|---|---|---|---|
+| **mean_free_adj** | +0.711 | **+0.639** | PASS |
+| th_x | +0.396 | +0.413 | PASS (one-city artifact — no mechanism, do not ship) |
+| opts_total | +0.156 | +0.073 | |
+| pitch / stubs / trunk_len / deg* | | all < 0.28 | |
+
+Independently re-confirmed on the **baseline** run (default pitch, no prefilter, the dataset that
+produced the 98): rho = **+0.760**, with a near-perfect split — lower half by mfa
+`[98,99,99,101,101,101,102,102,102,103]`, upper half `[103,105,105,106,106,106,106,107,108,108]`.
+**This was the gate that decided whether RL on the real objective is possible at all. It passed.**
+
+## Step 5 — skeleton-generation RL: unblocked, but the case for it is now WEAKER
+
+Step 4 passed, so a real objective surrogate exists — the precondition RL was gated on. But the
+same finding cuts against it: if a single microsecond geometric statistic captures the objective
+at rho 0.76, the cheap move is to **filter and sample with it** (done, Step 3) rather than train
+a policy to rediscover it. RL's remaining distinct value is **escaping the comb/lane families
+entirely** via cell-by-cell skeleton generation — searching *within* the family is now handled.
+
+- [ ] Decide only after run C + seed-polish report how far the two-filter screen goes on its own.
+- [ ] If pursued: cell-by-cell MDP (every partial state a valid connected skeleton, so M2-M4's
+      invalid-action trap cannot recur), reward = `mean_free_adjacency` surrogate, CP-SAT
+      verifying the top-N proposals only. GFlowNet preferred over PPO (want diverse
+      high-reward samples to feed CP-SAT, not one mode).
+- [ ] Hazard to respect: the surrogate is fitted **only on comb/lane skeletons**, so it is
+      out-of-distribution on exactly the novel topologies RL would exist to find.
