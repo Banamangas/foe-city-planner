@@ -15,10 +15,13 @@ _Written 2026-07-30. Sources: `tasks/todo.md`, `tasks/lessons.md`, `tasks/next-t
 The §8 sequence ran the same day this was written. Summary; full detail in `tasks/todo.md`
 Track F and the `tasks/lessons.md` 2026-07-30 entry.
 
-**The darkzig record fell twice over: 98 → 97 roads**, two independent layouts (distinct
-skeletons *and* placements), both verified `route()`=97, `exact_route()`=97 **OPTIMAL**,
-`is_valid`, `rotated_buildings`=0, 224/224 placed —
-`docs/records/darkzig-97-roads-lane-k106.json` and `…-k105-alt.json`.
+**Two records fell, on two different cities: darkzig 98 → 95 and FR16 79 → 76.** Both verified
+end-to-end (`route()` matches, `exact_route()` OPTIMAL, `is_valid`, `rotated_buildings`=0, all
+buildings placed, 0 unsatisfied consumers); 120% and 116% efficiency against their Σ/2 estimates.
+`docs/records/darkzig-95-roads-lane-k105.json`, `fr16-76-roads-nonuniform-k84.json`, plus two
+independent 97s on the way down. The darkzig 95 came from a screen-99 that seed-polish improved
+by four; the FR16 76 was found in **14 probes**, at a k-level the comb family had left
+INCONCLUSIVE after a full 2 h run.
 
 | conclusion in this report | status after execution |
 |---|---|
@@ -26,6 +29,8 @@ skeletons *and* placements), both verified `route()`=97, `exact_route()`=97 **OP
 | §0.2 / §4.4 "feasibility and quality point in opposite directions; no quality proxy exists" | **HALF SUPERSEDED.** The anti-correlation is real and reconfirmed, but a *different* statistic — `mean_free_adjacency` — predicts `achieved` at Spearman **+0.76** / **+0.64** on two independent datasets. §6.3 passed its gate. |
 | §6.1 "expect ~5–6× more SATs per core-hour" | **BEATEN by ~3×.** Measured **0.27 → ~19 SAT/core-h (~70×)** once the truncated pitch range was unlocked; the prefilter alone gave the predicted ~4×. |
 | §6.5 / §7 (RL framing, city counts, cost model) | **Stands.** |
+| §6.5 "skeleton-generation RL is the surviving lever" | **CLOSED on evidence (later same day).** Both search spaces measured: outside comb/lane almost nothing is feasible (0 SAT/240 in-band; only `scatter` works, at 103 vs 95); inside the grammar, lifting the uniformity constraints reaches 96 against a 95 baseline the cheap pipeline already hits. RL has a validated in-grammar reward (rho **+0.825**) and free feasibility — and nothing left worth searching for. |
+| §7 "3 cities to ship" | **Partly answered.** It transfers: **FR16 79 -> 76**, found in 14 probes. FR24 (146 consumers, road pressure 0.89) returns 0 SAT/135. The boundary is **road pressure**, not slack. |
 
 **The lever this report missed entirely.** `generate_lane_patterns` enumerated
 `for pitch in (5,…,11)`. §4.1 measured the SAT rate rising monotonically across that whole
