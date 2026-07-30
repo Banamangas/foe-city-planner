@@ -2235,3 +2235,102 @@ local-refinement or "nudge the record" approach over skeletons is measurably dea
 
 **Assets:** `scripts/exp_ood_skeletons.py` (`--mode v1|v2`, range-restriction guard, novelty
 set-difference, spatial diagnostics), `output/trackf/ood.jsonl` + `ood2.jsonl`.
+
+## Track F test 1 + multi-city generalisation: FR16 record 79 -> 76, and the limit is road pressure, not slack (2026-07-30)
+
+### Test 1 — is there headroom inside the trunk-and-branch grammar? SATURATED on darkzig, but the uniformity constraint is real
+
+`generate_lane_patterns` forces uniform pitch and round-robin balanced branch growth. Neither is
+justified; the expert 142-road city is not uniform. `scripts/exp_nonuniform_lanes.py` lifts both
+(irregular seed gaps, Exponential**skew branch-length split) while keeping the trunk-and-branch
+topology that survives CP-SAT.
+
+**darkzig, 234 probes: 229 SAT (97.9%), 5 UNKNOWN, best 97, median 102.** Seed-polish on the 17
+sub-100 skeletons improved 7 and reached **96** (verified `route()`=96, `exact_route()`=96
+OPTIMAL, 224/224, rotated=0). Pre-committed gate was "beat 95" -> **SATURATED**.
+
+**But the lifted constraint demonstrably costs roads**, reproduced in all three gap ranges:
+
+| gap range | skew 0 (= today's generator) | skew 1 | skew 2 |
+|---|---|---|---|
+| 8-14 | 101 | 98 | 98 |
+| 10-18 | 101 | 100 | 99 |
+| 12-22 | 101 | 98 | **97** |
+
+Uniform bottoms out at 101 every time; unequal reaches 97-99. **~4 roads at the minimum, ~2 at
+the median.** Caveat on the verdict: the arms were not matched -- the 95 record had the
+`mean_free_adjacency` quality filter, this run did not. A matched re-run is the open follow-up.
+
+### Test 3 — the quality surrogate works WHERE RL WOULD OPERATE
+
+`rho(mean_free_adjacency, achieved)` **within** the non-uniform grammar = **+0.825** (n=229) --
+stronger than the +0.788 baseline or the +0.639 held-out. `opts_total` = +0.365 (still the wrong
+sign). So the OOD `NO_VERDICT` is not load-bearing for a policy confined to the grammar: it is
+in-distribution by construction and has a validated microsecond-cost reward.
+
+### The headline: feasibility got ~350x cheaper, and it TRANSFERS
+
+| run | probes | SAT% | UNKNOWN% | core-h | cost / legal layout |
+|---|---|---|---|---|---|
+| darkzig baseline (this morning) | 1400 | 1.4% | **60.9%** | 72.8 | 3.6 core-h |
+| darkzig non-uniform | 234 | **97.9%** | **2.1%** | 2.4 | **37 core-s** |
+| FR16 non-uniform | 270 | 49.6% | 16.7% | 7.2 | 193 core-s |
+
+**UNKNOWN was always the budget sink** (60.9% of probes, ~90% of wall-clock, each burning the
+full limit to say nothing). At 2.1% compute converts into results instead of timeouts.
+
+**FR16: NEW RECORD 76 roads (was 79), six distinct layouts**, verified (`route()`=76,
+`exact_route()`=76 OPTIMAL, 89/89 placed, rotated=0, 0 unsatisfied, **116% efficiency**).
+Found in **14 probes**; the original 2h comb run needed its full budget to reach 79 and left
+k=84 **INCONCLUSIVE** -- the non-uniform grammar produced 47 SATs at that same k, and the record
+sits there, on a *tighter* skeleton than the old record's k=92.
+`docs/records/` + `output/trackf/fr16-sats/`.
+
+### NEW failure mode FR16 exposed that darkzig never did: SAT_FILLER_FAIL
+
+**91 of 270 FR16 probes (34%)**: CP-SAT places every road-needing consumer, then the *filler*
+buildings have nowhere left to go. It worsens monotonically with k (16 -> 32 -> 43 at k=84/88/92)
+-- more road cells, less room for fillers. Counting it: 225/270 (83%) found a valid consumer
+placement; only 134 (50%) completed to a full legal layout. **"Consumers place" != "usable
+layout"**; any productionised version must treat filler placement as a first-class constraint.
+
+### The limit is ROAD PRESSURE, not slack or fill
+
+FR24 (146 consumers) returned **0 SAT in 135 probes** at k=205/220/235 -- a k band never
+previously probed, chosen because the old run's k=246-266 leaves only 2-22 free cells for 76
+filler buildings. **Every one of the 135 probes hit the 300 s timeout: 135 UNKNOWN, 0 SAT,
+0 UNSAT, 11.2 core-h.** Not refuted -- undecided. (The old comb run at k=246-266 got 618
+*proven* UNSAT, because there the area arithmetic makes infeasibility easy; at k=205-235 there
+is no such shortcut and CP-SAT must actually search.) Rule of three: SAT rate < 2.2% at this
+budget. The tempting explanation -- "it's too full" -- is **wrong**:
+
+| city | fill% | slack | consumers | Sigma/2 | **road pressure** | result |
+|---|---|---|---|---|---|---|
+| darkzig | **89.6%** | 283 | 63 | 114 | **0.40** | 97.9% SAT |
+| FR16 | 83.3% | 206 | 56 | 88 | **0.43** | 49.6% SAT |
+| FR24 | **90.2%** | 268 | **146** | 238 | **0.89** | **0% SAT** |
+
+darkzig and FR24 have the same fill (89.6 vs 90.2%) and near-identical region size (2720 vs
+2736) and opposite outcomes -- **fill does not discriminate**. What does:
+**road pressure = Sigma(short)/2 / (region - building_area)** = the roads a city NEEDS over the
+free cells it HAS. 0.40/0.43 work; 0.89 does not (30 cells of play in a 2736-cell map).
+Computable in microseconds *before* any solver time -- a productionised tool can reject a city
+instantly instead of burning an hour. **Confounded at n=3:** FR24 also has 2.3x the consumers,
+and probe time scales 36s -> 95s -> 302s with consumer count, which smells like CP-SAT model size
+rather than packing. Separating them needs a synthesised city (many consumers + low pressure, or
+few consumers + high pressure) via `make_real_like_city`.
+
+**Practical boundary on current evidence:** ~60-80 road-needing buildings, road pressure <= ~0.5.
+Note this is about whether the tool WORKS. Whether it is WORTH running is a different axis --
+darkzig went 250 -> 95 (62% reduction, 46% -> 121% efficiency) precisely because it started badly.
+
+### Process lesson: two runs on one box is not "parallel", it is contention
+
+FR16 and FR24 were launched together at 8 + 6 workers on 16 cores. Measured: **14 python
+processes >50% CPU, load 18.8, zero headroom** -- exactly the configuration the 2026-07-19/20
+lesson records as backfiring. **CP-SAT's budget is wall-clock, not CPU time**, so under contention
+a probe still gets its 300 s of wall but fewer CPU-seconds and times out more often. That biases
+results toward UNKNOWN -- i.e. *pessimistic* -- so the SAT rates measured while both ran are
+understated. Serialised after the user flagged it; FR16's rate went 2.7-3.1/min -> 4.2/min
+immediately. Verified results are unaffected (contention can only cause timeouts, never a false
+feasible layout), but **never quote a SAT rate measured under contention**.

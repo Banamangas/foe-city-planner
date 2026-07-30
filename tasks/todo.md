@@ -654,18 +654,48 @@ produced the 98): rho = **+0.760**, with a near-perfect split — lower half by 
 `[98,99,99,101,101,101,102,102,102,103]`, upper half `[103,105,105,106,106,106,106,107,108,108]`.
 **This was the gate that decided whether RL on the real objective is possible at all. It passed.**
 
-## Step 5 — skeleton-generation RL: unblocked, but the case for it is now WEAKER
+## Step 5 — skeleton-generation RL: **CLOSED on evidence (2026-07-30)**
 
-Step 4 passed, so a real objective surrogate exists — the precondition RL was gated on. But the
-same finding cuts against it: if a single microsecond geometric statistic captures the objective
-at rho 0.76, the cheap move is to **filter and sample with it** (done, Step 3) rather than train
-a policy to rediscover it. RL's remaining distinct value is **escaping the comb/lane families
-entirely** via cell-by-cell skeleton generation — searching *within* the family is now handled.
+Step 4 passed, so RL finally has what it always lacked: free feasibility and a validated
+in-distribution reward (`mean_free_adjacency`, rho **+0.825** *within* the grammar it would
+operate in). The case still fails, because both places it could search were measured and
+neither holds enough to justify training anything.
 
-- [ ] Decide only after run C + seed-polish report how far the two-filter screen goes on its own.
-- [ ] If pursued: cell-by-cell MDP (every partial state a valid connected skeleton, so M2-M4's
-      invalid-action trap cannot recur), reward = `mean_free_adjacency` surrogate, CP-SAT
-      verifying the top-N proposals only. GFlowNet preferred over PPO (want diverse
-      high-reward samples to feed CP-SAT, not one mode).
-- [ ] Hazard to respect: the surrogate is fitted **only on comb/lane skeletons**, so it is
-      out-of-distribution on exactly the novel topologies RL would exist to find.
+- [x] **Outside comb/lane — almost nothing is feasible.** OOD check: 21 generators, ~54,000
+      novel candidates. Only `scatter` is feasible at all (best 103 vs record 95); the corrected
+      in-band generator returned 0 SAT / 240. The binding constraint is **spatial coverage**, and
+      comb/lane are near-optimal solutions to it. See the OOD entry in `tasks/lessons.md`.
+- [x] **Inside the grammar — the headroom is ~1 road.** Test 1 (`exp_nonuniform_lanes.py`):
+      lifting uniform pitch + balanced growth gives 229 SAT / 234 probes (97.9%), best 97,
+      polished to **96** — against a 95 baseline the cheap pipeline already reaches in ~11
+      core-hours with no training. Verdict SATURATED.
+- [x] **Perturbation/diffusion around good skeletons is dead:** 0-for-64.
+- [ ] **The one open door:** test 1's arms were unmatched — the 95 used the
+      `mean_free_adjacency` quality filter, the non-uniform run did not. A matched re-run
+      (non-uniform + `--quality-top`) is one screen. If it dips below 95, headroom returns and
+      guided search over per-branch parameters becomes interesting again. Until then: closed.
+
+**Recommendation: RL stays closed.** Not because it cannot work — because the cheap methods kept
+eating the margin it was meant to capture (158 -> 102 -> 95, none of it learned).
+
+## Multi-city generalisation (2026-07-30) — it transfers, with a measurable boundary
+
+- [x] **FR16: NEW RECORD 76 roads (was 79)**, six distinct layouts, verified
+      (`exact_route`=76 OPTIMAL, 89/89, rotated=0, 116% efficiency). Found in **14 probes**;
+      the old 2h comb run needed its full budget for 79 and left k=84 INCONCLUSIVE — this
+      grammar produced 47 SATs at that k. `docs/records/fr16-76-roads-nonuniform-k84.json`.
+- [x] **FR24: 0 SAT / 135**, all UNKNOWN, 11.3 core-h. Probed k=205/220/235 (never tried; the
+      old run's k=246-266 leaves 2-22 free cells for 76 fillers). Undecided, not refuted.
+- [x] **The limit is ROAD PRESSURE = Sigma(short)/2 / (region − building_area)**, not fill or
+      slack: darkzig 0.40 and FR16 0.43 work; FR24 0.89 does not — despite darkzig (89.6% fill)
+      and FR24 (90.2%) being nearly identical on fill and region size. Computable in
+      microseconds *before* any solver time.
+- [x] **New failure mode: `SAT_FILLER_FAIL`** — 34% of FR16 probes place every consumer and then
+      cannot fit the filler buildings. Worsens with k. "Consumers place" != "usable layout".
+- [ ] **Confounded at n=3:** FR24 has both 0.89 pressure and 2.3x the consumers; probe time
+      scales 36s -> 95s -> 301s, which smells like CP-SAT model size. Separating them needs a
+      synthesised city via `make_real_like_city` (many consumers + low pressure, or the reverse).
+
+**Practical boundary on current evidence:** ~60-80 road-needing buildings, road pressure <= ~0.5.
+That is whether it WORKS; whether it is WORTH running is a separate axis — darkzig went 250 -> 95
+(46% -> 121% efficiency) precisely because it started badly built.
