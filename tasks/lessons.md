@@ -2084,9 +2084,31 @@ none of which had ever been probed. `pitches=` is opt-in and byte-identical when
    cell. **The project's first measured quality predictor**: Spearman **+0.76** vs `achieved` on
    the 20 SATs of the 98-road baseline run and **+0.64** on held-out SATs of the widened-pitch
    screen — two independent datasets, different pitch ranges, different sampling. Lower is
-   better; mechanism is double-loading (a road cell in open ground makes `route()` rebuild a
-   bigger network). Deciles are monotone: lowest → median 102 / 85% at ≤102; highest → median
-   106 / 0%.
+   better. Deciles are monotone: lowest → median 102 / 85% at ≤102; highest → median 106 / 0%.
+
+   **Mechanism CORRECTED (2026-07-30, same day).** This entry first claimed the mechanism was
+   double-loading ("a road cell in open ground makes `route()` rebuild a bigger network"). That
+   was an assertion, never measured, and the arithmetic does not support it as stated. For a
+   *connected tree* of k cells there are exactly k−1 internal road-road adjacencies, so
+   free-adjacency = 4k − 2(k−1) − losses, i.e.
+
+       mean_free_adjacency ≈ 2 + (2 − losses)/k
+
+   where `losses` counts adjacencies spent on the region boundary or the TH. The statistic is
+   therefore **near-pinned at ≈2.0 by topology**, and essentially all its variation comes from
+   three things: cycles, how tightly the skeleton presses against the region edge/TH, and
+   component count. Low mfa = a skeleton hugging the boundary/TH, or one containing loops.
+
+   **It is NOT merely a component counter** — checked, because that was the obvious deflationary
+   explanation: on the baseline SATs `rho(components, achieved) = +0.162` against
+   `rho(mfa, achieved) = +0.788`, and mfa varies 1.9434–2.0094 *within* single-component
+   skeletons. The predictive power is real and survives the check. **Only the causal story is
+   unestablished** — treat mfa as a validated correlate, not as an explanation.
+
+   **Consequence for the OOD test:** because mfa is pinned by topology, an OOD generator that
+   enforces one connected component and wanders the region interior produces mfa ≈ 1.99–2.01 by
+   construction and *cannot* exercise the predictor's real operating range (1.94–2.03). That
+   flaw was derivable on paper before the compute was spent. See the OOD entry below.
 
 **Measured arms (equal-wall-clock design; arm A is the recorded 98-road run, not re-run):**
 
@@ -2133,3 +2155,83 @@ Widening pitch is a **feasibility** lever only — `achieved` is flat across pit
 5. **`mode` is a third free bit, never recorded:** pooled FR16+FR17, `mode=alternate` holds
    **9 of 9 SATs**, `mode=both` is **0 SAT / 528**. Consistent with the same mechanism — fewer,
    longer branches. Untested on darkzig/lane (lane has no `mode`); a comb-family lever.
+
+## OOD check on `mean_free_adjacency`: unanswerable as posed — and the real constraint is spatial coverage, not topology (2026-07-30)
+
+**Question.** `mean_free_adjacency` (mfa) predicts `achieved` at Spearman +0.76/+0.64, but every
+skeleton in both datasets came from `generate_patterns` (comb) or `generate_lane_patterns`
+(lane). Track F step 5 (skeleton-generation RL) exists to produce topologies those two cannot,
+and would optimise mfa on shapes it was never tested on — the trap that made Track C-bis's
+0.999-AUC classifier deliver zero end-to-end benefit. So: does mfa transfer off-distribution?
+
+**Answer: NO_VERDICT — the question cannot be answered as posed, because the feasible set is
+very nearly the comb/lane-like set.** Across **21 distinct generators and ~54,000 candidates**,
+every one verified novel by set-difference against the full 190,738-pattern comb+lane population:
+
+| attempt | mfa spanned | feasible? |
+|---|---|---|
+| v1 walk-straight / walk-organic / perturb-25 / perturb-50 | ~2.00 (pinned) | **0 SAT / 128** |
+| v1 scatter-8 / scatter-16 | ~2.00 (pinned) | 30 SAT, best **103** vs record 95 |
+| v2 tunable trees, 15 families | **1.24–2.03 (in band)** | **0 SAT / 240** |
+
+**Why v1 could not test anything (arithmetic, derivable without compute).** For a k-cell
+skeleton with c components and `losses` adjacencies spent on the region boundary/TH,
+`mfa = 2 + (2c − losses)/k`. v1 enforced a single connected component and wandered the interior,
+so it produced mfa ≈ 2.00 **by construction**. Its 30 SATs had 4 distinct mfa values spanning
+0.019 against the in-distribution 0.066, and only 2 of the 20 in-distribution SATs fall inside
+that window. The script's `rho = −0.0148 → INVERTED` was a **mechanical threshold call on a
+degenerate axis**; a range-restriction guard (`NO_VERDICT_RANGE_RESTRICTED`) was added so it
+cannot recur.
+
+**Why v2 could not test anything either — the finding that matters.** v2 hit the mfa band on
+purpose (23% of the pool in-band) and returned **0 SAT / 240 (207 UNSAT, 33 UNKNOWN), 199 of the
+240 dead at presolve**. All 33 UNKNOWNs came from the boundary-*hugging* families (`b−0.6`),
+which carry the highest OOD `opts_total` (4,868–5,325) — i.e. even the least-infeasible OOD
+skeletons sit at mfa 1.24–1.5, outside the band entirely. The
+diagnostic is `opts_total`: OOD **3,648–5,325** vs **12,094–13,682** for every feasible skeleton
+ever recorded. Spatially:
+
+| family | coverage | mean dist to road | max dist |
+|---|---|---|---|
+| comb | 0.066 | 14.9 | 37.4 |
+| lane 12–18 | 0.076 | 11.3 | 38.2 |
+| OOD trees | **0.040** | **25.6** | **67.8** |
+
+**The binding constraint on a skeleton is spatial coverage, not topology and not mfa.** With the
+same 105 cells, comb/lane spread them as parallel runs spanning the region; random trees clump
+and leave half the map 25+ cells from any road, so consumers there have zero anchors and CP-SAT
+kills the pattern at presolve. comb/lane are not privileged by their *shape* — they are
+privileged because spreading a fixed budget of k cells as parallel runs approximately minimises
+distance-to-nearest-road. That is a facility-location property the hand-written generators
+happen to solve well.
+
+**Consequence for Track F step 5 (skeleton RL): the case is weaker again, and for a new reason.**
+The premise was "escape comb/lane to reach better topologies." The evidence says there is little
+to escape *to*: the only novel feasible family found (scatter — which spreads by construction)
+tops out at 103 against the record 95. An RL generator would have to rediscover near-optimal
+spatial coverage before it could compete at all, and the templates already encode it. The
+remaining freedom is **how** to spread — uniform vs non-uniform branch spacing *inside* the
+trunk-and-branch grammar — which is a much smaller and cheaper question than free-form
+generation.
+
+**Secondary result (solid, from v1): the neighbourhood of a good skeleton is sharp, not smooth.**
+Perturbing a working lane by relocating 25 or 50 leaf cells is **0-for-64**. Any diffusion-style,
+local-refinement or "nudge the record" approach over skeletons is measurably dead.
+
+**Process lessons.**
+1. **Three generator iterations, two caught free.** v2's pre-flight (an mfa histogram against the
+   target band, no solver) failed twice before any CP-SAT time: Eden growth built cycle-riddled
+   blobs at mfa 0.16–1.23 (each cycle costs 2/k — fix: admit only cells touching the skeleton
+   exactly once, which forces a tree), then the bias sign was backwards (random trees already
+   spend ~15 adjacencies on the boundary vs comb/lane's ~8, so the band needs *less* boundary
+   contact, not more). **v1 had no such gate and burned 1.5 h to learn its axis was degenerate.**
+   Rule: when an experiment's conclusion depends on a statistic having spread, plot that
+   statistic on the *candidate pool* before spending solver time.
+2. **A verdict function must refuse to answer on degenerate input.** Emitting INVERTED off
+   rho ≈ 0 over four tied values is the same failure as the 2026-07-22 knife-edge verdict.
+3. **Tuning one property can silently destroy the one that matters.** v2 optimised mfa into band
+   and collapsed `opts_total` to a third of feasible — the knob (`avoid the boundary`) kept the
+   tree clustered. Always re-check the *enabling* metric after tuning a *predictive* one.
+
+**Assets:** `scripts/exp_ood_skeletons.py` (`--mode v1|v2`, range-restriction guard, novelty
+set-difference, spatial diagnostics), `output/trackf/ood.jsonl` + `ood2.jsonl`.
