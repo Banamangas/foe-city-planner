@@ -2653,3 +2653,65 @@ experiment's recorded results are the cheapest input to the next one.
 unplaced stragglers with a wider search (cheap -- a handful of items, not 32), and reporting
 `placed N of M` to the user instead of a binary failure, since fillers need no road access and a
 user may accept a layout missing one decorative building.
+
+## The third city disagrees: nonuniform is NOT universally better, and k_start's margin is wrong for FR17 (2026-07-31)
+
+Everything shipped in Track F was calibrated on **darkzig and FR16, which agreed with each
+other**. FR17 -- the first city used for nothing -- disagrees on three of the four levers.
+
+**Under identical conditions (600 s box, 30 s probes, k_start=137):**
+
+| configuration | best on FR17 |
+|---|---|
+| **comb (the old family)** | **123** |
+| nonuniform, no band | 126 |
+| nonuniform + band | **FAMILY_TOO_WEAK** at k=137; 124 at k=133 |
+| comb historical, 2 h run | 120 |
+
+**1. The nonuniform family loses here.** It won decisively on darkzig (98->94) and FR16 (79->76)
+and is worse than comb on FR17. `BEST_PRESET` ships `pattern_family=nonuniform` as if it were
+universally best; on this city it is not. With the shipped preset end-to-end FR17 reaches 124 vs
+comb's 123 -- near-tied, slightly worse, not catastrophic, but not the win the other two cities
+showed.
+
+**2. `K_START_MARGIN["nonuniform"] = -4` is wrong for FR17, in the expensive direction.**
+Feasibility sits near **sigma/2 + 12** here, not sigma/2 - 4:
+
+| city | sigma/2 | feasible from | margin |
+|---|---|---|---|
+| darkzig | 114 | ~106 | **-8** |
+| FR16 | 88 | ~84 | **-4** |
+| **FR17** | **121** | **~133** | **+12** |
+
+The `auto` start of 117 made the walk climb 117->121->125->129->133, spending roughly half the
+budget proving infeasibility. Two cities agreed on the sign of the margin; the third reverses it.
+
+**3. The quality band costs feasibility -- which I never measured.** On darkzig I compared the
+band against the *bottom-40%-by-mfa* filter (SAT 46.7% -> 69.6%) and concluded it was strictly
+better. **I never compared it against no filter at all.** On FR17 the band makes k=137 infeasible
+outright while the unbanded family solves it. The band selects tighter skeletons: better where
+they pack, harder to pack. That is a trade-off, not a free win, and darkzig's comparison was
+against the wrong baseline to see it.
+
+**4. Structural: the k-walk assumes feasibility is MONOTONE in k, and it is not.** When k_start is
+infeasible the walk steps *up*, on the assumption that more road cells can only help. FR17 + band
+is feasible at 133 and infeasible at 137, so starting at 137 climbed away from the feasible window
+and returned FAMILY_TOO_WEAK having probed 15 levels. **A k_start that is too high is
+unrecoverable**; too low merely wastes budget climbing. That asymmetry is the opposite of the one
+the -4 margin was chosen for, and it means no single constant can be safe: the margin must be
+below the window on every city, and the window's position moves by 20 levels between cities.
+
+**Consequence: the adaptive cliff-finding logged earlier is no longer a nice-to-have.** Spending
+~20% of the box bisecting for the feasibility window, then exploiting the rest, is the only
+approach that can be right when the window sits at sigma/2 - 8 on one city and sigma/2 + 12 on
+another. A constant cannot.
+
+**What this says about the session's other results.** darkzig and FR16 agreed on every lever, so
+each new lever looked general when it was two-city tuning. The 94 and the 76 are real -- verified
+layouts on real cities -- but **the settings that produced them are not established as universal**,
+and `BEST_PRESET` currently presents them as such. n=2 agreement is one coincidence away from
+n=1.
+
+**The screen was right, for what that is worth.** `road_pressure(FR17) = 0.627` returned
+UNCERTAIN -- outside the 0.40/0.43 range that worked and below the 0.89 that failed. FR17 does
+work, just not better than the old family. An honest "uncertain" for a genuinely middling case.
