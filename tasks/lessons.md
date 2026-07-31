@@ -2041,3 +2041,496 @@ and the experiment was retargeted onto the winnable band. Had the original spec 
 would have burned 8 h and reported "feasibility < 0.06 %" — while a 98-road layout sat undiscovered in
 the exact population it was sampling. *Measure the thing the conclusion depends on before spending the
 compute.* The whole-branch review that forced the d-measurement paid for itself many times over.
+
+## NEW RECORD: 95 roads on darkzig (was 98) — a truncated parameter range plus two free filters (2026-07-30)
+
+**The result: 98 -> 97 -> 95 in one session.** Three legal layouts under the standing record,
+from two independently-configured screens plus a seed-polish pass. **95 roads is the all-time
+best — 120% road efficiency vs the Sigma/2 = 114 estimate.** Preserved with provenance at
+`docs/records/darkzig-95-roads-lane-k105.json` (plus the two 97s: `…-97-…-k106.json` and
+`…-97-…-k105-alt.json`, distinct skeletons AND placements).
+
+The 95 was found by the screen at **99** and improved to **95 by seed-polish** — a 4-road jump
+on a fixed skeleton from CP-SAT seed variation alone. Polish improved **6 of 12** targets
+(99->95, 100->97, 100->98, 99->98, 100->99, 98->97), against 4-of-11 historically: the quality
+filter hands it a far better target set than it has ever had.
+
+**Independently verified** (the standing rule after the retracted-127 incident), for the 95 and
+both 97s: reconstructed via `exp_exact_router.reconstruct_fixed`, then for the 95 — `route()`
+from the placement = **95** (matches the artifact's 95-entry roads array and the claimed
+`achieved`), **`exact_route()` = 95 OPTIMAL** (greedy and exact agree, no undercounting),
+`is_valid` True, **`rotated_buildings` = 0**, 0 overlapping cells, 0 out-of-region, **0
+unsatisfied consumers**, **224/224** buildings placed.
+Provenance of the 95: family lane, **k=105, pitch 14**, stubs=True, trunk_len 29, TH (21,28),
+gen seed 1, pattern index 25, `--prefilter-top 0.10 --quality-top 0.40`,
+`mean_free_adjacency` 1.9698.
+
+**What broke the floor: pitch 17 — six steps outside the generator's hardcoded ceiling of 11.**
+`generate_lane_patterns` enumerated `for pitch in (5,…,11)`. Measured SAT rate on darkzig rises
+monotonically across that whole range (0/0/0/0/1.0/3.2/**6.2**%), i.e. **the range was truncated
+at exactly its best value and the entire default family sat on the rising flank.** FR16's comb
+analogue (`spacing`, capped at 7) shows the same shape. Widening to 12–24 exposes **93,284
+patterns per k** on darkzig — more than the entire previously-enumerated population (67,308) —
+none of which had ever been probed. `pitches=` is opt-in and byte-identical when unset.
+
+**Two free filters, both computable before probing, both from data the code already had.**
+1. **`opts_total` (feasibility).** `probe()` enumerates each consumer's road-adjacent anchor
+   options *before building the CP-SAT model*, records the total into `diag`, and discards it.
+   That number separates SAT from non-SAT at **ROC-AUC 0.990** (0.993 within the strongest
+   parameter bucket). `foeopt/skeleton_score.py` recomputes it with per-row integer bitmasks —
+   **507x faster** (0.71 ms vs 359 ms), so scoring a 160k population costs 1.9 min instead of
+   16 core-hours. Oracle-equivalence tested against `_anchor_candidates` (the `reach.py` rule).
+2. **`mean_free_adjacency` (quality).** Average free cells orthogonally adjacent to each road
+   cell. **The project's first measured quality predictor**: Spearman **+0.76** vs `achieved` on
+   the 20 SATs of the 98-road baseline run and **+0.64** on held-out SATs of the widened-pitch
+   screen — two independent datasets, different pitch ranges, different sampling. Lower is
+   better. Deciles are monotone: lowest → median 102 / 85% at ≤102; highest → median 106 / 0%.
+
+   **Mechanism CORRECTED (2026-07-30, same day).** This entry first claimed the mechanism was
+   double-loading ("a road cell in open ground makes `route()` rebuild a bigger network"). That
+   was an assertion, never measured, and the arithmetic does not support it as stated. For a
+   *connected tree* of k cells there are exactly k−1 internal road-road adjacencies, so
+   free-adjacency = 4k − 2(k−1) − losses, i.e.
+
+       mean_free_adjacency ≈ 2 + (2 − losses)/k
+
+   where `losses` counts adjacencies spent on the region boundary or the TH. The statistic is
+   therefore **near-pinned at ≈2.0 by topology**, and essentially all its variation comes from
+   three things: cycles, how tightly the skeleton presses against the region edge/TH, and
+   component count. Low mfa = a skeleton hugging the boundary/TH, or one containing loops.
+
+   **It is NOT merely a component counter** — checked, because that was the obvious deflationary
+   explanation: on the baseline SATs `rho(components, achieved) = +0.162` against
+   `rho(mfa, achieved) = +0.788`, and mfa varies 1.9434–2.0094 *within* single-component
+   skeletons. The predictive power is real and survives the check. **Only the causal story is
+   unestablished** — treat mfa as a validated correlate, not as an explanation.
+
+   **Consequence for the OOD test:** because mfa is pinned by topology, an OOD generator that
+   enforces one connected component and wanders the region interior produces mfa ≈ 1.99–2.01 by
+   construction and *cannot* exercise the predictor's real operating range (1.94–2.03). That
+   flaw was derivable on paper before the compute was spent. See the OOD entry below.
+
+**Measured arms (equal-wall-clock design; arm A is the recorded 98-road run, not re-run):**
+
+| arm | config | probes | SAT | SAT% | core-h | SAT/core-h | best |
+|---|---|---|---|---|---|---|---|
+| A baseline | default pitch, no filter | 1400 | 20 | 1.4% | 72.8 | 0.27 | 98 |
+| B1 | + `opts_total` top 10% | 300 | 51 | 17.0% | 22.5 | 2.26 (8.4x) | 98 |
+| B2 | + pitch 12-18 | 300 | **242** | **80.7%** | 8.6 | **28.2 (104x)** | 97 |
+| C | + `mean_free_adjacency` lowest 40% | 300 | 224 | 74.7% | 10.9 | **20.6 (76x)** | **97 -> 95 after polish** |
+
+B2 and C returned **zero UNSAT** in 300 probes each — every probe was SAT or UNKNOWN. Gate
+(>=3x SAT/core-h AND min achieved <= 98): **PASS on all three arms.**
+**C is the configuration to keep:** the quality filter costs ~27% of the SAT rate and buys 3
+roads of median (102 vs 105) — **129 layouts at <=102, against 7 in the entire 1400-probe
+baseline** — and its frontier is what let seed-polish reach 95.
+
+**The trade-off that matters for tuning: feasibility and quality pull apart, and both proxies
+have interior optima.** `opts_total` is an excellent *feasibility* ranker but among SATs it
+correlates with `achieved` at **+0.50 — the wrong sign**; a top-5% rank-and-take would have
+missed the 98 (rank 26/320). And the *tightest* skeletons are genuinely harder to pack:
+by `mean_free_adjacency` quintile, SAT rate is 36% / 93% / 98% / 84% / 100% while median
+`achieved` is 102 / 102 / 104 / 106 / 106 — **quintile 2 is the sweet spot** (near-full SAT rate
+*and* the best road counts; the 97 came from it). Both filters must therefore keep a *loose*
+cut and sample **uniformly inside** the survivors, never rank-and-take.
+Widening pitch is a **feasibility** lever only — `achieved` is flat across pitch 12–18
+(median 102–105), so there is no sharper sub-range to find.
+
+**Lessons.**
+1. **When every measured knob's optimum sits at the boundary of its hardcoded range, the range
+   is the bug.** Three cities and two families all said "more pitch/spacing is better" right up
+   to the cap. One `for pitch in (...)` tuple was costing more than every search-strategy idea
+   in `next-things-to-try.md` combined (nine ideas, one small win).
+2. **Check what the hot path already computes and throws away before building a model.** The
+   feasibility signal was inside `probe()` all along; C-bis trained a CNN (AUC 0.999) to
+   predict the same thing and delivered zero end-to-end benefit.
+3. **A ranker only helps where it selects the sample, not where it reorders one that will be
+   consumed in full.** C-bis Stage 1 and next-things #1 both ranked inside an already-sampled
+   200 that `_probe_levels_batch` then probed entirely — a no-op by construction. Same models,
+   applied to the 160k population instead, are the difference between 0.27 and 19 SAT/core-h.
+4. **Existing artifacts answered the "does it generalise" question for free.** The planned 2 h
+   FR16 screen was unnecessary: `output/roads-first/FR{16,17,24}/probes.jsonl` already held
+   2,444 labelled probes with full params. Stratifying within k-level (so "SAT lives at loose k"
+   can't fake a signal) confirmed the structure on two other cities in minutes.
+5. **`mode` is a third free bit, never recorded:** pooled FR16+FR17, `mode=alternate` holds
+   **9 of 9 SATs**, `mode=both` is **0 SAT / 528**. Consistent with the same mechanism — fewer,
+   longer branches. Untested on darkzig/lane (lane has no `mode`); a comb-family lever.
+
+## OOD check on `mean_free_adjacency`: unanswerable as posed — and the real constraint is spatial coverage, not topology (2026-07-30)
+
+**Question.** `mean_free_adjacency` (mfa) predicts `achieved` at Spearman +0.76/+0.64, but every
+skeleton in both datasets came from `generate_patterns` (comb) or `generate_lane_patterns`
+(lane). Track F step 5 (skeleton-generation RL) exists to produce topologies those two cannot,
+and would optimise mfa on shapes it was never tested on — the trap that made Track C-bis's
+0.999-AUC classifier deliver zero end-to-end benefit. So: does mfa transfer off-distribution?
+
+**Answer: NO_VERDICT — the question cannot be answered as posed, because the feasible set is
+very nearly the comb/lane-like set.** Across **21 distinct generators and ~54,000 candidates**,
+every one verified novel by set-difference against the full 190,738-pattern comb+lane population:
+
+| attempt | mfa spanned | feasible? |
+|---|---|---|
+| v1 walk-straight / walk-organic / perturb-25 / perturb-50 | ~2.00 (pinned) | **0 SAT / 128** |
+| v1 scatter-8 / scatter-16 | ~2.00 (pinned) | 30 SAT, best **103** vs record 95 |
+| v2 tunable trees, 15 families | **1.24–2.03 (in band)** | **0 SAT / 240** |
+
+**Why v1 could not test anything (arithmetic, derivable without compute).** For a k-cell
+skeleton with c components and `losses` adjacencies spent on the region boundary/TH,
+`mfa = 2 + (2c − losses)/k`. v1 enforced a single connected component and wandered the interior,
+so it produced mfa ≈ 2.00 **by construction**. Its 30 SATs had 4 distinct mfa values spanning
+0.019 against the in-distribution 0.066, and only 2 of the 20 in-distribution SATs fall inside
+that window. The script's `rho = −0.0148 → INVERTED` was a **mechanical threshold call on a
+degenerate axis**; a range-restriction guard (`NO_VERDICT_RANGE_RESTRICTED`) was added so it
+cannot recur.
+
+**Why v2 could not test anything either — the finding that matters.** v2 hit the mfa band on
+purpose (23% of the pool in-band) and returned **0 SAT / 240 (207 UNSAT, 33 UNKNOWN), 199 of the
+240 dead at presolve**. All 33 UNKNOWNs came from the boundary-*hugging* families (`b−0.6`),
+which carry the highest OOD `opts_total` (4,868–5,325) — i.e. even the least-infeasible OOD
+skeletons sit at mfa 1.24–1.5, outside the band entirely. The
+diagnostic is `opts_total`: OOD **3,648–5,325** vs **12,094–13,682** for every feasible skeleton
+ever recorded. Spatially:
+
+| family | coverage | mean dist to road | max dist |
+|---|---|---|---|
+| comb | 0.066 | 14.9 | 37.4 |
+| lane 12–18 | 0.076 | 11.3 | 38.2 |
+| OOD trees | **0.040** | **25.6** | **67.8** |
+
+**The binding constraint on a skeleton is spatial coverage, not topology and not mfa.** With the
+same 105 cells, comb/lane spread them as parallel runs spanning the region; random trees clump
+and leave half the map 25+ cells from any road, so consumers there have zero anchors and CP-SAT
+kills the pattern at presolve. comb/lane are not privileged by their *shape* — they are
+privileged because spreading a fixed budget of k cells as parallel runs approximately minimises
+distance-to-nearest-road. That is a facility-location property the hand-written generators
+happen to solve well.
+
+**Consequence for Track F step 5 (skeleton RL): the case is weaker again, and for a new reason.**
+The premise was "escape comb/lane to reach better topologies." The evidence says there is little
+to escape *to*: the only novel feasible family found (scatter — which spreads by construction)
+tops out at 103 against the record 95. An RL generator would have to rediscover near-optimal
+spatial coverage before it could compete at all, and the templates already encode it. The
+remaining freedom is **how** to spread — uniform vs non-uniform branch spacing *inside* the
+trunk-and-branch grammar — which is a much smaller and cheaper question than free-form
+generation.
+
+**Secondary result (solid, from v1): the neighbourhood of a good skeleton is sharp, not smooth.**
+Perturbing a working lane by relocating 25 or 50 leaf cells is **0-for-64**. Any diffusion-style,
+local-refinement or "nudge the record" approach over skeletons is measurably dead.
+
+**Process lessons.**
+1. **Three generator iterations, two caught free.** v2's pre-flight (an mfa histogram against the
+   target band, no solver) failed twice before any CP-SAT time: Eden growth built cycle-riddled
+   blobs at mfa 0.16–1.23 (each cycle costs 2/k — fix: admit only cells touching the skeleton
+   exactly once, which forces a tree), then the bias sign was backwards (random trees already
+   spend ~15 adjacencies on the boundary vs comb/lane's ~8, so the band needs *less* boundary
+   contact, not more). **v1 had no such gate and burned 1.5 h to learn its axis was degenerate.**
+   Rule: when an experiment's conclusion depends on a statistic having spread, plot that
+   statistic on the *candidate pool* before spending solver time.
+2. **A verdict function must refuse to answer on degenerate input.** Emitting INVERTED off
+   rho ≈ 0 over four tied values is the same failure as the 2026-07-22 knife-edge verdict.
+3. **Tuning one property can silently destroy the one that matters.** v2 optimised mfa into band
+   and collapsed `opts_total` to a third of feasible — the knob (`avoid the boundary`) kept the
+   tree clustered. Always re-check the *enabling* metric after tuning a *predictive* one.
+
+**Assets:** `scripts/exp_ood_skeletons.py` (`--mode v1|v2`, range-restriction guard, novelty
+set-difference, spatial diagnostics), `output/trackf/ood.jsonl` + `ood2.jsonl`.
+
+## Track F test 1 + multi-city generalisation: FR16 record 79 -> 76, and the limit is road pressure, not slack (2026-07-30)
+
+### Test 1 — is there headroom inside the trunk-and-branch grammar? SATURATED on darkzig, but the uniformity constraint is real
+
+`generate_lane_patterns` forces uniform pitch and round-robin balanced branch growth. Neither is
+justified; the expert 142-road city is not uniform. `scripts/exp_nonuniform_lanes.py` lifts both
+(irregular seed gaps, Exponential**skew branch-length split) while keeping the trunk-and-branch
+topology that survives CP-SAT.
+
+**darkzig, 234 probes: 229 SAT (97.9%), 5 UNKNOWN, best 97, median 102.** Seed-polish on the 17
+sub-100 skeletons improved 7 and reached **96** (verified `route()`=96, `exact_route()`=96
+OPTIMAL, 224/224, rotated=0). Pre-committed gate was "beat 95" -> **SATURATED**.
+
+**But the lifted constraint demonstrably costs roads**, reproduced in all three gap ranges:
+
+| gap range | skew 0 (= today's generator) | skew 1 | skew 2 |
+|---|---|---|---|
+| 8-14 | 101 | 98 | 98 |
+| 10-18 | 101 | 100 | 99 |
+| 12-22 | 101 | 98 | **97** |
+
+Uniform bottoms out at 101 every time; unequal reaches 97-99. **~4 roads at the minimum, ~2 at
+the median.** Caveat on the verdict: the arms were not matched -- the 95 record had the
+`mean_free_adjacency` quality filter, this run did not. A matched re-run is the open follow-up.
+
+### Test 3 — the quality surrogate works WHERE RL WOULD OPERATE
+
+`rho(mean_free_adjacency, achieved)` **within** the non-uniform grammar = **+0.825** (n=229) --
+stronger than the +0.788 baseline or the +0.639 held-out. `opts_total` = +0.365 (still the wrong
+sign). So the OOD `NO_VERDICT` is not load-bearing for a policy confined to the grammar: it is
+in-distribution by construction and has a validated microsecond-cost reward.
+
+### The headline: feasibility got ~350x cheaper, and it TRANSFERS
+
+| run | probes | SAT% | UNKNOWN% | core-h | cost / legal layout |
+|---|---|---|---|---|---|
+| darkzig baseline (this morning) | 1400 | 1.4% | **60.9%** | 72.8 | 3.6 core-h |
+| darkzig non-uniform | 234 | **97.9%** | **2.1%** | 2.4 | **37 core-s** |
+| FR16 non-uniform | 270 | 49.6% | 16.7% | 7.2 | 193 core-s |
+
+**UNKNOWN was always the budget sink** (60.9% of probes, ~90% of wall-clock, each burning the
+full limit to say nothing). At 2.1% compute converts into results instead of timeouts.
+
+**FR16: NEW RECORD 76 roads (was 79), six distinct layouts**, verified (`route()`=76,
+`exact_route()`=76 OPTIMAL, 89/89 placed, rotated=0, 0 unsatisfied, **116% efficiency**).
+Found in **14 probes**; the original 2h comb run needed its full budget to reach 79 and left
+k=84 **INCONCLUSIVE** -- the non-uniform grammar produced 47 SATs at that same k, and the record
+sits there, on a *tighter* skeleton than the old record's k=92.
+`docs/records/` + `output/trackf/fr16-sats/`.
+
+### NEW failure mode FR16 exposed that darkzig never did: SAT_FILLER_FAIL
+
+**91 of 270 FR16 probes (34%)**: CP-SAT places every road-needing consumer, then the *filler*
+buildings have nowhere left to go. It worsens monotonically with k (16 -> 32 -> 43 at k=84/88/92)
+-- more road cells, less room for fillers. Counting it: 225/270 (83%) found a valid consumer
+placement; only 134 (50%) completed to a full legal layout. **"Consumers place" != "usable
+layout"**; any productionised version must treat filler placement as a first-class constraint.
+
+### The limit is ROAD PRESSURE, not slack or fill
+
+FR24 (146 consumers) returned **0 SAT in 135 probes** at k=205/220/235 -- a k band never
+previously probed, chosen because the old run's k=246-266 leaves only 2-22 free cells for 76
+filler buildings. **Every one of the 135 probes hit the 300 s timeout: 135 UNKNOWN, 0 SAT,
+0 UNSAT, 11.2 core-h.** Not refuted -- undecided. (The old comb run at k=246-266 got 618
+*proven* UNSAT, because there the area arithmetic makes infeasibility easy; at k=205-235 there
+is no such shortcut and CP-SAT must actually search.) Rule of three: SAT rate < 2.2% at this
+budget. The tempting explanation -- "it's too full" -- is **wrong**:
+
+| city | fill% | slack | consumers | Sigma/2 | **road pressure** | result |
+|---|---|---|---|---|---|---|
+| darkzig | **89.6%** | 283 | 63 | 114 | **0.40** | 97.9% SAT |
+| FR16 | 83.3% | 206 | 56 | 88 | **0.43** | 49.6% SAT |
+| FR24 | **90.2%** | 268 | **146** | 238 | **0.89** | **0% SAT** |
+
+darkzig and FR24 have the same fill (89.6 vs 90.2%) and near-identical region size (2720 vs
+2736) and opposite outcomes -- **fill does not discriminate**. What does:
+**road pressure = Sigma(short)/2 / (region - building_area)** = the roads a city NEEDS over the
+free cells it HAS. 0.40/0.43 work; 0.89 does not (30 cells of play in a 2736-cell map).
+Computable in microseconds *before* any solver time -- a productionised tool can reject a city
+instantly instead of burning an hour. **Confounded at n=3:** FR24 also has 2.3x the consumers,
+and probe time scales 36s -> 95s -> 302s with consumer count, which smells like CP-SAT model size
+rather than packing. Separating them needs a synthesised city (many consumers + low pressure, or
+few consumers + high pressure) via `make_real_like_city`.
+
+**Practical boundary on current evidence:** ~60-80 road-needing buildings, road pressure <= ~0.5.
+Note this is about whether the tool WORKS. Whether it is WORTH running is a different axis --
+darkzig went 250 -> 95 (62% reduction, 46% -> 121% efficiency) precisely because it started badly.
+
+### Process lesson: two runs on one box is not "parallel", it is contention
+
+FR16 and FR24 were launched together at 8 + 6 workers on 16 cores. Measured: **14 python
+processes >50% CPU, load 18.8, zero headroom** -- exactly the configuration the 2026-07-19/20
+lesson records as backfiring. **CP-SAT's budget is wall-clock, not CPU time**, so under contention
+a probe still gets its 300 s of wall but fewer CPU-seconds and times out more often. That biases
+results toward UNKNOWN -- i.e. *pessimistic* -- so the SAT rates measured while both ran are
+understated. Serialised after the user flagged it; FR16's rate went 2.7-3.1/min -> 4.2/min
+immediately. Verified results are unaffected (contention can only cause timeouts, never a false
+feasible layout), but **never quote a SAT rate measured under contention**.
+
+
+## CORRECTION + NEW RECORD 94: the matched test found the headroom the unmatched one missed (2026-07-31)
+
+**This supersedes the "RL closed / grammar SATURATED" conclusion recorded hours earlier.** That
+verdict rested on test 1 reaching only 96, and I flagged at the time that its arms were unmatched
+(the 95 record used the `mean_free_adjacency` quality filter; the non-uniform run did not). The
+matched re-run closes that gap and **breaks the record: darkzig 95 -> 94.**
+
+**Independently verified by full regeneration**, not by re-reading an artifact: the pattern was
+rebuilt from (gen-seed 3, skews 1-2, `--opts-top 0.10`, `--quality-top 0.40`, k=105, index 37) and
+re-solved under CP-SAT seed 2 -> `route()` = **94**, `exact_route()` = **94 OPTIMAL**, `is_valid`
+True, `rotated_buildings` 0, 224/224 placed, 0 unsatisfied, 0 overlaps, **121% efficiency**.
+`docs/records/darkzig-94-roads-nonuniform-k105.json`.
+Winning skeleton: gaps 10-18, skew 1, branch lengths **[18, 17, 13, 4]**, mfa 1.96190, trunk 30.
+Screen found it at 98; seed-polish took it 98 -> 95 -> 94.
+
+**Matched screen vs test 1** (same grammar, the only difference being the quality filter, plus
+dropping skew 0 which test 1 had shown never beats 101):
+
+| | test 1 (opts filter only) | matched (both filters) |
+|---|---|---|
+| SAT rate | 97.9% | 46.7% |
+| median achieved | 102 | **100** |
+| screen best | 97 | **96** |
+| SATs at <=99 | 17 of 229 (7%) | 55 of 112 (**49%**) |
+| polish improved | 7 of 17 | **22 of 31** |
+| after polish | 96 | **94 (RECORD)** |
+| layouts verified <=95 | 0 | **8** |
+
+The quality filter costs half the SAT rate and buys ~2 roads of median, a 7x denser sub-100
+frontier, and the record. **Same trade as arm C on the uniform grammar, and worth taking.**
+
+**Full polish result (31 skeletons x 16 CP-SAT seeds = 496 solves): improved 22/31, best 94.**
+Eight layouts verified at <=95, every one passing the full gate (`route()` matches,
+`exact_route()` OPTIMAL, `is_valid`, rotated=0, 224/224, 0 unsatisfied): **two 94s** —
+`k105-i37` (g10-18-s1, branches [18,17,13,4]) and `k105-i71` (g12-22-s2, branches [27,24,15]),
+**distinct skeletons AND distinct families**, so 94 is reproducible, not a single draw — plus six
+95s spread across both k-levels. Matching the previous all-time best went from *unreachable in
+the unfiltered run* to *routine*. Artifacts: `docs/records/darkzig-94-roads-nonuniform-k105.json`
+and `…-alt.json`.
+
+**Consequence for Track F step 5:** the RL closure stated hours earlier is **wrong on its central
+point**. All four conditions for a guided search over per-branch parameters now hold at once:
+space ~10^19 (not enumerable), feasibility affordable (47% SAT), a validated in-grammar reward
+(rho **+0.825**), and -- the row I had wrong -- **measured headroom (94 < 95)**. RL is no longer
+closed on evidence; it is *open pending a cheaper alternative*, because a bandit or CEM over the
+per-branch vector is still the cheaper first move and every record so far has come from cheap
+methods.
+
+**Design flaw still unfixed, and it matters:** every SAT in the matched run sits at mfa
+1.9619-1.97143 -- the *top* of the kept range (1.8476-1.9714). The bottom-40% cut keeps a large
+tail of too-tight skeletons that only produce UNKNOWNs, which is most of the lost SAT rate. Arm
+C's quintile data said the same thing (quintile 1: 36% SAT; quintile 2: 93%). **The optimum is an
+interior BAND, not a bottom slice** -- both filters are the wrong shape and should target a
+window (~1.96-1.98 here). Cheap fix, untested.
+
+**Process lesson: when you flag an asymmetry while closing a track, close the asymmetry before
+the track.** I recorded "the arms were unmatched" as a caveat and committed the closure anyway.
+One screen refuted it. A caveat that can be tested in one run is not a caveat -- it is the next
+experiment.
+
+## The filter was the wrong SHAPE: `quality_index` band beats the bottom slice, and it is derived not tuned (2026-07-31)
+
+**`quality_index = (2 - mean_free_adjacency) * k` reduces exactly to `losses - 2c`** — adjacencies
+the skeleton spends on the region boundary/TH, minus twice its component count. An integer, and
+k-normalised by construction, so it compares across cities and budgets.
+
+**Every record this project holds sits at index 3-4; both >=98-road layouts sit at 2:**
+
+| layout | k | achieved | index |
+|---|---|---|---|
+| darkzig 94 / 94 / 94 | 105 | 94 | **4 / 4 / 4** |
+| darkzig 95 | 105 | 95 | **3** |
+| darkzig 97 / 97 | 105/106 | 97 | **4 / 3** |
+| **FR16 76** | **84** | **76** | **4** |
+| darkzig 98 / 99 | 105 | 98 / 99 | 2 / 2 |
+
+FR16 at k=84 landing in the same band as darkzig at k=105 is the cross-city check that the index
+is genuinely normalised rather than a darkzig coincidence.
+
+**Why the previous filter was wrong.** `--quality-top 0.40` kept the LOWEST 40% by mfa. Measured
+on the k=105 opts-filtered pool: mfa is quantised in steps of 1/k, the productive band sits at
+percentiles **p14-p52**, and the cut kept **p0-p40** — wasting a seventh of the budget *below* the
+band (too-tight skeletons that only return UNKNOWN) while excluding a quarter of the band itself.
+**The optimum is an interior BAND, not a bottom slice.** Arm C's quintile data had said the same
+(q1 36% SAT, q2 93%) and I built a bottom cut anyway.
+
+**A/B, same seed and same 240 probes, only the selection differing:**
+
+| | bottom-40% by mfa | **band [3,4]** |
+|---|---|---|
+| SAT rate | 46.7% | **69.6%** (+49%) |
+| median achieved | 100 | 100 |
+| screen best | 96 | **94** |
+| solves needed to reach 94 | 496 (polish pass) | **0 — the screen alone** |
+
+A **third independent 94** came out of it, verified (`exact_route` 94 OPTIMAL, 224/224, rotated=0,
+0 unsatisfied), at index 4 as predicted. `docs/records/darkzig-94-roads-band-k105.json`.
+
+**And it is 15x cheaper than the filter it replaces**, which is what makes it shippable:
+`opts_total` costs 1.494 ms/pattern (239 s for a 160k population — cannot fit a 60-120 s user
+budget); `mean_free_adjacency` costs 0.096 ms (15.4 s), and as a *predicate applied during
+generation* it is effectively free (200 banded patterns in 0.6 s).
+
+## The surrogate is a CLASSIFIER, not a gradient — so bandit/CEM/RL over the per-branch vector is dead (2026-07-31)
+
+Checked before building the guided search that the reopened Track F step 5 pointed at.
+**Within the productive band, nothing predicts `achieved`** (106 in-band SATs, all |rho| < 0.22):
+
+    branch_mean +0.05   branch_spread +0.09   longest_branch +0.08   gap_lo -0.22
+    n_branches  +0.19   n_fronts      +0.19   opts_total     +0.19   skew   -0.15
+    quality_index -0.15  k +0.18
+
+So `mean_free_adjacency`'s celebrated **rho +0.825 was almost entirely the BAND effect** — it
+separates in-band from out-of-band and is flat (-0.147) inside. There is no gradient for a policy
+to climb. The residual variance is **CP-SAT seed luck**, which `seed_polish` already exploits
+directly (22 of 31 skeletons improved by 1-4 roads).
+
+**Consequence: the learnable structure in this problem is a filter, and it is now extracted into
+one integer test.** What remains is irreducible solver noise, and the right attack on noise is
+more seeds, not a learned policy. This supersedes the 2026-07-31 "RL reopened" entry: reopened on
+headroom, closed again on *mechanism* — the headroom is real but is not reachable by learning,
+because within the reachable region the objective is flat.
+
+**Generalisable:** a surrogate with a high rank correlation may be a classifier in disguise.
+Before building an optimiser on it, re-measure the correlation *inside the region the optimiser
+would actually search*. Here that one check turned a 10^19-space "guided search is now justified"
+into "there is nothing to search".
+
+## The 60-120 s box experiment: two shipped defects, and k_start was worth more than every filter (2026-07-31)
+
+Everything up to this point was measured at 300 s probes and multi-hour boxes. Running the same
+configuration at *user* timescales found two defects in what had just been committed, and a lever
+bigger than anything the filters gave.
+
+**Defect 1: the time box was not honoured.** `RoadsFirstSearch` checks its deadline only *after* a
+probe returns (`handle_result`) -- nothing interrupts a probe in flight. So `probe_limit >= time_box`
+means the user waits for the probe, not the box. Measured at a 120 s box:
+
+| probe_limit | wall | overrun | best achieved |
+|---|---|---|---|
+| 10 / 20 / 40 s | 121 s | **1.01x** | 111 (identical) |
+| 300 s | **292 s** | **2.43x** | 111 |
+
+`BEST_PRESET` had shipped with `probe_limit=300`, lifted unthinkingly from the research runs.
+Fixed to 30 s + a regression test. **Short probes cost nothing for this family** -- unlike the lane
+family, where 30 s missed every known-feasible pattern (2026-07-22). Do not generalise a probe
+budget across families.
+
+**Defect 2 (the big one): `pick_k_start` was calibrated for the wrong side of sigma_half.** It
+returns `ceil(sigma_half) + 8`, from when feasibility sat *above* sigma_half. The nonuniform
+family's records sit *below* it -- darkzig 94 at k=105 (sigma/2=114), FR16 76 at k=84
+(sigma/2=88). So a short run spent its entire budget above the region where results live:
+
+| box | best | lowest k reached | levels probed |
+|---|---|---|---|
+| 60 s | 111 | 123 | 1 |
+| 120 s | 111 | 123 | 1 |
+| 300 s | 109 | 123 | **1** |
+| 600 s | 108 | 119 | 5 |
+
+A 300 s box never left its starting level. Forcing k_start down, same 120 s box:
+`auto(123) -> 111`, `118 -> 106`, `110 -> 103`, **`106 -> 98`**.
+
+**The cliff is sharp and the penalty asymmetric.** One step of 4 below the optimum returns
+`FAMILY_TOO_WEAK` -- nothing at all, not a worse answer -- while too high merely wastes budget.
+Measured: darkzig 106 works / **104 fails**; FR16 84 works / **80 fails**. So sigma/2 - 8 is
+optimal on darkzig and **fatal on FR16**.
+
+**Shipped `K_START_MARGIN = {comb: +8, lane: +8, nonuniform: -4}`** -- the largest margin safe on
+both cities. comb/lane are untouched (changing them would be an unmeasured behaviour change). A
+derived alternative, `sigma_half/1.21 + 9` from the ~120% efficiency both cities reach, gives 103
+and 82 -- **below both cliffs**, and was rejected for that reason. *A principled-looking formula
+that lands on the wrong side of a cliff is worse than a crude safe one.*
+
+**End-to-end result at a 120 s box, `k_start="auto"`:**
+
+| city | before | after | reference |
+|---|---|---|---|
+| darkzig | 111 | **101** | record 94 (~10 core-h) |
+| FR16 | 90 | **76** | record 76 — **matched in 121 s** |
+
+FR16 now reproduces its all-time record in two minutes; darkzig lands within 7 of a record that
+cost ten core-hours. **k_start was worth 10-14 roads; every filter tuning combined was worth ~2.**
+
+**Lessons.**
+1. **Measure at the timescale you ship at.** At research timescales `k_start` is irrelevant (the
+   walk has hours to descend) and `probe_limit=300` is correct. At 120 s both are wrong. No
+   amount of reasoning about the filters would have surfaced either.
+2. **A heuristic outlives the assumption it was calibrated on.** `pick_k_start`'s +8 was right for
+   comb/lane and silently wrong for a family invented later. When adding a family, re-check every
+   heuristic that takes the family as context -- not just the ones that name it.
+3. **Where the penalty is asymmetric, take the safe margin, not the optimum.** -8 buys 5 more
+   roads on darkzig and destroys FR16 entirely.
+
+**Still open:** an adaptive alternative -- spend ~20% of the box bisecting for the feasibility
+cliff with short probes, then exploit the remainder at the lowest feasible k -- needs no per-city
+calibration and would self-correct where -4 is wrong. Separate design + gate, not a
+productionisation ride-along.

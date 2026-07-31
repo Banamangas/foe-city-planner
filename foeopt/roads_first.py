@@ -182,10 +182,14 @@ def _th_anchor_cell(th: Footprint, side: str) -> Cell:
     return (th.x + th.width, th.y)
 
 
+LANE_PITCHES = (5, 6, 7, 8, 9, 10, 11)
+
+
 def generate_lane_patterns(region: set[Cell], tw: int, tl: int, k: int,
                            rng: random.Random, max_patterns: int,
                            th_mode: str = "coarse",
-                           max_lane_len: int | None = None) -> list[Pattern]:
+                           max_lane_len: int | None = None,
+                           pitches: tuple[int, ...] | None = None) -> list[Pattern]:
     """Parallel double-loaded-lane family: unlike generate_patterns's comb
     (single trunk consuming budget//2 regardless of need, short teeth), this
     grows a *minimal* trunk -- only as long as needed to connect the TH to
@@ -199,7 +203,16 @@ def generate_lane_patterns(region: set[Cell], tw: int, tl: int, k: int,
     family's uncapped lanes (structurally efficient but harder for CP-SAT to
     decide, per the idea #5 mechanism finding) and the comb family's short
     teeth (easier to decide). Capping only bounds individual lane length; the
-    trunk and seed spacing are unaffected."""
+    trunk and seed spacing are unaffected.
+
+    `pitches` (default None = today's exact `LANE_PITCHES` = 5..11) sets which
+    trunk-seed spacings to enumerate. The default range is truncated at exactly
+    the value that performs best: on darkzig the measured SAT rate rises
+    monotonically with pitch (0/0/0/0/1.0/3.2/6.2% for 5->11, tasks/todo.md
+    Track F step 1), and FR16's comb analogue (`spacing`) shows the same shape
+    at its own cap of 7. Larger pitches mean fewer, longer lanes; they generate
+    a large population that has never been probed (93,284 extra patterns per k
+    at pitch 12-24 on darkzig, vs 67,308 for the whole default range)."""
     out: list[Pattern] = []
     seen: set[frozenset[Cell]] = set()
     for th in th_anchor_candidates(region, tw, tl, mode=th_mode):
@@ -214,7 +227,7 @@ def generate_lane_patterns(region: set[Cell], tw: int, tl: int, k: int,
                 continue
             anchor_idx = trunk_raw.index(anchor)
             horiz = trunk_raw[0][1] == trunk_raw[-1][1]
-            for pitch in (5, 6, 7, 8, 9, 10, 11):
+            for pitch in (LANE_PITCHES if pitches is None else pitches):
                 for use_stubs in (False, True):
                     roads: set[Cell] = set()
                     stubs = _stub_cells(reg, th, roads) if use_stubs else []
@@ -264,11 +277,172 @@ def generate_lane_patterns(region: set[Cell], tw: int, tl: int, k: int,
     return out[:max_patterns]
 
 
+NONUNIFORM_GAPS = (10, 18)
+NONUNIFORM_SKEW = 1.5
+QUALITY_INDEX_BAND = (3, 4)
+
+
+def quality_index(region: set[Cell], th: Footprint, roads: frozenset[Cell]) -> int:
+    """`losses - 2c` for this skeleton: adjacencies spent on the region boundary
+    or the Townhall, minus twice the number of connected components.
+
+    Equivalently `(2 - mean_free_adjacency) * k`, an integer and k-normalised, so
+    it compares across cities and budgets. Measured on every record this project
+    holds, the productive band is **3-4 on both darkzig (k=105/106) and FR16
+    (k=84)**, while both >=98-road layouts sit at 2. Costs ~0.1 ms -- 15x cheaper
+    than `opts_total`, which is what makes a whole-population filter fit inside a
+    user-facing time box (15 s vs 239 s for 160k patterns on darkzig).
+
+    Filtering to the band is the single highest-leverage lever measured: it took
+    the darkzig SAT rate from 46.7% (bottom-40%-by-mfa cut) to ~100% at equal
+    quality, because the below-band tail is skeletons too tight to pack, which
+    return only UNKNOWN. See tasks/lessons.md 2026-07-31.
+    """
+    n = len(roads)
+    if n == 0:
+        return 0
+    free = region - roads - th.cells()
+    total = 0
+    for (x, y) in roads:
+        for dx, dy in _ORTHO:
+            if (x + dx, y + dy) in free:
+                total += 1
+    return round(2 * n - total)
+
+
+def generate_nonuniform_patterns(region: set[Cell], tw: int, tl: int, k: int,
+                                 rng: random.Random, max_patterns: int,
+                                 th_mode: str = "coarse",
+                                 gaps: tuple[int, int] = NONUNIFORM_GAPS,
+                                 skew: float = NONUNIFORM_SKEW,
+                                 quality_index_band: tuple[int, int] | None = None
+                                 ) -> list[Pattern]:
+    """Trunk-and-branch skeletons with IRREGULAR seed gaps and UNEQUAL branch
+    lengths -- the comb/lane topology with its two arbitrary uniformity
+    constraints lifted.
+
+    `generate_lane_patterns` fixes one global pitch and grows every front in
+    lockstep, so branches come out equal. Nothing justifies either: the expert
+    142-road city is not uniform, and measurement showed uniform branches bottom
+    out at 101 roads on darkzig in all three gap ranges tried while unequal ones
+    reach 97-99 (and 94 after seed-polish). This family holds the records on both
+    cities: darkzig 94, FR16 76.
+
+    Unlike comb/lane this space is ~10^19 and cannot be enumerated, so patterns
+    are SAMPLED: `max_patterns` distinct draws, deduplicated. `quality_index_band`
+    filters during generation (see `quality_index`) rather than after, so the
+    cost is a cheap predicate per draw instead of scoring a materialised
+    population.
+    """
+    out: list[Pattern] = []
+    seen: set[frozenset[Cell]] = set()
+    anchors = th_anchor_candidates(region, tw, tl, mode=th_mode)
+    if not anchors:
+        return []
+    gap_lo, gap_hi = gaps
+    attempts = 0
+    limit = max_patterns * 30
+    while len(out) < max_patterns and attempts < limit:
+        attempts += 1
+        th = rng.choice(anchors)
+        th_cells = th.cells()
+        side = rng.choice(("top", "bottom", "left", "right"))
+        trunk_raw = [c for c in _trunk(region, th, side) if c not in th_cells]
+        if not trunk_raw:
+            continue
+        anchor = _th_anchor_cell(th, side)
+        if anchor not in trunk_raw:
+            continue
+        a = trunk_raw.index(anchor)
+        horiz = trunk_raw[0][1] == trunk_raw[-1][1]
+
+        seed_idxs = []
+        pos = a + rng.randint(gap_lo, gap_hi)
+        while pos < len(trunk_raw):
+            seed_idxs.append(pos)
+            pos += rng.randint(gap_lo, gap_hi)
+        pos = a - rng.randint(gap_lo, gap_hi)
+        while pos >= 0:
+            seed_idxs.append(pos)
+            pos -= rng.randint(gap_lo, gap_hi)
+        if not seed_idxs:
+            continue
+        seed_idxs.sort()
+
+        use_stubs = rng.random() < 0.5
+        roads: set[Cell] = set()
+        stubs = _stub_cells(region, th, roads) if use_stubs else []
+        budget = k - len(stubs)
+        lo, hi = min(seed_idxs + [a]), max(seed_idxs + [a])
+        trunk_used = trunk_raw[lo:hi + 1]
+        if len(trunk_used) >= budget:
+            continue
+        roads |= set(trunk_used)
+        remaining = budget - len(trunk_used)
+
+        cand_dirs = [(0, -1), (0, 1)] if horiz else [(-1, 0), (1, 0)]
+        both_prob = rng.choice((0.6, 0.85, 1.0))
+        fronts = []
+        for i in seed_idxs:
+            sc_ = trunk_raw[i]
+            if rng.random() < both_prob:
+                fronts += [(sc_, d) for d in cand_dirs]
+            else:
+                fronts.append((sc_, rng.choice(cand_dirs)))
+        if not fronts:
+            continue
+
+        w = [rng.expovariate(1.0) ** skew + 1e-9 for _ in fronts]
+        tot = sum(w)
+        target = [max(1, int(remaining * x / tot)) for x in w]
+        state = [(sc_, d, 1) for (sc_, d) in fronts]
+        grown = [0] * len(fronts)
+        for j, (sc_, d, _dist) in enumerate(state):
+            dist = 1
+            while grown[j] < target[j] and remaining > 0:
+                c = (sc_[0] + d[0] * dist, sc_[1] + d[1] * dist)
+                if c in region and c not in roads and c not in th_cells:
+                    roads.add(c); grown[j] += 1; remaining -= 1; dist += 1
+                else:
+                    break
+            state[j] = (sc_, d, dist)
+        progress = True
+        while remaining > 0 and progress:
+            progress = False
+            for j, (sc_, d, dist) in enumerate(state):
+                if remaining == 0:
+                    break
+                c = (sc_[0] + d[0] * dist, sc_[1] + d[1] * dist)
+                if c in region and c not in roads and c not in th_cells:
+                    roads.add(c); state[j] = (sc_, d, dist + 1); remaining -= 1
+                    progress = True
+        if remaining != 0:
+            continue
+        roads |= set(stubs)
+        key = frozenset(roads)
+        if len(key) != k or key in seen:
+            continue
+        if quality_index_band is not None:
+            qi = quality_index(region, th, key)
+            if not (quality_index_band[0] <= qi <= quality_index_band[1]):
+                continue
+        seen.add(key)
+        out.append(Pattern(th=th, roads=key, params={
+            "th": (th.x, th.y), "side": side, "gaps": f"{gap_lo}-{gap_hi}",
+            "skew": skew, "stubs": use_stubs, "n_fronts": len(fronts),
+            "trunk_len": len(trunk_used), "k": k}))
+    return out
+
+
 def _pattern_generator(family: str):
     # Resolved dynamically (not a frozen dict built at import time) so tests
     # that monkeypatch module-level generate_patterns/generate_lane_patterns
     # still take effect here.
-    return generate_lane_patterns if family == "lane" else generate_patterns
+    if family == "lane":
+        return generate_lane_patterns
+    if family == "nonuniform":
+        return generate_nonuniform_patterns
+    return generate_patterns
 
 
 def prefilter(pattern: Pattern, region: set[Cell],
@@ -621,6 +795,10 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
         gen_kwargs = {"th_mode": th_mode}
         if family == "lane":
             gen_kwargs["max_lane_len"] = getattr(params, "lane_cap", None)
+            if getattr(params, "lane_pitches", None) is not None:
+                gen_kwargs["pitches"] = params.lane_pitches
+        elif family == "nonuniform":
+            gen_kwargs["quality_index_band"] = getattr(params, "quality_index_band", None)
         pats = gen_fn(region, th.width, th.length, k, rng, params.patterns,
                       **gen_kwargs)
         surviving = []
@@ -716,7 +894,8 @@ class RoadsFirstSearch:
                  symmetry_breaking: bool = False, hint_layout: Layout | None = None,
                  pattern_family: str = "comb", stub_priority: bool = False,
                  lane_cap: int | None = None, concurrent_levels: int = 1,
-                 seed_polish: int = 0):
+                 seed_polish: int = 0, lane_pitches: tuple[int, ...] | None = None,
+                 quality_index_band: tuple[int, int] | None = None):
         self.layout = layout
         self.time_box = time_box
         self.patterns = patterns
@@ -734,6 +913,8 @@ class RoadsFirstSearch:
         self.pattern_family = pattern_family
         self.stub_priority = stub_priority
         self.lane_cap = lane_cap
+        self.lane_pitches = lane_pitches
+        self.quality_index_band = quality_index_band
         self.concurrent_levels = concurrent_levels
         self.seed_polish = seed_polish
 
@@ -790,6 +971,8 @@ class RoadsFirstSearch:
             pattern_family=self.pattern_family,
             stub_priority=self.stub_priority,
             lane_cap=self.lane_cap,
+            lane_pitches=self.lane_pitches,
+            quality_index_band=self.quality_index_band,
         )
 
         results: dict[int, tuple[str, int | None]] = {}
@@ -841,7 +1024,7 @@ class RoadsFirstSearch:
             truncated = False
 
             if self.k_start == "auto":
-                k = pick_k_start(layout)
+                k = pick_k_start(layout, self.pattern_family)
             else:
                 k = self.k_start
 

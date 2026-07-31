@@ -125,3 +125,69 @@ def test_pick_k_start_never_exceeds_k_max(repo_root):
         k_max = len(lay.region.cells) - sum(b.footprint.width * b.footprint.length
                                             for b in lay.buildings)
         assert pick_k_start(lay) <= k_max
+
+
+def test_pick_k_start_margin_is_family_aware():
+    """comb/lane are feasible ABOVE sigma_half, nonuniform BELOW it, so the
+    margin's sign differs. Changing comb/lane would be an unmeasured behaviour
+    change, so they must stay exactly where they were."""
+    from foeopt.model import Building, Footprint, Layout, Region
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
+                  False, 1, True, None, None, "th")
+    # enough consumers that sigma_half is well clear of the max(1, ...) floor,
+    # otherwise the negative margin clamps and the comparison tests nothing
+    blds = [th] + [
+        Building(10 + i, f"c{i}", "g", Footprint(0, 0, 2, 4), True, 1, False,
+                 None, None, f"b{i}")
+        for i in range(20)
+    ]
+    region = Region(frozenset((x, y) for x in range(30) for y in range(30)))
+    lay = Layout(region, blds, th, {})
+    base = pick_k_start(lay)                       # default == comb
+    assert base > 20, "fixture too small to exercise the margin"
+    assert pick_k_start(lay, "comb") == base
+    assert pick_k_start(lay, "lane") == base
+    assert pick_k_start(lay, "nonuniform") == base - 12   # +8 -> -4
+
+
+def test_pick_k_start_nonuniform_matches_the_validated_settings(repo_root):
+    """The -4 margin must land on the settings measured to work at a 120 s box:
+    darkzig 111 (cliff at 104) and FR16 84 (cliff at 80; 84 reproduced FR16's
+    all-time record of 76 in two minutes)."""
+    import pathlib
+    from foeopt.loader import load_layout
+    cases = [("darkzig.json", 111), ("CityMap-Born-FR16-2026-07-07.json", 84)]
+    checked = 0
+    for fname, expected in cases:
+        p = pathlib.Path(repo_root) / fname
+        if not p.exists():
+            continue
+        assert pick_k_start(load_layout(str(p)), "nonuniform") == expected
+        checked += 1
+    if checked == 0:
+        pytest.skip("no city fixtures present")
+
+
+def test_pick_k_start_unknown_family_falls_back_to_the_safe_margin():
+    """An unrecognised family must not silently get the aggressive margin --
+    too low returns FAMILY_TOO_WEAK (nothing at all), too high only wastes time."""
+    from foeopt.model import Building, Footprint, Layout, Region
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
+                  False, 1, True, None, None, "th")
+    blds = [th, Building(10, "c10", "g", Footprint(0, 0, 2, 4), True, 1, False,
+                         None, None, "b")]
+    region = Region(frozenset((x, y) for x in range(20) for y in range(20)))
+    lay = Layout(region, blds, th, {})
+    assert pick_k_start(lay, "does-not-exist") == pick_k_start(lay, "comb")
+
+
+def test_pick_k_start_stays_positive_for_tiny_cities():
+    """A negative margin must never drive k_start to zero or below."""
+    from foeopt.model import Building, Footprint, Layout, Region
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 2, 2),
+                  False, 1, True, None, None, "th")
+    blds = [th, Building(10, "c10", "g", Footprint(0, 0, 1, 1), True, 1, False,
+                         None, None, "b")]
+    region = Region(frozenset((x, y) for x in range(6) for y in range(6)))
+    lay = Layout(region, blds, th, {})
+    assert pick_k_start(lay, "nonuniform") >= 1

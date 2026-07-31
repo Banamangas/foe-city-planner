@@ -198,3 +198,72 @@ def test_api_load_raw_fallback(client):
 def test_old_routes_still_served(client):
     r = client.get("/")
     assert r.status_code == 200
+
+
+def test_api_load_includes_the_instance_screen(client):
+    """A city load must carry the screen so the UI can warn BEFORE a run.
+    FR24 cost 13 core-hours across 1182 probes before this existed."""
+    r = client.post("/api/load", json=_combined_payload())
+    assert r.status_code == 200
+    screen = r.get_json().get("screen")
+    assert screen is not None, "load response must include the instance screen"
+    for key in ("verdict", "reason", "road_pressure", "consumers", "slack"):
+        assert key in screen
+    assert screen["verdict"] in ("LIKELY", "UNCERTAIN", "UNLIKELY", "INFEASIBLE")
+    assert screen["reason"], "the verdict must explain itself to the user"
+
+
+def test_api_options_serves_the_best_known_preset(client):
+    """The record-holding configuration must be one click away, not folklore."""
+    presets = client.get("/api/options").get_json()["presets"]
+    assert "best" in presets
+    best = presets["best"]
+    assert best["pattern_family"] == "nonuniform"
+    assert best["quality_index_band"] == "3,4"
+    names = {s["name"] for s in client.get("/api/options").get_json()["options"]}
+    for key in best:
+        assert key in names, f"preset sets unknown option {key!r}"
+
+
+def test_best_preset_values_are_all_accepted_by_the_parser(client):
+    """A preset that the option parser would reject is worse than none."""
+    from webapp.params import BEST_PRESET, parse_options
+    parsed = parse_options(dict(BEST_PRESET))
+    assert parsed["pattern_family"] == "nonuniform"
+    assert parsed["quality_index_band"] == "3,4"
+
+
+def test_runner_translates_ui_strings_to_search_arguments():
+    """The UI sends 'off'/'3,4'/'12-18'; RoadsFirstSearch wants None/tuples."""
+    from webapp.runner import _parse_range, _parse_pitches
+    assert _parse_range("off") is None
+    assert _parse_range("") is None
+    assert _parse_range("3,4") == (3, 4)
+    assert _parse_pitches("off") is None
+    assert _parse_pitches("12-18") == (12, 13, 14, 15, 16, 17, 18)
+
+
+def test_best_preset_probe_limit_cannot_overrun_a_short_time_box():
+    """The k-walk checks its deadline only AFTER a probe returns, so a
+    probe_limit at or above the time box makes the run overrun its promise --
+    measured 2.43x at a 120s box with probe_limit=300. The preset must stay well
+    under a typical user budget."""
+    from webapp.params import BEST_PRESET, DEFAULTS
+    limit = BEST_PRESET.get("probe_limit", DEFAULTS["probe_limit"])
+    assert limit <= 60.0, (
+        f"BEST_PRESET probe_limit={limit}s overruns short boxes; measured "
+        "10/20/40s all reach identical quality at 1.01x the box")
+
+
+def test_best_preset_seed_polish_cannot_overrun_the_time_box():
+    """_apply_seed_polish runs after the walk and loops sequentially over seeds
+    with no deadline check, so it is bounded by its own parameter rather than the
+    remaining budget. Measured at a 120s box: seed_polish=12 took 281s (2.34x)
+    and bought one road over seed_polish=0 at 127s (1.06x)."""
+    from webapp.params import BEST_PRESET, DEFAULTS
+    sp = BEST_PRESET.get("seed_polish", DEFAULTS["seed_polish"])
+    limit = BEST_PRESET.get("probe_limit", DEFAULTS["probe_limit"])
+    # worst case added time is sp * probe_limit, on top of the whole time box
+    assert sp * limit <= 60.0, (
+        f"BEST_PRESET seed_polish={sp} at probe_limit={limit}s can add "
+        f"{sp * limit:.0f}s beyond the box")

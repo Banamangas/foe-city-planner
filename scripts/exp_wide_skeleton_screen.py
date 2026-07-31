@@ -26,6 +26,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from foeopt.loader import load_layout
 from foeopt.roads_first import generate_lane_patterns, prefilter, probe, validate
+from foeopt.skeleton_score import SkeletonScorer, mean_free_adjacency
 from foeopt.validate import canonical_dims, rotated_buildings
 
 FLOOR = 102
@@ -59,15 +60,87 @@ def classify_verdict(rows: list[dict], floor: int = FLOOR) -> tuple[str, dict]:
     return "NULL_WITH_BOUND", detail
 
 
-def sample_patterns(region, tw, tl, k, n, seed):
-    """Uniform sample without replacement from the full lane population.
+def parse_pitches(spec: str | None) -> tuple[int, ...] | None:
+    """`None` -> the generator's default range. Accepts "9,10,11" or "10-17"."""
+    if not spec:
+        return None
+    out: list[int] = []
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part.lstrip("-"):
+            lo, hi = part.split("-", 1)
+            out.extend(range(int(lo), int(hi) + 1))
+        else:
+            out.append(int(part))
+    if not out:
+        return None
+    return tuple(sorted(set(out)))
+
+
+def sample_patterns(region, tw, tl, k, n, seed, *, pitches=None,
+                    prefilter_top=None, quality_top=None, consumers=None, log=None):
+    """Uniform sample without replacement from the lane population.
 
     `generate_lane_patterns` builds every pattern for this k, shuffles with the
     supplied rng, then truncates -- so a fixed seed makes the sample and its
     index order reproducible, which is what `--resume` and `--recheck` rely on.
+    `pitches` and `prefilter_top` are part of that identity too: pass the same
+    values to `--recheck`/`--polish` as to the screen, or (k, idx) means
+    something different (the recorded-`th` guard in run_recheck catches it).
+
+    With `prefilter_top=q`, the *whole* population is generated and scored by
+    `SkeletonScorer` (the `opts_total` count `probe()` already computes and
+    discards, ROC-AUC 0.990 for feasibility), the top `q` fraction is kept, and
+    the first `n` survivors **in shuffled order** are returned. Because the
+    shuffle happens before the filter and the filter preserves relative order,
+    that is a uniform sample *within* the survivors -- deliberately NOT the
+    top-n by score: among known SATs `opts_total` correlates with the final road
+    count at Spearman +0.50 (wrong sign), and a top-5% rank-and-take would have
+    missed the 98-road record. See tasks/rl-situation-report.md section 4.4.
     """
-    return generate_lane_patterns(region, tw, tl, k, random.Random(seed), n,
-                                  th_mode="full")
+    if prefilter_top is None and quality_top is None:
+        return generate_lane_patterns(region, tw, tl, k, random.Random(seed), n,
+                                      th_mode="full", pitches=pitches)
+    if consumers is None:
+        raise ValueError("prefilter_top/quality_top require consumers (for the scorer)")
+    for name, q in (("prefilter_top", prefilter_top), ("quality_top", quality_top)):
+        if q is not None and not 0.0 < q <= 1.0:
+            raise ValueError(f"{name} must be in (0, 1], got {q}")
+    pop = generate_lane_patterns(region, tw, tl, k, random.Random(seed), 10 ** 9,
+                                 th_mode="full", pitches=pitches)
+    if not pop:
+        return []
+    surviving = pop
+    if prefilter_top is not None:
+        scorer = SkeletonScorer(region, consumers)
+        scores = [scorer.opts_total(p.th, p.roads) for p in surviving]
+        cut = max(1, int(prefilter_top * len(surviving)))
+        # rank by score desc, tie-break on shuffled position so the survivor set
+        # is deterministic; then restore shuffled order so taking the first n is
+        # uniform
+        keep = sorted(sorted(range(len(surviving)), key=lambda i: (-scores[i], i))[:cut])
+        if log is not None:
+            log(f"k={k}: population {len(surviving)} -> opts_total top "
+                f"{prefilter_top:.0%} = {len(keep)} "
+                f"(>= {min(scores[i] for i in keep)})")
+        surviving = [surviving[i] for i in keep]
+    if quality_top is not None:
+        # LOWEST mean_free_adjacency: unlike opts_total (whose top slice is the
+        # worst-routing one), this proxy is monotone in the right direction --
+        # measured deciles run 102 median / 85% <=102 at the low end to 106 /
+        # 0% at the high end. Still sampled uniformly inside the kept slice.
+        quals = [mean_free_adjacency(region, p.th, p.roads) for p in surviving]
+        cut = max(1, int(quality_top * len(surviving)))
+        keep = sorted(sorted(range(len(surviving)), key=lambda i: (quals[i], i))[:cut])
+        if log is not None:
+            log(f"k={k}: -> mean_free_adjacency lowest {quality_top:.0%} = "
+                f"{len(keep)} (<= {max(quals[i] for i in keep):.4f})")
+        surviving = [surviving[i] for i in keep]
+    if log is not None:
+        log(f"k={k}: sampling {min(n, len(surviving))} of {len(surviving)} survivors")
+    return surviving[:n]
 
 
 def load_done(path: pathlib.Path) -> set[tuple[int, int]]:
@@ -234,7 +307,7 @@ def persist_sat(sat_dir: pathlib.Path, art: dict) -> pathlib.Path:
 
 
 def run_screen(layout, ks, n_per, budget, workers, seed, out_path, sat_dir,
-               resume=False):
+               resume=False, pitches=None, prefilter_top=None, quality_top=None):
     region = set(layout.region.cells)
     consumers = layout.road_needing()
     th = layout.townhall.footprint
@@ -247,7 +320,10 @@ def run_screen(layout, ks, n_per, budget, workers, seed, out_path, sat_dir,
     payloads = []
     with out_path.open("a") as fh:
         for k in ks:
-            pats = sample_patterns(region, th.width, th.length, k, n_per, seed)
+            pats = sample_patterns(region, th.width, th.length, k, n_per, seed,
+                                   pitches=pitches, prefilter_top=prefilter_top,
+                                   quality_top=quality_top, consumers=consumers,
+                                   log=lambda m: print(m, flush=True))
             print(f"k={k}: sampled {len(pats)} lane patterns", flush=True)
             for idx, pat in enumerate(pats):
                 if (k, idx) in done:
@@ -298,7 +374,8 @@ def pick_recheck_targets(rows_path: pathlib.Path, sample_n: int, seed: int):
     return unknown[:sample_n]
 
 
-def run_recheck(layout, rows_path, sample_n, budget, workers, seed, n_per, sat_dir):
+def run_recheck(layout, rows_path, sample_n, budget, workers, seed, n_per, sat_dir,
+                pitches=None, prefilter_top=None, quality_top=None):
     """Re-probe screen UNKNOWNs at a LONG budget to test whether the 30s cut
     is hiding slow-resolving SATs. `seed` must match the screen run, and
     `n_per` must be at least as large as the screen's, since patterns are
@@ -309,13 +386,16 @@ def run_recheck(layout, rows_path, sample_n, budget, workers, seed, n_per, sat_d
         return {"n": 0, "converted": 0, "rows": []}
     by_key = {(r["k"], r["idx"]): r for r in read_rows(rows_path)}
     region = set(layout.region.cells)
+    consumers = layout.road_needing()
     th = layout.townhall.footprint
     by_k: dict = {}
     for k, idx in targets:
         by_k.setdefault(k, []).append(idx)
     payloads = []
     for k, idxs in sorted(by_k.items()):
-        pats = sample_patterns(region, th.width, th.length, k, n_per, seed)
+        pats = sample_patterns(region, th.width, th.length, k, n_per, seed,
+                               pitches=pitches, prefilter_top=prefilter_top,
+                               quality_top=quality_top, consumers=consumers)
         for idx in idxs:
             if idx >= len(pats):
                 raise SystemExit(
@@ -364,7 +444,8 @@ def pick_polish_targets(rows_path: pathlib.Path, threshold: int):
 
 
 def run_polish(layout, rows_path, threshold, n_seeds, budget, workers, gen_seed,
-               n_per, sat_dir):
+               n_per, sat_dir, pitches=None, prefilter_top=None,
+               quality_top=None):
     """Re-solve the screen's most promising hits across several solver seeds
     and keep the best -- probe() has no objective, so a single seed's
     `achieved` is luck of which satisfying placement CP-SAT lands on."""
@@ -374,13 +455,16 @@ def run_polish(layout, rows_path, threshold, n_seeds, budget, workers, gen_seed,
         return {"n": 0, "improved": 0, "best": {}, "rows": []}
     by_key = {(r["k"], r["idx"]): r for r in read_rows(rows_path)}
     region = set(layout.region.cells)
+    consumers = layout.road_needing()
     th = layout.townhall.footprint
     by_k: dict = {}
     for k, idx, _achieved in targets:
         by_k.setdefault(k, []).append(idx)
     payloads = []
     for k, idxs in sorted(by_k.items()):
-        pats = sample_patterns(region, th.width, th.length, k, n_per, gen_seed)
+        pats = sample_patterns(region, th.width, th.length, k, n_per, gen_seed,
+                               pitches=pitches, prefilter_top=prefilter_top,
+                               quality_top=quality_top, consumers=consumers)
         for idx in idxs:
             if idx >= len(pats):
                 raise SystemExit(
@@ -504,6 +588,19 @@ def main() -> int:
                    help="re-solve screen SATs with achieved <= threshold across "
                         "--polish-seeds solver seeds and keep the best (stage 2)")
     ap.add_argument("--polish-seeds", type=int, default=12)
+    ap.add_argument("--pitches", default=None,
+                   help="lane trunk-seed spacings, e.g. '10-18' or '9,11,15'. "
+                        "Default = the generator's built-in 5-11. MUST match "
+                        "between the screen and any --recheck/--polish pass.")
+    ap.add_argument("--prefilter-top", type=float, default=None,
+                   help="score the whole population with SkeletonScorer and keep "
+                        "only the top fraction (e.g. 0.10), then sample uniformly "
+                        "inside it. MUST match between screen and recheck/polish.")
+    ap.add_argument("--quality-top", type=float, default=None,
+                   help="keep only the fraction with the LOWEST mean_free_adjacency "
+                        "(the measured quality predictor, Spearman +0.76/+0.64 vs "
+                        "achieved). Applied after --prefilter-top. MUST match "
+                        "between screen and recheck/polish.")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
     if args.selftest:
@@ -511,24 +608,31 @@ def main() -> int:
     if not args.city:
         ap.error("city file required (or --selftest)")
     layout = load_layout(args.city)
+    pitches = parse_pitches(args.pitches)
     if args.recheck:
         res = run_recheck(layout, pathlib.Path(args.out), args.recheck,
                           args.recheck_budget, args.workers, args.seed, args.n,
-                          pathlib.Path(args.sat_dir))
+                          pathlib.Path(args.sat_dir), pitches=pitches,
+                          prefilter_top=args.prefilter_top,
+                          quality_top=args.quality_top)
         pathlib.Path(args.out).with_suffix(".recheck.json").write_text(
             json.dumps(res, indent=2))
         return 0
     if args.polish:
         res = run_polish(layout, pathlib.Path(args.out), args.polish,
                          args.polish_seeds, args.budget, args.workers, args.seed,
-                         args.n, pathlib.Path(args.sat_dir))
+                         args.n, pathlib.Path(args.sat_dir), pitches=pitches,
+                         prefilter_top=args.prefilter_top,
+                         quality_top=args.quality_top)
         pathlib.Path(args.out).with_suffix(".polish.json").write_text(
             json.dumps(res, indent=2))
         return 0
     ks = [int(x) for x in args.k_levels.split(",")]
     out_path = pathlib.Path(args.out)
     rows = run_screen(layout, ks, args.n, args.budget, args.workers, args.seed,
-                      out_path, pathlib.Path(args.sat_dir), resume=args.resume)
+                      out_path, pathlib.Path(args.sat_dir), resume=args.resume,
+                      pitches=pitches, prefilter_top=args.prefilter_top,
+                      quality_top=args.quality_top)
     if args.resume:
         rows = read_rows(out_path)
     summary = summarize(rows, args.floor)
