@@ -83,12 +83,20 @@ class JobManager:
             try:
                 # The repack that produces the CP-SAT placement hints runs here,
                 # not in the request thread, so /api/optimize returns immediately.
+                # The warm start is charged AGAINST the user's time box, not
+                # added on top of it. It used to run entirely outside the box --
+                # a 60 s request with warm_start on took 90 s minimum. The user
+                # asked for a total budget; every phase spends from it.
                 hint_layout = None
+                search_box = time_box
                 if warm_start:
                     from foeopt.packer import repack
-                    hint_layout = repack(layout, budget_seconds=warm_start_budget).layout
+                    spent = min(warm_start_budget, max(1.0, time_box * 0.5))
+                    t_ws = time.monotonic()
+                    hint_layout = repack(layout, budget_seconds=spent).layout
+                    search_box = max(1.0, time_box - (time.monotonic() - t_ws))
                 search = RoadsFirstSearch(
-                    layout, time_box=time_box, patterns=patterns,
+                    layout, time_box=search_box, patterns=patterns,
                     probe_limit=probe_limit, workers=workers,
                     probe_workers=probe_workers, th_anchors=th_anchors,
                     k_start=k_start, concurrent_levels=concurrent_levels,
