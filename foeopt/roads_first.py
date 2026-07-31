@@ -918,22 +918,28 @@ class RoadsFirstSearch:
         self.concurrent_levels = concurrent_levels
         self.seed_polish = seed_polish
 
-    def _apply_seed_polish(self, best_holder: dict, on_improvement) -> dict | None:
+    def _apply_seed_polish(self, best_holder: dict, on_improvement,
+                           should_stop=None) -> dict | None:
         """Opt-in (seed_polish>0): re-solve the best skeleton under N CP-SAT
         seeds and keep a strictly-lower legal road count. probe() has no
         objective, so the placement it returns -- and thus route()'s count --
         varies with the solver seed; this samples that spread on the single
         best skeleton found. Returns an info dict (or None if it didn't run),
         and emits the improved layout through on_improvement so streaming
-        callers see it. Costs up to seed_polish x probe_limit seconds, which is
-        why it is off by default."""
+        callers see it.
+
+        `should_stop` is polled before every seed, so this phase is bounded by
+        the caller's REMAINING budget rather than by `seed_polish x probe_limit`.
+        Without it a 120 s box with seed_polish=12 measured 281 s (2.34x) for a
+        one-road gain, and the Stop button did nothing during the phase."""
         if self.seed_polish <= 0 or best_holder.get("pattern") is None:
             return None
         from foeopt.seed_search import seed_minimize_roads
         res = seed_minimize_roads(self.layout, best_holder["pattern"],
                                   seeds=range(self.seed_polish),
                                   probe_limit=self.probe_limit,
-                                  probe_workers=self.probe_workers)
+                                  probe_workers=self.probe_workers,
+                                  should_stop=should_stop)
         baseline = best_holder.get("achieved")
         improved = (res.achieved is not None and baseline is not None
                     and res.achieved < baseline)
@@ -941,14 +947,31 @@ class RoadsFirstSearch:
             on_improvement(res.layout, best_holder.get("k"), res.achieved)
         return {"before": baseline, "after": res.achieved if improved else baseline,
                 "improved": improved, "seed": res.seed if improved else None,
-                "seeds_tried": res.n_tried, "n_legal": res.n_legal}
+                "seeds_tried": res.n_tried, "n_legal": res.n_legal,
+                "stopped_early": res.n_tried < self.seed_polish}
 
     def run(self, on_improvement=None, on_status=None, should_stop=None) -> dict:
         layout = self.layout
         region = set(layout.region.cells)
         consumers = layout.road_needing()
         rng = random.Random(0)
+        # A phase that is bounded by the remaining budget does nothing when the
+        # budget is already spent -- so if seed_polish is requested, RESERVE a
+        # slice for it rather than letting the walk consume everything. Without
+        # this the parameter is silently inert (measured: seeds_tried=0 at a
+        # 120 s box). Capped at a quarter of the box so polish can never starve
+        # the search that finds the skeleton it polishes.
+        polish_reserve = 0.0
+        if self.seed_polish > 0:
+            want = min(self.seed_polish * self.probe_limit, self.time_box * 0.25)
+            # Only take the reserve if it can actually fit a seed. A reserve
+            # smaller than one probe shortens the walk and then gets refused by
+            # _stop_polish, spending nothing -- measured 92 s on a 120 s box
+            # (0.77x) with seeds_tried=0, strictly worse than not reserving.
+            # The margin covers the walk's own probe-granularity overshoot.
+            polish_reserve = want if want >= self.probe_limit * 1.2 else 0.0
         deadline = time.monotonic() + self.time_box
+        walk_deadline = deadline - polish_reserve
 
         pool = None
         if self.workers > 1:
@@ -964,7 +987,7 @@ class RoadsFirstSearch:
             patterns=self.patterns,
             probe_limit=self.probe_limit,
             probe_workers=self.probe_workers,
-            deadline=deadline,
+            deadline=walk_deadline,
             th_anchors=self.th_anchors,
             symmetry_breaking=self.symmetry_breaking,
             hints=self.hints,
@@ -991,9 +1014,24 @@ class RoadsFirstSearch:
             params.best_recorder = _record_best
 
         def _should_stop():
+            """Walk phase: stops early enough to leave the polish reserve."""
             if should_stop is not None and should_stop():
                 return True
-            return time.monotonic() >= deadline
+            return time.monotonic() >= walk_deadline
+
+        def _stop_polish():
+            """Polish phase: may use the reserve, but not exceed the real box.
+
+            Stops before starting a seed it cannot finish. The polish loop is
+            sequential and each seed costs up to `probe_limit`, so checking only
+            `now >= deadline` lets the last seed run past the box by up to a
+            full probe -- measured 141.7 s on a 120 s box (1.18x). Requiring
+            room for a whole seed converts that overshoot into an early stop.
+            (The k-walk cannot do this as cleanly: its probes are dispatched in
+            a pool batch, so its granularity remains one probe.)"""
+            if should_stop is not None and should_stop():
+                return True
+            return time.monotonic() + self.probe_limit >= deadline
 
         def level(k):
             if k not in results:
@@ -1110,7 +1148,8 @@ class RoadsFirstSearch:
             best = min((r[1] for r in results.values() if r[1] is not None), default=None)
             polish_info = None
             if best is not None and self.seed_polish > 0:
-                polish_info = self._apply_seed_polish(best_holder, on_improvement)
+                polish_info = self._apply_seed_polish(best_holder, on_improvement,
+                                                      should_stop=_stop_polish)
                 if polish_info is not None and polish_info["improved"]:
                     best = polish_info["after"]
             unknowns = sum(1 for r in results.values() if r[0] == "INCONCLUSIVE")

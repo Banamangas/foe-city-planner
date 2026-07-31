@@ -203,7 +203,29 @@ def test_warm_start_repacks_and_passes_a_hint_layout(monkeypatch):
 
     monkeypatch.setattr(packer, "repack",
                         lambda layout, **kw: calls.append(kw) or FakeResult())
-    captured = _submit_and_capture(monkeypatch, time_box=0.1, warm_start=True,
+    # A box with room for it: the requested budget is honoured verbatim.
+    captured = _submit_and_capture(monkeypatch, time_box=60.0, warm_start=True,
                                    warm_start_budget=7.0)
     assert captured["hint_layout"] is hinted
     assert calls == [{"budget_seconds": 7.0}]
+    # ...and the search gets the REST of the box, not the whole thing: the warm
+    # start used to run entirely outside it (a 60s request took 90s).
+    assert captured["time_box"] <= 60.0
+
+
+def test_warm_start_budget_is_capped_by_the_time_box(monkeypatch):
+    """A warm start must never eat the box it is supposed to accelerate.
+    Capped at half, so a 0.1s box cannot spend 7s repacking."""
+    import foeopt.packer as packer
+    hinted = _tiny_layout()
+    calls = []
+
+    class FakeResult:
+        layout = hinted
+
+    monkeypatch.setattr(packer, "repack",
+                        lambda layout, **kw: calls.append(kw) or FakeResult())
+    _submit_and_capture(monkeypatch, time_box=0.1, warm_start=True,
+                        warm_start_budget=7.0)
+    assert calls[0]["budget_seconds"] < 7.0, "budget must be capped for a tiny box"
+    assert calls[0]["budget_seconds"] <= max(1.0, 0.1 * 0.5)
