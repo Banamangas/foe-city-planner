@@ -55,7 +55,8 @@ def _solve_one(layout: Layout, pattern: Pattern, seed: int, *,
 def seed_minimize_roads(layout: Layout, pattern: Pattern, *,
                         seeds: Iterable[int] = range(12),
                         probe_limit: float = 60.0,
-                        probe_workers: int = 1) -> SeedMinResult:
+                        probe_workers: int = 1,
+                        should_stop=None) -> SeedMinResult:
     """Re-solve `pattern` across `seeds` and keep the lowest legal road count.
 
     Sequential by design: each probe already uses `probe_workers` CP-SAT
@@ -68,6 +69,13 @@ def seed_minimize_roads(layout: Layout, pattern: Pattern, *,
     best_seed: int | None = None
     n_legal = n_tried = 0
     for seed in seeds:
+        # Budget/cancel check BEFORE each solve. Without it this loop is
+        # bounded by len(seeds) * probe_limit rather than by the caller's
+        # remaining budget -- measured at a 120 s box, seeds=12 took 281 s
+        # (2.34x) and bought one road. It also made the Stop button inert
+        # for the whole polish phase.
+        if should_stop is not None and should_stop():
+            break
         n_tried += 1
         got = _solve_one(layout, pattern, seed,
                          probe_limit=probe_limit, probe_workers=probe_workers)
