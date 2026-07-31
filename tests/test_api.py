@@ -253,3 +253,17 @@ def test_best_preset_probe_limit_cannot_overrun_a_short_time_box():
     assert limit <= 60.0, (
         f"BEST_PRESET probe_limit={limit}s overruns short boxes; measured "
         "10/20/40s all reach identical quality at 1.01x the box")
+
+
+def test_best_preset_seed_polish_cannot_overrun_the_time_box():
+    """_apply_seed_polish runs after the walk and loops sequentially over seeds
+    with no deadline check, so it is bounded by its own parameter rather than the
+    remaining budget. Measured at a 120s box: seed_polish=12 took 281s (2.34x)
+    and bought one road over seed_polish=0 at 127s (1.06x)."""
+    from webapp.params import BEST_PRESET, DEFAULTS
+    sp = BEST_PRESET.get("seed_polish", DEFAULTS["seed_polish"])
+    limit = BEST_PRESET.get("probe_limit", DEFAULTS["probe_limit"])
+    # worst case added time is sp * probe_limit, on top of the whole time box
+    assert sp * limit <= 60.0, (
+        f"BEST_PRESET seed_polish={sp} at probe_limit={limit}s can add "
+        f"{sp * limit:.0f}s beyond the box")
