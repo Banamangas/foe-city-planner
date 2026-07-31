@@ -86,7 +86,20 @@ count, which points at CP-SAT model size rather than packing. Three cities canno
       at low pressure, and few consumers at high pressure. Whichever fails identifies the cause
 - [ ] Re-tune the 0.8 / 0.5 thresholds once the cause is known
 
-### 3.2 `K_START_MARGIN["nonuniform"] = -4` — safe on two cities, optimal on neither
+### 3.2 `K_START_MARGIN["nonuniform"] = -4` — WRONG on the third city (2026-07-31)
+**Superseded by measurement.** FR17's feasibility window sits at **sigma/2 + 12**, not
+sigma/2 - 4: the margin's *sign* reverses between cities (darkzig -8, FR16 -4, FR17 +12), and
+`auto` made FR17 climb 117->133, spending about half a short box. Worse, the k-walk assumes
+feasibility is **monotone in k** and steps *up* when k_start is infeasible — so a k_start above
+the window is **unrecoverable** (FR17 + band: feasible at 133, `FAMILY_TOO_WEAK` from 137 after
+15 levels). No constant can be safe when the window moves 20 levels between cities.
+- [ ] **Adaptive cliff-finding is now the only defensible fix**, not an optimisation: spend ~20%
+      of the box bisecting for the window, exploit the rest.
+- [ ] **Consider making the walk bidirectional** when k_start proves infeasible — currently it
+      can only climb, and climbing away from the window loses the run. Core search change:
+      own branch, own pre-committed gate.
+
+### 3.2b Original entry, kept for the record — "safe on two cities, optimal on neither"
 The cliff is sharp: one step of 4 too low returns `FAMILY_TOO_WEAK` (nothing at all).
 Measured: darkzig 106 works / 104 fails; FR16 84 works / 80 fails. -8 is optimal on darkzig
 (98 vs 103) and **fatal on FR16**. -4 is the largest margin safe on both, and leaves ~5 roads
@@ -107,10 +120,22 @@ it is still n=2.
 
 ## 4. Untested cities and configurations
 
-- [ ] **FR17** — never run with the new stack (nonuniform + band + fixed k_start)
-- [ ] **The user's own city** (`city-user-data.json`, the 142-road expert layout) — never run
-      with the new stack. This is the most interesting one: it is the only city where a
-      human-optimised reference exists to compare against
+- [x] **FR17 — DONE 2026-07-31, and it is the session's clearest negative.** comb 123 vs
+      nonuniform 126 vs nonuniform+band 124 (at k=133; `FAMILY_TOO_WEAK` from 137), all at a
+      600 s box. **The new family LOSES here.** Also exposed: the quality band costs feasibility
+      (never measured against *no* filter — only against the bottom-40% filter it replaced), and
+      the k-walk's monotonicity assumption is false. See `tasks/lessons.md` 2026-07-31.
+- [ ] **Which cities suit which family?** n=3 hypothesis only: nonuniform wins at low road
+      pressure (darkzig 0.40, FR16 0.43) and loses at moderate (FR17 0.627). Needs more cities
+      before it is a rule, and `BEST_PRESET` should not hard-code a family until it is.
+- [ ] **The user's own city** (`city-user-data.json`, the 142-road expert layout) — baselined but
+      NOT yet run. 96.6% full, slack only **145 cells**, sigma/2 = **157** so
+      `road_pressure = 1.083` and `screen_city` says UNLIKELY. The expert layout achieves 142,
+      which fits — so a good solution provably exists and the screen still says unlikely.
+      That is not necessarily wrong (the screen predicts *our search*, not solution existence,
+      and `todo.md` scoped this near-perfect-packing city out long ago) but it is the sharpest
+      available test of whether `road_pressure` means what its name suggests: it treats sigma/2
+      as a requirement when every good layout beats it by 10-20%
 - [ ] **FR24 remains unsolved** — 0 SAT in 135 probes at k=205/220/235 plus 0 in 1047 at
       k=246-266. Every probe UNKNOWN (undecided, *not* refuted). Open question whether it is
       road pressure (0.89) or CP-SAT model size (146 consumers)
@@ -173,3 +198,53 @@ with these edits in the same files — noted in its commit message.
 
 **Decide before merging:** whether item 1.1 (the `seed_polish` overrun) should be fixed on this
 branch first, since it is a defect in a shipped default rather than a missing feature.
+
+---
+
+## 8. Filler packing — premise tests (2026-08-01)
+
+Both approaches proposed after the user described their manual packing method were
+premise-tested before any build, on the user's own city (ground truth: all 231 fillers
+provably fit; free 2486 cells, filler area 2483, **slack 3**).
+
+### A. Region partitioning — premise HOLDS (and my prediction was wrong)
+
+I predicted the free space would shatter into slivers in a 99.9%-dense city. It does not.
+Greedy maximal-rectangle carve of the free space gives **23 rectangles, zero of them 1x1**:
+
+    98% of free area sits in rectangles of >=16 cells (17 rects)
+    largest three:  13x48 (624),  39x14 (546),  9x44 (396)
+    those three alone tile 85 4x4 slots — and only 77 4x4 fillers exist
+
+So the user's method has literal zones to work with. "Dedicate this region to the 4x4s"
+is directly implementable; it is not defeated by geometry.
+
+Caveat: this measures the free space left by the **expert's own** roads+consumers. A
+skeleton the search invents may fragment worse. Re-measure on a search-produced layout
+before trusting the number generally.
+
+### B. Exact CP-SAT packing — premise HOLDS, with a price
+
+Model over SIZE CLASSES, not individual buildings (231 identical-building permutations
+would otherwise be pure symmetry). No rotation (domain constraint), so (4,3) and (3,4)
+are distinct classes. 31203 booleans, 2486 at-most-one cell constraints.
+
+    limit  0.5-2s  ->  UNKNOWN    no solution at all (presolve still running)
+    limit    5s    ->  FEASIBLE   218/231   (worse than greedy)
+    limit   10s    ->  FEASIBLE   229/231   (greedy plateaus at 222)
+    limit   60s    ->  FEASIBLE   230/231
+    limit  300s    ->  FEASIBLE   230/231   — no further gain, optimality NOT proven
+    hard feasibility (== 231), 60s -> UNKNOWN
+
+Verdict: tractable and clearly better than greedy (+7 at 10s, +8 at 60s), but at this
+density it is a **strong heuristic, not an exact oracle** — it never reached the known
+feasible 231 and never proved a bound. The `Maximize(area)` formulation with `<= n_s`
+massively outperforms the hard `== n_s` feasibility formulation; use it.
+
+Build notes if this proceeds:
+- Warm-start from the greedy solution (`AddHint`) so the pass can never return worse than
+  greedy — this also removes the sub-5s window where it loses.
+- ~10s is the cost at MAX scale (231 fillers). Search instances are far smaller (FR16: 32
+  fillers, ~10x smaller model), so the repair pass should be sub-second there — untested.
+- Shape: repair pass only on layouts that would otherwise be discarded as SAT_FILLER_FAIL,
+  never in the inner loop.

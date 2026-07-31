@@ -170,10 +170,21 @@ SMOKE_PRESET: dict = {
     "workers": 1, "probe_workers": 1,
 }
 
-# The best settings for a USER-FACING run. The skeleton family and quality band
-# are the ones that hold this project's records on both measured cities (darkzig
-# 94 roads / 121% efficiency, FR16 76 / 116%) -- measured against the previous
-# best settings at equal probe count, SAT rate 46.7% -> 69.6%.
+# The best settings for a USER-FACING run -- ON THE CITIES THEY WERE CALIBRATED
+# ON. The skeleton family and quality band hold this project's records on darkzig
+# (94 roads / 121% efficiency) and FR16 (76 / 116%).
+#
+# **They are not established as universal, and a third city disagrees.** On FR17
+# the old `comb` family reaches 123 where this configuration reaches 124, the
+# quality band makes k=137 infeasible outright (comb and the unbanded family both
+# solve it), and the family-aware k_start lands ~16 levels below FR17's
+# feasibility window, spending roughly half a short box climbing back up.
+# darkzig and FR16 agreed on every lever, which made two-city tuning look
+# general. See tasks/lessons.md 2026-07-31 ("The third city disagrees").
+#
+# Practical reading: try this preset first -- it is a large win on 2 of the 3
+# cities measured and roughly neutral on the third -- but `pattern_family=comb`
+# is a reasonable thing to try when it disappoints.
 #
 # probe_limit is deliberately 30 s, NOT the 300 s the research runs used. The
 # k-walk checks its deadline only AFTER a probe returns (there is no mid-probe
