@@ -29,7 +29,7 @@ import time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-from exp_nonuniform_lanes import build_pool
+from exp_nonuniform_lanes import select_take
 from foeopt.loader import load_layout
 from foeopt.roads_first import (generate_lane_patterns, generate_patterns,
                                 prefilter, th_anchor_candidates)
@@ -84,6 +84,10 @@ def main() -> int:
     ap.add_argument("--workers", type=int, default=12)
     ap.add_argument("--pool", type=int, default=12000)
     ap.add_argument("--gen-seed", type=int, default=0)
+    ap.add_argument("--probe", type=int, default=120)
+    ap.add_argument("--skews", default=None)
+    ap.add_argument("--opts-top", type=float, default=0.10)
+    ap.add_argument("--quality-top", type=float, default=None)
     ap.add_argument("--sat-dir", default="output/trackf/nonuniform-polish-sats")
     args = ap.parse_args()
 
@@ -92,6 +96,7 @@ def main() -> int:
     consumers = layout.road_needing()
     th_fp = layout.townhall.footprint
     scorer = SkeletonScorer(region, consumers)
+    th_anchors = th_anchor_candidates(region, th_fp.width, th_fp.length, mode="full")
 
     rows = [json.loads(l) for l in pathlib.Path(args.rows).read_text().splitlines() if l.strip()]
     targets = [r for r in rows if r["status"] == "SAT" and r.get("legal")
@@ -109,32 +114,21 @@ def main() -> int:
     for r in targets:
         by_k[r["k"]].append(r)
     payloads = []
+    skews = (tuple(float(x) for x in args.skews.split(",")) if args.skews
+             else (0.0, 1.0, 2.0))
     for k in sorted({r["k"] for r in rows}):
-        known = set()
-        for gen, kw in ((generate_patterns, {}), (generate_lane_patterns, {}),
-                        (generate_lane_patterns, {"pitches": tuple(range(12, 19))})):
-            known |= {p.roads for p in gen(region, th_fp.width, th_fp.length, k,
-                                           random.Random(0), 10 ** 9,
-                                           th_mode="full", **kw)}
-        cands = build_pool(region, th_anchors, k, rng, args.pool)
-        alive = [(f, p) for f, p in cands
-                 if p.roads not in known and prefilter(p, region, consumers) is None]
-        fams = sorted({f for f, _ in alive})
-        share = max(1, 120 // max(1, len(fams)))
-        take = []
-        for fam in fams:
-            sub = sorted((fp for fp in alive if fp[0] == fam),
-                         key=lambda fp: -scorer.opts_total(fp[1].th, fp[1].roads))
-            take.extend(sub[:share])
+        take = select_take(region, consumers, scorer, th_anchors, th_fp, k, rng,
+                           pool=args.pool, probe=args.probe, skews=skews,
+                           opts_top=args.opts_top, quality_top=args.quality_top)
         for r in by_k.get(k, []):
             pat = take[r["idx"]][1]
             if [pat.th.x, pat.th.y] != list(r["th"]):
                 raise SystemExit(
                     f"identity mismatch k={k} idx={r['idx']}: regenerated th "
                     f"{[pat.th.x, pat.th.y]} != recorded {r['th']}. "
-                    "--pool/--gen-seed must match the screen run.")
-            for s in range(args.seeds):
-                payloads.append((k, r["idx"], pat, s))
+                    "--pool/--gen-seed/--skews/--quality-top must match the screen run.")
+            for s_ in range(args.seeds):
+                payloads.append((k, r["idx"], pat, s_))
 
     n_skeletons = sum(len(v) for v in by_k.values())
     print(f"polishing {n_skeletons} skeletons x {args.seeds} seeds = "

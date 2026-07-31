@@ -2334,3 +2334,64 @@ results toward UNKNOWN -- i.e. *pessimistic* -- so the SAT rates measured while 
 understated. Serialised after the user flagged it; FR16's rate went 2.7-3.1/min -> 4.2/min
 immediately. Verified results are unaffected (contention can only cause timeouts, never a false
 feasible layout), but **never quote a SAT rate measured under contention**.
+
+
+## CORRECTION + NEW RECORD 94: the matched test found the headroom the unmatched one missed (2026-07-31)
+
+**This supersedes the "RL closed / grammar SATURATED" conclusion recorded hours earlier.** That
+verdict rested on test 1 reaching only 96, and I flagged at the time that its arms were unmatched
+(the 95 record used the `mean_free_adjacency` quality filter; the non-uniform run did not). The
+matched re-run closes that gap and **breaks the record: darkzig 95 -> 94.**
+
+**Independently verified by full regeneration**, not by re-reading an artifact: the pattern was
+rebuilt from (gen-seed 3, skews 1-2, `--opts-top 0.10`, `--quality-top 0.40`, k=105, index 37) and
+re-solved under CP-SAT seed 2 -> `route()` = **94**, `exact_route()` = **94 OPTIMAL**, `is_valid`
+True, `rotated_buildings` 0, 224/224 placed, 0 unsatisfied, 0 overlaps, **121% efficiency**.
+`docs/records/darkzig-94-roads-nonuniform-k105.json`.
+Winning skeleton: gaps 10-18, skew 1, branch lengths **[18, 17, 13, 4]**, mfa 1.96190, trunk 30.
+Screen found it at 98; seed-polish took it 98 -> 95 -> 94.
+
+**Matched screen vs test 1** (same grammar, the only difference being the quality filter, plus
+dropping skew 0 which test 1 had shown never beats 101):
+
+| | test 1 (opts filter only) | matched (both filters) |
+|---|---|---|
+| SAT rate | 97.9% | 46.7% |
+| median achieved | 102 | **100** |
+| screen best | 97 | **96** |
+| SATs at <=99 | 17 of 229 (7%) | 55 of 112 (**49%**) |
+| polish improved | 7 of 17 | **22 of 31** |
+| after polish | 96 | **94 (RECORD)** |
+| layouts verified <=95 | 0 | **8** |
+
+The quality filter costs half the SAT rate and buys ~2 roads of median, a 7x denser sub-100
+frontier, and the record. **Same trade as arm C on the uniform grammar, and worth taking.**
+
+**Full polish result (31 skeletons x 16 CP-SAT seeds = 496 solves): improved 22/31, best 94.**
+Eight layouts verified at <=95, every one passing the full gate (`route()` matches,
+`exact_route()` OPTIMAL, `is_valid`, rotated=0, 224/224, 0 unsatisfied): **two 94s** —
+`k105-i37` (g10-18-s1, branches [18,17,13,4]) and `k105-i71` (g12-22-s2, branches [27,24,15]),
+**distinct skeletons AND distinct families**, so 94 is reproducible, not a single draw — plus six
+95s spread across both k-levels. Matching the previous all-time best went from *unreachable in
+the unfiltered run* to *routine*. Artifacts: `docs/records/darkzig-94-roads-nonuniform-k105.json`
+and `…-alt.json`.
+
+**Consequence for Track F step 5:** the RL closure stated hours earlier is **wrong on its central
+point**. All four conditions for a guided search over per-branch parameters now hold at once:
+space ~10^19 (not enumerable), feasibility affordable (47% SAT), a validated in-grammar reward
+(rho **+0.825**), and -- the row I had wrong -- **measured headroom (94 < 95)**. RL is no longer
+closed on evidence; it is *open pending a cheaper alternative*, because a bandit or CEM over the
+per-branch vector is still the cheaper first move and every record so far has come from cheap
+methods.
+
+**Design flaw still unfixed, and it matters:** every SAT in the matched run sits at mfa
+1.9619-1.97143 -- the *top* of the kept range (1.8476-1.9714). The bottom-40% cut keeps a large
+tail of too-tight skeletons that only produce UNKNOWNs, which is most of the lost SAT rate. Arm
+C's quintile data said the same thing (quintile 1: 36% SAT; quintile 2: 93%). **The optimum is an
+interior BAND, not a bottom slice** -- both filters are the wrong shape and should target a
+window (~1.96-1.98 here). Cheap fix, untested.
+
+**Process lesson: when you flag an asymmetry while closing a track, close the asymmetry before
+the track.** I recorded "the arms were unmatched" as a caveat and committed the closure anyway.
+One screen refuted it. A caveat that can be tested in one run is not a caveat -- it is the next
+experiment.
