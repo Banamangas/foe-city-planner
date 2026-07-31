@@ -35,10 +35,16 @@ on top of the whole box. Measured on darkzig at a 120 s box:
 
 `BEST_PRESET` now ships `seed_polish=0` with a regression test, so the *default* is safe — but a
 user raising the slider still gets an unbounded overrun.
-- [ ] Pass the remaining budget into `_apply_seed_polish`; stop when spent, or cap `seeds` at
-      `remaining_time / probe_limit`
-- [ ] **Audit every other phase for the same shape.** Three occurrences in one day means the
-      next one should be found by inspection, not by another timing experiment
+- [x] **DONE on `fix/budget-bounded-phases`.** `seed_minimize_roads` takes `should_stop`, polled
+      before every seed; the search reserves a slice for polish **only when it can fit a seed**;
+      polish refuses a seed it cannot finish. 120 s box: 2.34x -> **1.02x**, no wasted budget.
+      Also cured a second bug: the Stop button was inert during polish.
+- [x] **Audit done, and it found a fourth by inspection:** `warm_start` ran `repack(budget_seconds=
+      warm_start_budget)` *entirely outside* the box (a 60 s request took 90 s). Now charged
+      against the box and capped at half of it.
+- [ ] **End-to-end check of the polish path in a box big enough to use it** (600 s -> 150 s
+      reserve -> ~5 seeds). The arithmetic is unit-tested; only the "does nothing at 120 s" case
+      has been verified end to end
 
 ---
 

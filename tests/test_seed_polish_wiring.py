@@ -39,8 +39,15 @@ def test_emits_and_reports_strict_improvement(monkeypatch):
     info = s._apply_seed_polish({"achieved": 102, "pattern": pat, "k": 105,
                                  "layout": None},
                                 lambda lay, k, ach: emitted.append((lay, k, ach)))
-    assert info == {"before": 102, "after": 99, "improved": True, "seed": 7,
-                    "seeds_tried": 4, "n_legal": 3}
+    # `stopped_early` was added when the phase became budget-bounded: it tells a
+    # caller the sweep was cut short by the deadline or the Stop button rather
+    # than exhausting its seeds. Assert the fields this test is about, so a
+    # future additive field does not fail it again.
+    assert {k: info[k] for k in ("before", "after", "improved", "seed",
+                                 "seeds_tried", "n_legal")} == {
+        "before": 102, "after": 99, "improved": True, "seed": 7,
+        "seeds_tried": 4, "n_legal": 3}
+    assert info["stopped_early"] is False
     assert emitted == [(better, 105, 99)]
 
 

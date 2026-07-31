@@ -2534,3 +2534,61 @@ cost ten core-hours. **k_start was worth 10-14 roads; every filter tuning combin
 cliff with short probes, then exploit the remainder at the lowest feasible k -- needs no per-city
 calibration and would self-correct where -4 is wrong. Separate design + gate, not a
 productionisation ride-along.
+
+## Audit: four phases were bounded by their own parameter instead of the remaining budget (2026-07-31)
+
+Three showed up during the user-timescale experiment; a fourth was found by *inspection* once
+the pattern was named. That is the point of the entry -- the class is the finding, not the
+instances.
+
+**The shape:** a phase takes a size parameter (`probe_limit`, `seed_polish`, `warm_start_budget`)
+and runs to completion against it, with no reference to how much of the user's time box is left.
+Each is individually reasonable; together they mean "time box" means nothing.
+
+| phase | bound by | symptom at a 120 s box | fix |
+|---|---|---|---|
+| CP-SAT probe | `probe_limit` | 292 s (**2.43x**) at probe_limit=300 | preset -> 30 s; deadline is only checked *between* probes, so the granularity is still one probe |
+| k-walk start | `pick_k_start` margin | whole box spent above the useful k region | family-aware margin |
+| `seed_polish` | `seed_polish x probe_limit` | 281 s (**2.34x**) for **one road** | `should_stop` polled before every seed |
+| `warm_start` | `warm_start_budget` | ran **entirely outside** the box (60 s request -> 90 s) | charged against the box; search gets `time_box - spent` |
+
+**Second bug the same fix cured:** the Stop button was inert during `seed_polish`, because that
+phase never consulted `should_stop` either. A user pressing Stop watched it keep running. The
+same predicate now covers deadline *and* cancellation -- they are the same question ("should I
+keep going?") and should never be two mechanisms.
+
+**Fixing it took four attempts and I broke it twice, in opposite directions.** Worth recording
+because the wall-clock alone looked fine in both failure modes:
+
+| attempt | wall (120 s box) | seeds run | what was wrong |
+|---|---|---|---|
+| as shipped | 281 s (2.34x) | 12 | overran the box |
+| budget-bounded (`should_stop`) | 125 s (1.04x) | **0** | silently inert -- budget already spent |
+| + reserve a slice for polish | 142 s (1.18x) | 4 | worked, still overran by a probe |
+| + refuse a seed it cannot finish | **92 s (0.77x)** | **0** | reserved 30 s, spent none, **finished early** |
+| + take the reserve only if it fits | **123 s (1.02x)** | 0 | correct: no reserve, walk gets the box |
+
+**1.04x and 0.77x both read as "box honoured" if you only look at wall-clock.** Only
+`seeds_tried` showed the phase was doing nothing. *Measure the thing you changed, not just the
+thing you were optimising.*
+
+**The underlying fact the fix stopped hiding:** `seed_polish` is **not viable in a 120 s box at
+all.** Each seed costs up to a full `probe_limit` and several are needed for the sampling to pay
+off; `min(seed_polish * probe_limit, box * 0.25)` at box=120 / probe_limit=30 is exactly one
+probe, which cannot fit a seed once the walk's own overshoot is counted. So the reserve is now
+**all-or-nothing**: taken only when it can fit a seed (600 s box -> 150 s reserve, 5 seeds),
+otherwise the walk gets the whole box. That is why `BEST_PRESET` ships `seed_polish=0`.
+
+**What remains, deliberately.** Probe granularity in the *k-walk*: its probes are dispatched in a
+pool batch, so the deadline is checked between batches and a box can overshoot by up to one
+`probe_limit`. The polish loop is sequential and now refuses a seed it cannot finish, but the walk
+cannot do the same cleanly. Interrupting CP-SAT mid-solve is a real change to the solver wiring,
+not a productionisation fix -- and at `probe_limit=30` the measured overshoot is 1.02-1.03x
+end-to-end. Logged, not fixed.
+
+**Generalisable.** When a system promises a total budget, *every* phase inside it must take the
+budget as an input, not just the phase that looks like the main loop. The tell is a parameter
+with time units that is not derived from the deadline. Grep for those: here it was
+`probe_limit`, `seed_polish`, `warm_start_budget` -- three of the four found that way, and the
+fourth (`pick_k_start`) was a heuristic that wasted the budget rather than overrunning it, which
+the same audit surfaced because it asked "what does this phase spend?"
