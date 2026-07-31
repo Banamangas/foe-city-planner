@@ -183,16 +183,25 @@ SMOKE_PRESET: dict = {
 # family -- unlike the lane family, where 30 s missed every known-feasible
 # pattern (tasks/lessons.md 2026-07-22).
 #
-# Expect ~111 roads from a 2-minute box, not 94: the record needed ~10 core-hours
-# of screening plus a 496-solve polish pass. 111 is still a 56% cut on darkzig as
-# found (250) and 30% better than the classical pipeline (158).
+# seed_polish is 0 here, NOT the 12 the research runs used, for the same reason:
+# _apply_seed_polish runs AFTER the walk and loops sequentially over seeds with no
+# deadline check, so it is bounded by its own parameter rather than the remaining
+# budget. Measured at a 120 s box: seed_polish=0 took 127 s (1.06x) and reached
+# 101 roads; seed_polish=12 took 281 s (2.34x) and reached 100 -- 154 extra
+# seconds for ONE road. It is a genuine lever for long runs (it produced the 94
+# and the 95) and remains available; it is simply a bad trade inside a user box.
+#
+# Expect ~101 roads on darkzig from a 2-minute box and ~76 on FR16 (its all-time
+# record) -- not darkzig's 94, which needed ~10 core-hours of screening plus a
+# 496-solve polish pass. 101 is a 60% cut on darkzig as found (250) and 36%
+# better than the classical pipeline (158).
 BEST_PRESET: dict = {
     "pattern_family": "nonuniform",
     "quality_index_band": "3,4",
     "th_anchors": "full",
     "patterns": 200,
     "probe_limit": 30.0,
-    "seed_polish": 12,
+    "seed_polish": 0,
     "concurrent_levels": 4,
 }
 
