@@ -1024,7 +1024,7 @@ class RoadsFirstSearch:
             truncated = False
 
             if self.k_start == "auto":
-                k = pick_k_start(layout)
+                k = pick_k_start(layout, self.pattern_family)
             else:
                 k = self.k_start
 

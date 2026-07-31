@@ -2463,3 +2463,74 @@ because within the reachable region the objective is flat.
 Before building an optimiser on it, re-measure the correlation *inside the region the optimiser
 would actually search*. Here that one check turned a 10^19-space "guided search is now justified"
 into "there is nothing to search".
+
+## The 60-120 s box experiment: two shipped defects, and k_start was worth more than every filter (2026-07-31)
+
+Everything up to this point was measured at 300 s probes and multi-hour boxes. Running the same
+configuration at *user* timescales found two defects in what had just been committed, and a lever
+bigger than anything the filters gave.
+
+**Defect 1: the time box was not honoured.** `RoadsFirstSearch` checks its deadline only *after* a
+probe returns (`handle_result`) -- nothing interrupts a probe in flight. So `probe_limit >= time_box`
+means the user waits for the probe, not the box. Measured at a 120 s box:
+
+| probe_limit | wall | overrun | best achieved |
+|---|---|---|---|
+| 10 / 20 / 40 s | 121 s | **1.01x** | 111 (identical) |
+| 300 s | **292 s** | **2.43x** | 111 |
+
+`BEST_PRESET` had shipped with `probe_limit=300`, lifted unthinkingly from the research runs.
+Fixed to 30 s + a regression test. **Short probes cost nothing for this family** -- unlike the lane
+family, where 30 s missed every known-feasible pattern (2026-07-22). Do not generalise a probe
+budget across families.
+
+**Defect 2 (the big one): `pick_k_start` was calibrated for the wrong side of sigma_half.** It
+returns `ceil(sigma_half) + 8`, from when feasibility sat *above* sigma_half. The nonuniform
+family's records sit *below* it -- darkzig 94 at k=105 (sigma/2=114), FR16 76 at k=84
+(sigma/2=88). So a short run spent its entire budget above the region where results live:
+
+| box | best | lowest k reached | levels probed |
+|---|---|---|---|
+| 60 s | 111 | 123 | 1 |
+| 120 s | 111 | 123 | 1 |
+| 300 s | 109 | 123 | **1** |
+| 600 s | 108 | 119 | 5 |
+
+A 300 s box never left its starting level. Forcing k_start down, same 120 s box:
+`auto(123) -> 111`, `118 -> 106`, `110 -> 103`, **`106 -> 98`**.
+
+**The cliff is sharp and the penalty asymmetric.** One step of 4 below the optimum returns
+`FAMILY_TOO_WEAK` -- nothing at all, not a worse answer -- while too high merely wastes budget.
+Measured: darkzig 106 works / **104 fails**; FR16 84 works / **80 fails**. So sigma/2 - 8 is
+optimal on darkzig and **fatal on FR16**.
+
+**Shipped `K_START_MARGIN = {comb: +8, lane: +8, nonuniform: -4}`** -- the largest margin safe on
+both cities. comb/lane are untouched (changing them would be an unmeasured behaviour change). A
+derived alternative, `sigma_half/1.21 + 9` from the ~120% efficiency both cities reach, gives 103
+and 82 -- **below both cliffs**, and was rejected for that reason. *A principled-looking formula
+that lands on the wrong side of a cliff is worse than a crude safe one.*
+
+**End-to-end result at a 120 s box, `k_start="auto"`:**
+
+| city | before | after | reference |
+|---|---|---|---|
+| darkzig | 111 | **101** | record 94 (~10 core-h) |
+| FR16 | 90 | **76** | record 76 — **matched in 121 s** |
+
+FR16 now reproduces its all-time record in two minutes; darkzig lands within 7 of a record that
+cost ten core-hours. **k_start was worth 10-14 roads; every filter tuning combined was worth ~2.**
+
+**Lessons.**
+1. **Measure at the timescale you ship at.** At research timescales `k_start` is irrelevant (the
+   walk has hours to descend) and `probe_limit=300` is correct. At 120 s both are wrong. No
+   amount of reasoning about the filters would have surfaced either.
+2. **A heuristic outlives the assumption it was calibrated on.** `pick_k_start`'s +8 was right for
+   comb/lane and silently wrong for a family invented later. When adding a family, re-check every
+   heuristic that takes the family as context -- not just the ones that name it.
+3. **Where the penalty is asymmetric, take the safe margin, not the optimum.** -8 buys 5 more
+   roads on darkzig and destroys FR16 entirely.
+
+**Still open:** an adaptive alternative -- spend ~20% of the box bisecting for the feasibility
+cliff with short probes, then exploit the remainder at the lowest feasible k -- needs no per-city
+calibration and would self-correct where -4 is wrong. Separate design + gate, not a
+productionisation ride-along.
