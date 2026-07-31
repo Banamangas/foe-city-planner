@@ -9,6 +9,23 @@ from foeopt.model import Layout
 from foeopt.roads_first import RoadsFirstSearch
 
 
+def _parse_range(spec: str):
+    """"off" -> None; "3,4" -> (3, 4). The UI passes strings; the search wants a
+    tuple or None so the feature stays off by default."""
+    if not spec or spec == "off":
+        return None
+    lo, hi = spec.split(",")
+    return (int(lo), int(hi))
+
+
+def _parse_pitches(spec: str):
+    """"off" -> None (the generator's built-in range); "12-18" -> (12,...,18)."""
+    if not spec or spec == "off":
+        return None
+    lo, hi = spec.split("-")
+    return tuple(range(int(lo), int(hi) + 1))
+
+
 def layout_to_dict(layout: Layout) -> dict:
     """Serialize a validated Layout to the compact dict format for SSE/API."""
     return {
@@ -28,7 +45,16 @@ class JobManager:
                probe_limit: float = 60.0, workers: int = 4,
                probe_workers: int = 4, th_anchors: str = "full",
                k_start="auto", concurrent_levels: int = 1,
-               seed_polish: int = 0) -> str:
+               seed_polish: int = 0, symmetry_breaking: bool = False,
+               pattern_family: str = "comb", stub_priority: bool = False,
+               lane_cap: int | None = None, warm_start: bool = False,
+               warm_start_budget: float = 30.0,
+               quality_index_band: str = "off", lane_pitches: str = "off") -> str:
+        """Start a RoadsFirstSearch in a background thread and return its id.
+
+        Keyword names match webapp.params.OPTION_SPECS one for one, so the
+        Flask layer can splat parse_options() straight in here.
+        """
         job_id = uuid.uuid4().hex
         stop_event = threading.Event()
         improvements: queue.Queue = queue.Queue()
@@ -55,12 +81,22 @@ class JobManager:
 
         def worker():
             try:
+                # The repack that produces the CP-SAT placement hints runs here,
+                # not in the request thread, so /api/optimize returns immediately.
+                hint_layout = None
+                if warm_start:
+                    from foeopt.packer import repack
+                    hint_layout = repack(layout, budget_seconds=warm_start_budget).layout
                 search = RoadsFirstSearch(
                     layout, time_box=time_box, patterns=patterns,
                     probe_limit=probe_limit, workers=workers,
                     probe_workers=probe_workers, th_anchors=th_anchors,
                     k_start=k_start, concurrent_levels=concurrent_levels,
-                    seed_polish=seed_polish,
+                    seed_polish=seed_polish, symmetry_breaking=symmetry_breaking,
+                    pattern_family=pattern_family, stub_priority=stub_priority,
+                    lane_cap=lane_cap, hint_layout=hint_layout,
+                    quality_index_band=_parse_range(quality_index_band),
+                    lane_pitches=_parse_pitches(lane_pitches),
                 )
                 res = search.run(on_improvement=on_improvement,
                                  on_status=on_status,
