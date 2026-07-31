@@ -23,6 +23,25 @@ button, select, input[type="number"], input[type="text"], input:not([type]) {
 }
 button { cursor: pointer; }
 button:disabled { opacity: 0.5; cursor: default; }
+.opt { margin-bottom: 6px; }
+.opt-label { flex: 1; font-size: 12px; color: #c8c8c8; }
+.opt-label.modified { color: #e0b050; }
+.opt input[type="number"], .opt input[type="text"], .opt select {
+  flex: 0 0 96px; width: 96px;
+}
+.opt input[type="checkbox"] { flex: 0 0 auto; margin: 0; }
+details.advanced {
+  border: 1px solid #2a2a2a; border-radius: 4px;
+  padding: 6px 8px; margin-bottom: 10px;
+}
+details.advanced > summary {
+  cursor: pointer; color: #9a9a9a; font-size: 12px; user-select: none;
+}
+details.advanced[open] > summary { margin-bottom: 8px; }
+.cli-preview {
+  display: block; background: #101010; border: 1px solid #2a2a2a; border-radius: 4px;
+  padding: 6px; font-size: 11px; color: #8fb4cc; white-space: pre-wrap; word-break: break-all;
+}
 .filebtn {
   display: block; background: #2980b9; color: #fff; padding: 7px 10px; border-radius: 4px;
   text-align: center; cursor: pointer; margin-bottom: 8px;
@@ -50,3 +69,18 @@ select, input:not([type]), input[type="text"] { width: 100%; }
   position: absolute; pointer-events: none; background: #000c; color: #fff;
   padding: 4px 8px; border-radius: 4px; font-size: 12px; white-space: nowrap;
 }
+
+
+/* Instance screen (foeopt.bounds.screen_city) — advisory, shown before a run. */
+.screen-bad, .screen-warn {
+  border-radius: 6px;
+  padding: 0.6rem 0.7rem;
+  margin: 0.5rem 0 0.75rem;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+.screen-bad { background: #3a1d1d; border: 1px solid #7a3535; color: #f2c9c9; }
+.screen-warn { background: #3a331d; border: 1px solid #7a6a35; color: #f0e4bd; }
+.screen-reason { margin-top: 0.25rem; }
+.screen-detail { margin-top: 0.25rem; opacity: 0.75; font-size: 0.8rem; }
+.preset-best { font-weight: 600; }

@@ -13,6 +13,10 @@ from foeopt.loader import load_layout_from_dict, load_layout
 from foeopt.report import road_estimate
 from foeopt.viz import layout_to_view
 from webapp.cache import CityCache
+from foeopt.bounds import screen_city
+from webapp.params import (
+    BEST_PRESET, GROUP_LABELS, OPTION_SPECS, SMOKE_PRESET, OptionError, parse_options,
+)
 from webapp.runner import JobManager
 
 _DIST = os.path.join(os.path.dirname(__file__), "dist")
@@ -53,6 +57,12 @@ def create_app(db_path: str | None = None) -> Flask:
             "buildings": buildings,
             "region_cells": len(layout.region.cells),
             "road_estimate": road_estimate(layout),
+            # Microsecond instance screen (foeopt.bounds.screen_city): tells the
+            # user up front whether this city is one the optimiser can help with,
+            # instead of returning an empty result after a full time box. FR24
+            # consumed 13 core-hours across 1182 probes before this existed.
+            # Advisory only -- the UI must never use it to block a run.
+            "screen": screen_city(layout),
             "map_view": layout_to_view(layout),
         }
 
@@ -93,6 +103,16 @@ def create_app(db_path: str | None = None) -> Flask:
         except Exception as exc:
             return jsonify(error=f"could not parse city: {exc}"), 400
 
+    @app.get("/api/options")
+    def api_options():
+        """Serve the run-parameter spec the Optimize panel renders itself from.
+
+        webapp/params.py is the single source of truth: every knob, its type,
+        range, default, help text and the CLI flag it mirrors.
+        """
+        return jsonify(options=OPTION_SPECS, groups=GROUP_LABELS,
+                       presets={"smoke": SMOKE_PRESET, "best": BEST_PRESET})
+
     @app.post("/api/optimize")
     def api_optimize():
         data = request.get_json(silent=True) or {}
@@ -102,32 +122,14 @@ def create_app(db_path: str | None = None) -> Flask:
         city = cache.get_city(city_id)
         if city is None:
             return jsonify(error="city not found, load it first"), 400
-        time_box = float(data.get("time_box", 300))
-        patterns = int(data.get("patterns", 200))
-        probe_limit = float(data.get("probe_limit", 60))
-        # workers=6/probe_workers=2 (12 threads, not 16) and concurrent_levels=4
-        # are the next-things-to-try-validated defaults (tasks/lessons.md
-        # 2026-07-19/20 + 2026-07-20/21): 16 total CP-SAT threads leaves no core
-        # headroom and reproducibly regresses the walk, while concurrent_levels
-        # is a reproducible same-result/faster win with no observed downside.
-        workers = int(data.get("workers", 6))
-        probe_workers = int(data.get("probe_workers", 2))
-        concurrent_levels = int(data.get("concurrent_levels", 4))
-        th_anchors = data.get("th_anchors", "full")
-        k_start = data.get("k_start", "auto")
-        # Opt-in (default 0 = off): after the walk, re-solve the best skeleton
-        # under this many CP-SAT seeds and keep a strictly-lower legal road
-        # count. probe() has no objective so its placement -- and thus the road
-        # count -- varies by solver seed. Adds up to seed_polish x probe_limit
-        # seconds, which is why it is off by default.
-        seed_polish = int(data.get("seed_polish", 0))
+        try:
+            options = parse_options(data)
+        except OptionError as exc:
+            return jsonify(error=str(exc)), 400
         layout = load_layout_from_dict(city["payload"])
-        job_id = jobs.submit(layout, time_box=time_box, patterns=patterns,
-                             probe_limit=probe_limit, workers=workers,
-                             probe_workers=probe_workers, th_anchors=th_anchors,
-                             k_start=k_start, concurrent_levels=concurrent_levels,
-                             seed_polish=seed_polish)
-        return jsonify(job_id=job_id)
+        job_id = jobs.submit(layout, **options)
+        # Echo the resolved options so the client can show exactly what ran.
+        return jsonify(job_id=job_id, options=options)
 
     @app.get("/api/stream/<job_id>")
     def api_stream(job_id):

@@ -198,3 +198,46 @@ def test_api_load_raw_fallback(client):
 def test_old_routes_still_served(client):
     r = client.get("/")
     assert r.status_code == 200
+
+
+def test_api_load_includes_the_instance_screen(client):
+    """A city load must carry the screen so the UI can warn BEFORE a run.
+    FR24 cost 13 core-hours across 1182 probes before this existed."""
+    r = client.post("/api/load", json=_combined_payload())
+    assert r.status_code == 200
+    screen = r.get_json().get("screen")
+    assert screen is not None, "load response must include the instance screen"
+    for key in ("verdict", "reason", "road_pressure", "consumers", "slack"):
+        assert key in screen
+    assert screen["verdict"] in ("LIKELY", "UNCERTAIN", "UNLIKELY", "INFEASIBLE")
+    assert screen["reason"], "the verdict must explain itself to the user"
+
+
+def test_api_options_serves_the_best_known_preset(client):
+    """The record-holding configuration must be one click away, not folklore."""
+    presets = client.get("/api/options").get_json()["presets"]
+    assert "best" in presets
+    best = presets["best"]
+    assert best["pattern_family"] == "nonuniform"
+    assert best["quality_index_band"] == "3,4"
+    names = {s["name"] for s in client.get("/api/options").get_json()["options"]}
+    for key in best:
+        assert key in names, f"preset sets unknown option {key!r}"
+
+
+def test_best_preset_values_are_all_accepted_by_the_parser(client):
+    """A preset that the option parser would reject is worse than none."""
+    from webapp.params import BEST_PRESET, parse_options
+    parsed = parse_options(dict(BEST_PRESET))
+    assert parsed["pattern_family"] == "nonuniform"
+    assert parsed["quality_index_band"] == "3,4"
+
+
+def test_runner_translates_ui_strings_to_search_arguments():
+    """The UI sends 'off'/'3,4'/'12-18'; RoadsFirstSearch wants None/tuples."""
+    from webapp.runner import _parse_range, _parse_pitches
+    assert _parse_range("off") is None
+    assert _parse_range("") is None
+    assert _parse_range("3,4") == (3, 4)
+    assert _parse_pitches("off") is None
+    assert _parse_pitches("12-18") == (12, 13, 14, 15, 16, 17, 18)
