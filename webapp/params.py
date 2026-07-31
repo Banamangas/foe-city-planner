@@ -36,6 +36,18 @@ OPTION_SPECS: list[dict] = [
                 "no objective, so the road count varies by solver seed. Costs up "
                 "to seed_polish x probe-limit extra seconds; 0 = off.",
     },
+    {
+        "name": "exact_repair", "cli": "--exact-repair", "type": "float",
+        "default": 0.0, "min": 0.0, "max": 300.0, "advanced": True,
+        "group": "budget", "label": "Exact filler repair (s, 0 = off)",
+        "help": "When CP-SAT places every road-needing building but the greedy "
+                "filler packer cannot fit the rest, the layout is thrown away "
+                "whole (SAT_FILLER_FAIL). This gives an exact CP-SAT rectangle "
+                "packer that many seconds to rescue it, hinted with the greedy "
+                "answer so it can never do worse. Runs only on layouts that "
+                "would otherwise be discarded, and is clamped to the probe "
+                "limit so a rescue can at most double one probe; 0 = off.",
+    },
     # ---- search shape ----
     {
         "name": "patterns", "cli": "--patterns", "type": "int",

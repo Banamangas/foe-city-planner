@@ -248,3 +248,37 @@ Build notes if this proceeds:
   fillers, ~10x smaller model), so the repair pass should be sub-second there — untested.
 - Shape: repair pass only on layouts that would otherwise be discarded as SAT_FILLER_FAIL,
   never in the inner loop.
+
+### B (cont.) — built on `feat/exact-filler-packing`
+
+`foeopt/exact_packing.py` + wiring into `validate()`, `--exact-repair`, and the panel.
+Default **0.0 (off)** everywhere.
+
+Design A/B on the user's city (greedy = 222/231), re-confirmed with no CPU contention:
+
+    threads  budget  variant       placed
+    1        5-30s   any             none    -- no solution found at all
+    1        60s     count            222
+    8        5s      count            217    -- WORSE than greedy
+    8        5s      count+hint       230    -- 3/3 identical runs
+    8        10s     count+hint       230
+    8        60s     count+hint       230
+
+All three of {>1 thread, greedy hint, count objective} are load-bearing, and **5s is
+enough**. Two consequences baked into the code:
+
+  * `exact_workers` inherits `probe_workers`; `exact_pack(workers=)` defaults to 8, and a
+    test asserts both are > 1. Single-threaded it is useless.
+  * The hint does NOT guarantee >= greedy (CP-SAT reports its own incumbent, and did
+    return 217 < 222 unhinted). `validate` therefore accepts the repair only when it
+    *strictly* beats greedy. That guard is load-bearing -- do not remove it.
+
+Budget hazard, closed proactively: the repair is charged **per rescued layout**, so N
+filler failures would add N x exact_repair to the box -- the seed_polish defect class
+again. It is clamped to one `probe_limit`, so a rescue can at most double the probe that
+produced it. Test: 300s clamps to 30s.
+
+**Still unmeasured, and the reason it ships off by default:** every number above is from
+the *expert's own* free space, not a search-produced one. The real workload is the ~6 of
+32 FR16 SATs that still fail after best-fit greedy. Until the repair is run against those,
+"+8 fillers" is a ground-truth result, not a production one, and the default stays 0.

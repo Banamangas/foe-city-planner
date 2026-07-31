@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from foeopt.model import Building, Footprint, Layout, Region
 from foeopt.bounds import pick_k_start
 from foeopt.corpus import CorpusWriter
+from foeopt.exact_packing import apply_placements, exact_pack
 
 _ORTHO = ((1, 0), (-1, 0), (0, 1), (0, -1))
 Cell = tuple[int, int]
@@ -726,8 +727,16 @@ def _place_fillers(grid: Grid, fillers: list[Building], cand: Layout) -> list[Bu
     return unplaced
 
 
-def validate(layout_src: Layout, pattern: Pattern,
-             positions: dict) -> tuple[str, Layout | None, int]:
+def validate(layout_src: Layout, pattern: Pattern, positions: dict,
+             exact_repair: float = 0.0, exact_workers: int = 8,
+             exact_objective: str = "count") -> tuple[str, Layout | None, int]:
+    """Turn a SAT consumer placement into a full, legal layout.
+
+    `exact_repair` > 0 gives the CP-SAT filler packer that many seconds to
+    rescue layouts the greedy packer cannot finish. It runs *only* on layouts
+    that would otherwise be thrown away as SAT_FILLER_FAIL, and is hinted with
+    the greedy packing so it can never do worse. See foeopt/exact_packing.py.
+    """
     consumers = layout_src.road_needing()
     fillers = [b for b in layout_src.buildings
                if not b.needs_road and not b.is_townhall]
@@ -752,7 +761,18 @@ def validate(layout_src: Layout, pattern: Pattern,
         occupied |= b.footprint.cells()
     free = region - occupied
     grid = Grid(w, h, {(x, y) for x in range(w) for y in range(h)} - free)
+    n_before = len(cand.buildings)
     unplaced = _place_fillers(grid, fillers, cand)
+    if unplaced and exact_repair > 0:
+        hint = [(b, b.footprint.x, b.footprint.y)
+                for b in cand.buildings[n_before:]]
+        placements, still = exact_pack(free, w, h, fillers, exact_repair,
+                                       workers=exact_workers, hint=hint,
+                                       objective=exact_objective)
+        if len(still) < len(unplaced):
+            del cand.buildings[n_before:]
+            cand.buildings.extend(apply_placements(placements))
+            unplaced = still
     if unplaced:
         return ("SAT_FILLER_FAIL", None, len(roads))
     bad = rotated_buildings(cand, canonical_dims(layout_src))
@@ -768,15 +788,17 @@ _WORKER_SYMMETRY_BREAKING: bool = False
 _WORKER_HINTS: dict[int, tuple[int, int]] | None = None
 _WORKER_STUB_PRIORITY: bool = False
 _WORKER_SOLVER_OVERRIDES: dict[str, object] | None = None
+_WORKER_EXACT_REPAIR: float = 0.0
 
 
 def _worker_init(layout: Layout, probe_limit: float, probe_workers: int,
                  symmetry_breaking: bool = False, hints=None,
                  stub_priority: bool = False,
-                 solver_overrides: dict[str, object] | None = None) -> None:
+                 solver_overrides: dict[str, object] | None = None,
+                 exact_repair: float = 0.0) -> None:
     global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS
     global _WORKER_SYMMETRY_BREAKING, _WORKER_HINTS, _WORKER_STUB_PRIORITY
-    global _WORKER_SOLVER_OVERRIDES
+    global _WORKER_SOLVER_OVERRIDES, _WORKER_EXACT_REPAIR
     _WORKER_LAYOUT = layout
     _WORKER_PROBE_LIMIT = probe_limit
     _WORKER_PROBE_WORKERS = probe_workers
@@ -784,6 +806,7 @@ def _worker_init(layout: Layout, probe_limit: float, probe_workers: int,
     _WORKER_HINTS = hints
     _WORKER_STUB_PRIORITY = stub_priority
     _WORKER_SOLVER_OVERRIDES = solver_overrides
+    _WORKER_EXACT_REPAIR = exact_repair
 
 
 def _run_probe(payload: tuple) -> dict:
@@ -804,7 +827,15 @@ def _run_probe(payload: tuple) -> dict:
         return {"k": k, "params": pat.params, "status": st,
                 "achieved": None, "secs": secs, "layout": None,
                 "pat_index": pat_index, "pos": None}
-    vstat, vlay, achieved = validate(layout, pat, pos)
+    # Clamped to one probe's own limit so a rescue can at worst DOUBLE the cost
+    # of the probe that produced it. The repair is charged per rescued layout,
+    # not once per run, so an unclamped value would let N filler failures add
+    # N x exact_repair seconds to the box -- the same defect class as the
+    # seed_polish overrun (tasks/lessons.md 2026-07-30).
+    vstat, vlay, achieved = validate(
+        layout, pat, pos,
+        exact_repair=min(_WORKER_EXACT_REPAIR, _WORKER_PROBE_LIMIT),
+        exact_workers=_WORKER_PROBE_WORKERS)
     if vstat == "OK":
         return {"k": k, "params": pat.params, "status": "SAT",
                 "achieved": achieved, "secs": secs, "layout": vlay,
@@ -817,7 +848,7 @@ def _run_probe(payload: tuple) -> dict:
 def _run_probe_seq(payload: tuple) -> dict:
     global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS
     global _WORKER_SYMMETRY_BREAKING, _WORKER_HINTS, _WORKER_STUB_PRIORITY
-    global _WORKER_SOLVER_OVERRIDES
+    global _WORKER_SOLVER_OVERRIDES, _WORKER_EXACT_REPAIR
     pat, k, layout, probe_limit, probe_workers, *rest = payload
     _WORKER_LAYOUT = layout
     _WORKER_PROBE_LIMIT = probe_limit
@@ -826,6 +857,7 @@ def _run_probe_seq(payload: tuple) -> dict:
     _WORKER_HINTS = rest[1] if len(rest) > 1 else None
     _WORKER_STUB_PRIORITY = rest[2] if len(rest) > 2 else False
     _WORKER_SOLVER_OVERRIDES = rest[3] if len(rest) > 3 else None
+    _WORKER_EXACT_REPAIR = rest[4] if len(rest) > 4 else 0.0
     try:
         return _run_probe((pat, k, 0))
     finally:
@@ -913,7 +945,9 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
                 result = _run_probe_seq((pat, k, layout, params.probe_limit, params.probe_workers,
                                          getattr(params, "symmetry_breaking", False),
                                          getattr(params, "hints", None),
-                                         getattr(params, "stub_priority", False)))
+                                         getattr(params, "stub_priority", False),
+                                         None,
+                                         getattr(params, "exact_repair", 0.0)))
                 if handle_result(k, result, pat):
                     interrupted = True
                     break
@@ -953,7 +987,8 @@ class RoadsFirstSearch:
                  pattern_family: str = "comb", stub_priority: bool = False,
                  lane_cap: int | None = None, concurrent_levels: int = 1,
                  seed_polish: int = 0, lane_pitches: tuple[int, ...] | None = None,
-                 quality_index_band: tuple[int, int] | None = None):
+                 quality_index_band: tuple[int, int] | None = None,
+                 exact_repair: float = 0.0):
         self.layout = layout
         self.time_box = time_box
         self.patterns = patterns
@@ -975,6 +1010,7 @@ class RoadsFirstSearch:
         self.quality_index_band = quality_index_band
         self.concurrent_levels = concurrent_levels
         self.seed_polish = seed_polish
+        self.exact_repair = exact_repair
 
     def _apply_seed_polish(self, best_holder: dict, on_improvement,
                            should_stop=None) -> dict | None:
@@ -1037,7 +1073,8 @@ class RoadsFirstSearch:
                 self.workers,
                 initializer=_worker_init,
                 initargs=(layout, self.probe_limit, self.probe_workers,
-                         self.symmetry_breaking, self.hints, self.stub_priority))
+                         self.symmetry_breaking, self.hints, self.stub_priority,
+                         None, self.exact_repair))
 
         corpus = None
 
@@ -1054,6 +1091,7 @@ class RoadsFirstSearch:
             lane_cap=self.lane_cap,
             lane_pitches=self.lane_pitches,
             quality_index_band=self.quality_index_band,
+            exact_repair=self.exact_repair,
         )
 
         results: dict[int, tuple[str, int | None]] = {}
