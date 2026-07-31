@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useCityStore } from "../stores/cityStore";
 import { apiOptimize, apiOptions, apiStop, openStream } from "../api";
 import {
-  applyPreset, byGroup, cliPreview, initialValues, isModified, modifiedCount,
-  secondsToMinutes,
+  applyPreset, budgetWarning, byGroup, cliPreview, initialValues, isModified,
+  modifiedCount, screenBanner, secondsToMinutes,
 } from "../options";
 import type { CityScreen, OptionSpec, OptionValues, OptionsResponse } from "../types";
 
@@ -63,23 +63,17 @@ function Field({ spec, value, disabled, onChange }: {
  *  city we predict poorly for. Calibrated on three cities and confounded with
  *  building count, so it explains its reasoning rather than asserting a limit. */
 function ScreenBanner({ screen }: { screen: CityScreen }) {
-  if (screen.verdict === "LIKELY") return null;
-  const cls = screen.verdict === "INFEASIBLE" ? "screen-bad"
-    : screen.verdict === "UNLIKELY" ? "screen-bad" : "screen-warn";
-  const heading = screen.verdict === "INFEASIBLE"
-    ? "This city cannot be optimised"
-    : screen.verdict === "UNLIKELY"
-      ? "This city is unlikely to yield a result"
-      : "This city is outside the measured range";
+  const banner = screenBanner(screen);
+  if (!banner) return null;
   return (
-    <div className={cls}>
-      <strong>{heading}</strong>
+    <div className={banner.severity === "bad" ? "screen-bad" : "screen-warn"}>
+      <strong>{banner.heading}</strong>
       <div className="screen-reason">{screen.reason}</div>
       <div className="screen-detail">
         road pressure {screen.road_pressure} · {screen.consumers} buildings need
         road access · {screen.slack} free cells
       </div>
-      {screen.verdict !== "INFEASIBLE" && (
+      {banner.canStillRun && (
         <div className="screen-detail">You can still run it — this is a prediction, not a limit.</div>
       )}
     </div>
@@ -189,6 +183,13 @@ export function OptimizePanel() {
           <div className="sub">Equivalent CLI</div>
           <code className="cli-preview">{cliPreview(specs, values)}</code>
         </details>
+      )}
+
+      {budgetWarning(values) && (
+        <div className="screen-warn">
+          <strong>Budget mismatch</strong>
+          <div className="screen-reason">{budgetWarning(values)}</div>
+        </div>
       )}
 
       <div className="row">

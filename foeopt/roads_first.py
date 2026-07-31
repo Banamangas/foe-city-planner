@@ -446,9 +446,19 @@ def _pattern_generator(family: str):
 
 
 def prefilter(pattern: Pattern, region: set[Cell],
-              consumers: list[Building]) -> str | None:
+              consumers: list[Building],
+              fillers: list[Building] | None = None) -> str | None:
+    """Sound rejections only -- never rejects a pattern that could have worked.
+
+    `fillers` (the non-road-needing buildings) are optional for backwards
+    compatibility, but SHOULD be passed: they occupy region cells too, and
+    without them the area check can pass a pattern that has room for the
+    consumers and no room for everything else. That failure surfaces much later
+    as SAT_FILLER_FAIL, after a full CP-SAT probe has been spent on it."""
     th_cells = pattern.th.cells()
     area_needed = sum(b.footprint.width * b.footprint.length for b in consumers)
+    if fillers:
+        area_needed += sum(b.footprint.width * b.footprint.length for b in fillers)
     if area_needed + len(pattern.roads) > len(region) - len(th_cells):
         return "area"
     free = region - pattern.roads - th_cells
@@ -664,6 +674,58 @@ def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
     return ("UNKNOWN", None)
 
 
+def _place_fillers(grid: Grid, fillers: list[Building], cand: Layout) -> list[Building]:
+    """Pack the non-road-needing buildings into whatever the consumers left.
+
+    Returns the ones that did not fit (empty list == success). Appends the
+    placed ones to `cand.buildings`.
+
+    Two deliberate choices, both measured on 12 real FR16 failures
+    (tasks/lessons.md 2026-07-31):
+
+    **best-fit, not first-fit.** Placing each building in the TIGHTEST spot --
+    the one with most blocked neighbours -- instead of the first spot found
+    stops a large early building from cutting a usable region in half. It
+    recovered **6 of 12** otherwise-failed layouts; first-fit recovered 0 and a
+    cheaper reordering recovered 2. It costs 16x more than first-fit but that is
+    2.7ms -> 42ms on FR16 and 27ms -> 434ms on darkzig: **at most 1.45% of a
+    single 30s probe**, and it runs once per SAT.
+
+    **No early exit.** The old code returned at the first building that did not
+    fit, discarding every placement it could still have made -- measured, it
+    placed 11 of 32 where continuing places 31. Continuing costs nothing and
+    means the caller can report "placed 30 of 32" instead of a bare failure.
+    """
+    placed_any: list[Building] = []
+    unplaced: list[Building] = []
+    for b in sorted(fillers, key=lambda b: -(b.footprint.width * b.footprint.length)):
+        bw, bl = b.footprint.width, b.footprint.length
+        best, best_score = None, -1
+        for y in range(grid.height - bl + 1):
+            for x in range(grid.width - bw + 1):
+                if not grid.fits(x, y, bw, bl):
+                    continue
+                # tightness = how enclosed this spot is; prefer the most enclosed
+                score = 0
+                for dx in range(bw):
+                    for yy in (y - 1, y + bl):
+                        if not grid.fits(x + dx, yy, 1, 1):
+                            score += 1
+                for dy in range(bl):
+                    for xx in (x - 1, x + bw):
+                        if not grid.fits(xx, y + dy, 1, 1):
+                            score += 1
+                if score > best_score:
+                    best, best_score = (x, y), score
+        if best is None:
+            unplaced.append(b)
+            continue
+        grid.occupy(best[0], best[1], bw, bl)
+        cand.buildings.append(replace(b, footprint=Footprint(best[0], best[1], bw, bl)))
+        placed_any.append(b)
+    return unplaced
+
+
 def validate(layout_src: Layout, pattern: Pattern,
              positions: dict) -> tuple[str, Layout | None, int]:
     consumers = layout_src.road_needing()
@@ -690,13 +752,9 @@ def validate(layout_src: Layout, pattern: Pattern,
         occupied |= b.footprint.cells()
     free = region - occupied
     grid = Grid(w, h, {(x, y) for x in range(w) for y in range(h)} - free)
-    for b in sorted(fillers, key=lambda b: -(b.footprint.width * b.footprint.length)):
-        bw, bl = b.footprint.width, b.footprint.length
-        spot = first_fit(grid, bw, bl)
-        if spot is None:
-            return ("SAT_FILLER_FAIL", None, len(roads))
-        grid.occupy(spot[0], spot[1], bw, bl)
-        cand.buildings.append(replace(b, footprint=Footprint(spot[0], spot[1], bw, bl)))
+    unplaced = _place_fillers(grid, fillers, cand)
+    if unplaced:
+        return ("SAT_FILLER_FAIL", None, len(roads))
     bad = rotated_buildings(cand, canonical_dims(layout_src))
     if bad:
         return ("SAT_ROTATED", None, len(roads))
