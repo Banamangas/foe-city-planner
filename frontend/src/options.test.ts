@@ -1,8 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  applyPreset, byGroup, cliPreview, initialValues, isModified, modifiedCount,
-  secondsToMinutes, specDefault,
-} from "./options";
+import { applyPreset, budgetWarning, byGroup, cliPreview, initialValues, isModified, modifiedCount, screenBanner, secondsToMinutes, specDefault } from "./options";
 import type { OptionSpec } from "./types";
 
 const specs: OptionSpec[] = [
@@ -92,5 +89,61 @@ describe("secondsToMinutes", () => {
     expect(secondsToMinutes("600")).toBe(10);
     expect(secondsToMinutes("30")).toBe(1);
     expect(secondsToMinutes("")).toBe(1);
+  });
+});
+
+describe("budgetWarning", () => {
+  it("is silent when a probe is a small share of the box", () => {
+    expect(budgetWarning({ time_box: "300", probe_limit: "30" })).toBeNull();
+  });
+
+  it("warns when one probe exceeds half the box", () => {
+    const msg = budgetWarning({ time_box: "60", probe_limit: "40" });
+    expect(msg).toContain("over half");
+  });
+
+  it("warns hardest when one probe is as long as the whole box", () => {
+    // the shipped defect: probe_limit=300 in a 120s box measured 292s (2.43x)
+    const msg = budgetWarning({ time_box: "120", probe_limit: "300" });
+    expect(msg).toContain("at least 300s");
+  });
+
+  it("is silent on missing or nonsensical values rather than shouting", () => {
+    expect(budgetWarning({})).toBeNull();
+    expect(budgetWarning({ time_box: "", probe_limit: "30" })).toBeNull();
+    expect(budgetWarning({ time_box: "0", probe_limit: "30" })).toBeNull();
+  });
+});
+
+describe("screenBanner", () => {
+  const s = (verdict: string) => ({
+    verdict, reason: "because", road_pressure: 0.9, consumers: 146,
+    slack: 268, region_cells: 2736, building_area: 2468,
+  }) as any;
+
+  it("shows nothing for a city we expect to work", () => {
+    expect(screenBanner(s("LIKELY"))).toBeNull();
+  });
+
+  it("shows nothing when the screen is absent", () => {
+    expect(screenBanner(undefined)).toBeNull();
+    expect(screenBanner(null)).toBeNull();
+  });
+
+  it("warns severely for UNLIKELY but still allows the run", () => {
+    const b = screenBanner(s("UNLIKELY"))!;
+    expect(b.severity).toBe("bad");
+    expect(b.canStillRun).toBe(true);
+  });
+
+  it("warns softly outside the measured range", () => {
+    const b = screenBanner(s("UNCERTAIN"))!;
+    expect(b.severity).toBe("warn");
+    expect(b.canStillRun).toBe(true);
+  });
+
+  it("only INFEASIBLE says the run cannot help", () => {
+    // buildings already exceed the region -- the one case that is provable
+    expect(screenBanner(s("INFEASIBLE"))!.canStillRun).toBe(false);
   });
 });
