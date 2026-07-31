@@ -241,3 +241,15 @@ def test_runner_translates_ui_strings_to_search_arguments():
     assert _parse_range("3,4") == (3, 4)
     assert _parse_pitches("off") is None
     assert _parse_pitches("12-18") == (12, 13, 14, 15, 16, 17, 18)
+
+
+def test_best_preset_probe_limit_cannot_overrun_a_short_time_box():
+    """The k-walk checks its deadline only AFTER a probe returns, so a
+    probe_limit at or above the time box makes the run overrun its promise --
+    measured 2.43x at a 120s box with probe_limit=300. The preset must stay well
+    under a typical user budget."""
+    from webapp.params import BEST_PRESET, DEFAULTS
+    limit = BEST_PRESET.get("probe_limit", DEFAULTS["probe_limit"])
+    assert limit <= 60.0, (
+        f"BEST_PRESET probe_limit={limit}s overruns short boxes; measured "
+        "10/20/40s all reach identical quality at 1.01x the box")

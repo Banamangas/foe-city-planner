@@ -170,17 +170,28 @@ SMOKE_PRESET: dict = {
     "workers": 1, "probe_workers": 1,
 }
 
-# The configuration that holds this project's records on BOTH measured cities:
-# darkzig 94 roads (121% efficiency, was 250 as found) and FR16 76 (116%).
-# Measured against the previous best settings at equal probe count: SAT rate
-# 46.7% -> 69.6%, and the screen alone reached 94 where the older filter needed a
-# 496-solve polish pass. See tasks/lessons.md 2026-07-31.
+# The best settings for a USER-FACING run. The skeleton family and quality band
+# are the ones that hold this project's records on both measured cities (darkzig
+# 94 roads / 121% efficiency, FR16 76 / 116%) -- measured against the previous
+# best settings at equal probe count, SAT rate 46.7% -> 69.6%.
+#
+# probe_limit is deliberately 30 s, NOT the 300 s the research runs used. The
+# k-walk checks its deadline only AFTER a probe returns (there is no mid-probe
+# interruption), so a probe_limit at or above the time box overruns it: measured
+# at a 120 s box, probe_limit 300 took 292 s (2.43x) while 10/20/40 s all took
+# 121 s (1.01x) and reached IDENTICAL quality. Short probes cost nothing for this
+# family -- unlike the lane family, where 30 s missed every known-feasible
+# pattern (tasks/lessons.md 2026-07-22).
+#
+# Expect ~111 roads from a 2-minute box, not 94: the record needed ~10 core-hours
+# of screening plus a 496-solve polish pass. 111 is still a 56% cut on darkzig as
+# found (250) and 30% better than the classical pipeline (158).
 BEST_PRESET: dict = {
     "pattern_family": "nonuniform",
     "quality_index_band": "3,4",
     "th_anchors": "full",
     "patterns": 200,
-    "probe_limit": 300.0,
+    "probe_limit": 30.0,
     "seed_polish": 12,
     "concurrent_levels": 4,
 }

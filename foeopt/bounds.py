@@ -30,19 +30,47 @@ def report_bounds(layout: Layout) -> dict[str, int]:
     return bounds
 
 
-def pick_k_start(layout: Layout) -> int:
+# Margin added to sigma_half per pattern family. Feasibility sits ABOVE
+# sigma_half for the comb/lane families and BELOW it for the nonuniform family,
+# so the sign of the margin differs -- see pick_k_start.
+K_START_MARGIN: dict[str, int] = {"comb": 8, "lane": 8, "nonuniform": -4}
+
+
+def pick_k_start(layout: Layout, family: str = "comb") -> int:
     """City-aware k_start for the roads-first k-walk.
 
-    k_start = min(k_max, ceil(sigma_half) + 8) where:
+    k_start = min(k_max, ceil(sigma_half) + margin) where:
       k_max      = region_cells - building_area  (hard area ceiling; above it
                    no placement is possible by simple area accounting)
       sigma_half = sum(min(w, l) for each road-needing consumer) / 2
                    (the 100%-efficiency anchor; optima sit at or below it via
                    stubs/junctions serving 3 buildings per road cell)
 
-    Margin 8 keeps the first probe almost always feasible for the comb family
-    while skipping the slack above sigma_half. If sigma_half + 8 is infeasible
-    the upward fallback walks up (capped at k_max). Never exceeds k_max.
+    **The margin depends on the family, because feasibility sits on opposite
+    sides of sigma_half for them.**
+
+    `comb`/`lane`: **+8**, unchanged. Keeps the first probe almost always
+    feasible while skipping the slack above sigma_half.
+
+    `nonuniform`: **-4**. This family is feasible *below* sigma_half -- its
+    records are darkzig 94 at k=105 (sigma/2=114) and FR16 76 at k=84
+    (sigma/2=88). With the +8 margin a short run burns its whole budget above
+    the region where results live: measured at a 120 s box, k_start=auto (123)
+    reached only 111 roads and never left its starting level, while k_start=106
+    reached 98. Measured gains from the -4 margin at a 120 s box:
+    darkzig 111 -> 103, **FR16 90 -> 76 (its all-time record, in two minutes)**.
+
+    Why -4 and not the -8 that is optimal on darkzig: **the cliff is sharp and
+    the penalty is asymmetric.** One step of 4 too low returns FAMILY_TOO_WEAK --
+    nothing at all, not a worse answer -- while too high merely wastes budget.
+    Measured cliffs: darkzig 106 works / 104 fails; FR16 84 works / 80 fails. So
+    -8 is optimal on darkzig and **fatal on FR16**. -4 is the largest margin safe
+    on both cities measured. A derived alternative (sigma_half / 1.21 + 9, from
+    the ~120% efficiency both cities reach) lands below both cliffs and was
+    rejected for that reason.
+
+    If the first probe is infeasible the upward fallback walks up (capped at
+    k_max). Never exceeds k_max.
 
     Not a bound -- a starting guess. The walk-down stops at the first
     INCONCLUSIVE/INFEASIBLE level, as today (bound_adjacency is unreachable
@@ -52,7 +80,8 @@ def pick_k_start(layout: Layout) -> int:
     k_max = region_cells - building_area
     sigma_half = sum(min(b.footprint.width, b.footprint.length)
                      for b in layout.road_needing()) / 2
-    return min(k_max, math.ceil(sigma_half) + 8)
+    margin = K_START_MARGIN.get(family, K_START_MARGIN["comb"])
+    return max(1, min(k_max, math.ceil(sigma_half) + margin))
 
 
 # --- Instance screening (heuristic, NOT bounds) -----------------------------
