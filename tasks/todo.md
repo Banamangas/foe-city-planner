@@ -654,7 +654,7 @@ produced the 98): rho = **+0.760**, with a near-perfect split — lower half by 
 `[98,99,99,101,101,101,102,102,102,103]`, upper half `[103,105,105,106,106,106,106,107,108,108]`.
 **This was the gate that decided whether RL on the real objective is possible at all. It passed.**
 
-## Step 5 — skeleton-generation RL: **CLOSED on evidence (2026-07-30)**
+## Step 5 — skeleton-generation RL: ~~CLOSED~~ **REOPENED (2026-07-31)** — see correction below
 
 Step 4 passed, so RL finally has what it always lacked: free feasibility and a validated
 in-distribution reward (`mean_free_adjacency`, rho **+0.825** *within* the grammar it would
@@ -670,13 +670,18 @@ neither holds enough to justify training anything.
       polished to **96** — against a 95 baseline the cheap pipeline already reaches in ~11
       core-hours with no training. Verdict SATURATED.
 - [x] **Perturbation/diffusion around good skeletons is dead:** 0-for-64.
-- [ ] **The one open door:** test 1's arms were unmatched — the 95 used the
+- [x] **The one open door — RUN, and it overturned the closure:** test 1's arms were unmatched — the 95 used the
       `mean_free_adjacency` quality filter, the non-uniform run did not. A matched re-run
       (non-uniform + `--quality-top`) is one screen. If it dips below 95, headroom returns and
       guided search over per-branch parameters becomes interesting again. Until then: closed.
 
-**Recommendation: RL stays closed.** Not because it cannot work — because the cheap methods kept
-eating the margin it was meant to capture (158 -> 102 -> 95, none of it learned).
+~~**Recommendation: RL stays closed.**~~ **SUPERSEDED 2026-07-31.** The matched re-run (the
+"open door" item below, which I should have run before committing the closure) reached **94** —
+a new record, verified. So headroom inside the grammar is real, and all four conditions for a
+guided search now hold simultaneously: ~10^19 space, 47% SAT feasibility, rho +0.825 in-grammar
+reward, and measured headroom. **RL is reopened**, though a bandit/CEM over the per-branch vector
+remains the cheaper first move — every record to date has come from cheap methods, this one
+included. See the 2026-07-31 correction entry in `tasks/lessons.md`.
 
 ## Multi-city generalisation (2026-07-30) — it transfers, with a measurable boundary
 

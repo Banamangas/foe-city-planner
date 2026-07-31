@@ -161,11 +161,11 @@ def gen_nonuniform(region, th, k, rng, *, gap_lo, gap_hi, skew, both_prob,
     return None, None
 
 
-def build_pool(region, th_anchors, k, rng, pool):
+def build_pool(region, th_anchors, k, rng, pool, skews=(0.0, 1.0, 2.0)):
     """[(family, Pattern)] over a sweep of the two lifted constraints."""
     specs = []
     for gaps in ((8, 14), (10, 18), (12, 22)):
-        for skew in (0.0, 1.0, 2.0):
+        for skew in skews:
             specs.append((f"g{gaps[0]}-{gaps[1]}-s{skew:g}", gaps, skew))
     out, seen = [], set()
     per = max(1, pool // len(specs))
@@ -194,6 +194,52 @@ def build_pool(region, th_anchors, k, rng, pool):
             out.append((family, pat))
             made += 1
     return out
+
+
+def known_population(region, th_fp, k):
+    """Every skeleton the existing generators can already produce at this k."""
+    known = set()
+    for gen, kw in ((generate_patterns, {}), (generate_lane_patterns, {}),
+                    (generate_lane_patterns, {"pitches": tuple(range(12, 19))})):
+        known |= {p.roads for p in gen(region, th_fp.width, th_fp.length, k,
+                                       random.Random(0), 10 ** 9, th_mode="full", **kw)}
+    return known
+
+
+def select_take(region, consumers, scorer, th_anchors, th_fp, k, rng, *,
+                pool, probe, skews, opts_top, quality_top, log=None):
+    """The screen's pattern selection, factored out so the polish pass rebuilds
+    the SAME patterns by index. Consumes `rng` identically to the screen -- same
+    seed + same k order + same pool/skews reproduces the sample exactly, which
+    is what the recorded-`th` guard in the polish pass verifies.
+    """
+    known = known_population(region, th_fp, k)
+    cands = build_pool(region, th_anchors, k, rng, pool, skews)
+    alive = [(f, p) for f, p in cands
+             if p.roads not in known and prefilter(p, region, consumers) is None]
+    if log:
+        log(f"k={k}: {len(cands)} generated, {len(alive)} novel+alive")
+    if quality_top is None:
+        fams = sorted({f for f, _ in alive})
+        share = max(1, probe // max(1, len(fams)))
+        take = []
+        for fam in fams:
+            sub = sorted((fp for fp in alive if fp[0] == fam),
+                         key=lambda fp: -scorer.opts_total(fp[1].th, fp[1].roads))
+            take.extend(sub[:share])
+        return take
+    n1 = max(probe, int(opts_top * len(alive)))
+    alive = sorted(alive, key=lambda fp: -scorer.opts_total(fp[1].th, fp[1].roads))[:n1]
+    n2 = max(probe, int(quality_top * len(alive)))
+    alive = sorted(alive,
+                   key=lambda fp: mean_free_adjacency(region, fp[1].th, fp[1].roads))[:n2]
+    if log:
+        mf = [mean_free_adjacency(region, p.th, p.roads) for _, p in alive]
+        log(f"  filtered: opts top {opts_top:.0%} -> {n1}, then mfa lowest "
+            f"{quality_top:.0%} -> {len(alive)} (mfa {min(mf):.4f}-{max(mf):.4f})")
+    shuffled = list(alive)
+    rng.shuffle(shuffled)
+    return shuffled[:probe]
 
 
 def spread_stats(region, roads, th):
@@ -297,6 +343,13 @@ def main() -> int:
     ap.add_argument("--preflight", action="store_true")
     ap.add_argument("--floor", type=int, default=FLOOR,
                    help="record to beat for the HEADROOM/SATURATED verdict")
+    ap.add_argument("--quality-top", type=float, default=None,
+                   help="matched-to-arm-C mode: after the opts_total slice, keep the "
+                        "LOWEST fraction by mean_free_adjacency, then sample uniformly")
+    ap.add_argument("--opts-top", type=float, default=0.10,
+                   help="opts_total slice kept before the quality filter")
+    ap.add_argument("--skews", default=None,
+                   help="branch-length skews to generate, e.g. '1,2'. Default all (0,1,2)")
     ap.add_argument("--opts-ref", type=int, default=None,
                    help="this city's opts_total on a known-feasible skeleton; "
                         "gate 2 is skipped when absent (the value is city-relative)")
@@ -305,6 +358,8 @@ def main() -> int:
 
     layout = load_layout(args.city)
     ks = [int(x) for x in args.k.split(",")]
+    skews = (tuple(float(x) for x in args.skews.split(",")) if args.skews
+             else (0.0, 1.0, 2.0))
     if args.preflight:
         return preflight(layout, ks, min(args.pool, 3000), args.seed, args.opts_ref)
 
@@ -322,25 +377,12 @@ def main() -> int:
 
     payloads, meta = [], {}
     for k in ks:
-        known = set()
-        for gen, kw in ((generate_patterns, {}), (generate_lane_patterns, {}),
-                        (generate_lane_patterns, {"pitches": tuple(range(12, 19))})):
-            known |= {p.roads for p in gen(region, th_fp.width, th_fp.length, k,
-                                           random.Random(0), 10 ** 9,
-                                           th_mode="full", **kw)}
-        cands = build_pool(region, th_anchors, k, rng, args.pool)
-        alive = [(f, p) for f, p in cands
-                 if p.roads not in known and prefilter(p, region, consumers) is None]
-        print(f"k={k}: {len(cands)} generated, {len(alive)} novel+alive", flush=True)
-        fams = sorted({f for f, _ in alive})
-        share = max(1, args.probe // max(1, len(fams)))
-        take = []
-        for fam in fams:
-            sub = sorted((fp for fp in alive if fp[0] == fam),
-                         key=lambda fp: -scorer.opts_total(fp[1].th, fp[1].roads))
-            take.extend(sub[:share])
-        print(f"  probing {len(take)}: {dict(collections.Counter(f for f, _ in take))}",
-              flush=True)
+        take = select_take(region, consumers, scorer, th_anchors, th_fp, k, rng,
+                           pool=args.pool, probe=args.probe, skews=skews,
+                           opts_top=args.opts_top, quality_top=args.quality_top,
+                           log=lambda m: print(m, flush=True))
+        print(f"  probing {len(take)}: "
+              f"{dict(collections.Counter(f for f, _ in take))}", flush=True)
         for idx, (fam, pat) in enumerate(take):
             payloads.append((k, idx, pat))
             meta[(k, idx)] = {
