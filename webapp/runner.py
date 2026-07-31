@@ -49,7 +49,8 @@ class JobManager:
                pattern_family: str = "comb", stub_priority: bool = False,
                lane_cap: int | None = None, warm_start: bool = False,
                warm_start_budget: float = 30.0,
-               quality_index_band: str = "off", lane_pitches: str = "off") -> str:
+               quality_index_band: str = "off", lane_pitches: str = "off",
+               exact_repair: float = 0.0) -> str:
         """Start a RoadsFirstSearch in a background thread and return its id.
 
         Keyword names match webapp.params.OPTION_SPECS one for one, so the
@@ -105,6 +106,7 @@ class JobManager:
                     lane_cap=lane_cap, hint_layout=hint_layout,
                     quality_index_band=_parse_range(quality_index_band),
                     lane_pitches=_parse_pitches(lane_pitches),
+                    exact_repair=exact_repair,
                 )
                 res = search.run(on_improvement=on_improvement,
                                  on_status=on_status,
