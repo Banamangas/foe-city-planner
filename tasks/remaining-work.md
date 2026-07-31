@@ -198,3 +198,53 @@ with these edits in the same files — noted in its commit message.
 
 **Decide before merging:** whether item 1.1 (the `seed_polish` overrun) should be fixed on this
 branch first, since it is a defect in a shipped default rather than a missing feature.
+
+---
+
+## 8. Filler packing — premise tests (2026-08-01)
+
+Both approaches proposed after the user described their manual packing method were
+premise-tested before any build, on the user's own city (ground truth: all 231 fillers
+provably fit; free 2486 cells, filler area 2483, **slack 3**).
+
+### A. Region partitioning — premise HOLDS (and my prediction was wrong)
+
+I predicted the free space would shatter into slivers in a 99.9%-dense city. It does not.
+Greedy maximal-rectangle carve of the free space gives **23 rectangles, zero of them 1x1**:
+
+    98% of free area sits in rectangles of >=16 cells (17 rects)
+    largest three:  13x48 (624),  39x14 (546),  9x44 (396)
+    those three alone tile 85 4x4 slots — and only 77 4x4 fillers exist
+
+So the user's method has literal zones to work with. "Dedicate this region to the 4x4s"
+is directly implementable; it is not defeated by geometry.
+
+Caveat: this measures the free space left by the **expert's own** roads+consumers. A
+skeleton the search invents may fragment worse. Re-measure on a search-produced layout
+before trusting the number generally.
+
+### B. Exact CP-SAT packing — premise HOLDS, with a price
+
+Model over SIZE CLASSES, not individual buildings (231 identical-building permutations
+would otherwise be pure symmetry). No rotation (domain constraint), so (4,3) and (3,4)
+are distinct classes. 31203 booleans, 2486 at-most-one cell constraints.
+
+    limit  0.5-2s  ->  UNKNOWN    no solution at all (presolve still running)
+    limit    5s    ->  FEASIBLE   218/231   (worse than greedy)
+    limit   10s    ->  FEASIBLE   229/231   (greedy plateaus at 222)
+    limit   60s    ->  FEASIBLE   230/231
+    limit  300s    ->  FEASIBLE   230/231   — no further gain, optimality NOT proven
+    hard feasibility (== 231), 60s -> UNKNOWN
+
+Verdict: tractable and clearly better than greedy (+7 at 10s, +8 at 60s), but at this
+density it is a **strong heuristic, not an exact oracle** — it never reached the known
+feasible 231 and never proved a bound. The `Maximize(area)` formulation with `<= n_s`
+massively outperforms the hard `== n_s` feasibility formulation; use it.
+
+Build notes if this proceeds:
+- Warm-start from the greedy solution (`AddHint`) so the pass can never return worse than
+  greedy — this also removes the sub-5s window where it loses.
+- ~10s is the cost at MAX scale (231 fillers). Search instances are far smaller (FR16: 32
+  fillers, ~10x smaller model), so the repair pass should be sub-second there — untested.
+- Shape: repair pass only on layouts that would otherwise be discarded as SAT_FILLER_FAIL,
+  never in the inner loop.
