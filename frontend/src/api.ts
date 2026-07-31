@@ -1,6 +1,6 @@
 import type {
   LoadResponse, CityListItem, LayoutListItem, Improvement,
-  BuildingSummary, BuildingView, RoadView, Palette,
+  BuildingSummary, BuildingView, RoadView, Palette, OptionsResponse,
 } from "./types";
 
 export function parseSSE(buffer: string): { event: string; data: any }[] {
@@ -67,9 +67,11 @@ async function jsonGet(path: string): Promise<any> {
 }
 
 export const apiLoad = (slim: unknown): Promise<LoadResponse> => jsonPost("/api/load", slim);
+export const apiOptions = (): Promise<OptionsResponse> => jsonGet("/api/options");
+/** Run parameters ride along untyped: /api/options declares them, the server validates them. */
 export const apiOptimize = (
-  body: { city_id: string; time_box: number; seed_polish?: number },
-): Promise<{ job_id: string }> => jsonPost("/api/optimize", body);
+  body: { city_id: string } & Record<string, unknown>,
+): Promise<{ job_id: string; options: Record<string, unknown> }> => jsonPost("/api/optimize", body);
 export const apiStop = (jobId: string): Promise<any> => jsonPost(`/api/stop/${jobId}`, {});
 export const apiCities = (): Promise<CityListItem[]> => jsonGet("/api/cities");
 export const apiCity = (id: string): Promise<any> => jsonGet(`/api/cities/${id}`);
