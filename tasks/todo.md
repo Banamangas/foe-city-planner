@@ -654,7 +654,7 @@ produced the 98): rho = **+0.760**, with a near-perfect split — lower half by 
 `[98,99,99,101,101,101,102,102,102,103]`, upper half `[103,105,105,106,106,106,106,107,108,108]`.
 **This was the gate that decided whether RL on the real objective is possible at all. It passed.**
 
-## Step 5 — skeleton-generation RL: ~~CLOSED~~ **REOPENED (2026-07-31)** — see correction below
+## Step 5 — skeleton-generation RL: reopened on headroom, **CLOSED AGAIN on mechanism (2026-07-31)**
 
 Step 4 passed, so RL finally has what it always lacked: free feasibility and a validated
 in-distribution reward (`mean_free_adjacency`, rho **+0.825** *within* the grammar it would
@@ -679,9 +679,14 @@ neither holds enough to justify training anything.
 "open door" item below, which I should have run before committing the closure) reached **94** —
 a new record, verified. So headroom inside the grammar is real, and all four conditions for a
 guided search now hold simultaneously: ~10^19 space, 47% SAT feasibility, rho +0.825 in-grammar
-reward, and measured headroom. **RL is reopened**, though a bandit/CEM over the per-branch vector
-remains the cheaper first move — every record to date has come from cheap methods, this one
-included. See the 2026-07-31 correction entry in `tasks/lessons.md`.
+reward, and measured headroom. **RL was reopened** on that evidence — then closed again on mechanism, measured rather than
+argued: **within the productive band nothing predicts `achieved`** (106 in-band SATs, all
+|rho| < 0.22 across nine features). `mean_free_adjacency`'s rho +0.825 was the *band* effect; it
+is a **classifier, not a gradient**, and is flat (-0.147) inside the band. There is no surface for
+a bandit/CEM/policy to climb — the residual variance is CP-SAT seed luck, which `seed_polish`
+already exploits. **The learnable structure is a filter, and it is now one integer test
+(`losses - 2c in {3,4}`) shipped in `foeopt.roads_first.quality_index`.**
+See the two 2026-07-31 entries in `tasks/lessons.md`.
 
 ## Multi-city generalisation (2026-07-30) — it transfers, with a measurable boundary
 
@@ -704,3 +709,24 @@ included. See the 2026-07-31 correction entry in `tasks/lessons.md`.
 **Practical boundary on current evidence:** ~60-80 road-needing buildings, road pressure <= ~0.5.
 That is whether it WORKS; whether it is WORTH running is a separate axis — darkzig went 250 -> 95
 (46% -> 121% efficiency) precisely because it started badly built.
+
+
+## Track F productionisation (2026-07-31) — shipped, opt-in, defaults unchanged
+
+- [x] **`generate_nonuniform_patterns`** in `foeopt/roads_first.py`: the family holding the
+      records on both cities (darkzig 94, FR16 76). Its space is ~10^19 so it SAMPLES rather than
+      enumerates — documented, and the band filter is applied *during* generation.
+- [x] **`quality_index()`** — `losses - 2c`, the derived k-normalised band filter. Replaces the
+      bottom-slice cut: SAT rate 46.7% -> 69.6% at equal quality, and the screen alone reached 94
+      where the bottom cut needed a 496-solve polish pass.
+- [x] **`RoadsFirstSearch`** accepts `pattern_family="nonuniform"`, `quality_index_band`,
+      `lane_pitches`. **`webapp/params.py`** exposes all three; `runner.py` translates the UI
+      strings. Defaults unchanged (`comb` / `off` / `off`) — zero behaviour change when unused.
+- [x] **Time-box question resolved by measurement:** `opts_total` needs 239 s for a 160k
+      population and cannot fit a 60-120 s budget; the band predicate needs 15 s materialised and
+      is effectively free applied during generation. **Production uses the band, not the scorer.**
+- [x] **`road_pressure()` / `screen_city()`** in `foeopt/bounds.py` — microsecond instance screen,
+      explicitly marked heuristic-not-bound. Would have declined FR24 before 13 core-hours.
+- [ ] **Not done:** `screen_city` is not surfaced in the webapp UI; no end-to-end timing run of
+      the nonuniform family inside a real 60-120 s box; `SAT_FILLER_FAIL` (34% of FR16 probes)
+      still untreated.

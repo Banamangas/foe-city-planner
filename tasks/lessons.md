@@ -2395,3 +2395,71 @@ window (~1.96-1.98 here). Cheap fix, untested.
 the track.** I recorded "the arms were unmatched" as a caveat and committed the closure anyway.
 One screen refuted it. A caveat that can be tested in one run is not a caveat -- it is the next
 experiment.
+
+## The filter was the wrong SHAPE: `quality_index` band beats the bottom slice, and it is derived not tuned (2026-07-31)
+
+**`quality_index = (2 - mean_free_adjacency) * k` reduces exactly to `losses - 2c`** — adjacencies
+the skeleton spends on the region boundary/TH, minus twice its component count. An integer, and
+k-normalised by construction, so it compares across cities and budgets.
+
+**Every record this project holds sits at index 3-4; both >=98-road layouts sit at 2:**
+
+| layout | k | achieved | index |
+|---|---|---|---|
+| darkzig 94 / 94 / 94 | 105 | 94 | **4 / 4 / 4** |
+| darkzig 95 | 105 | 95 | **3** |
+| darkzig 97 / 97 | 105/106 | 97 | **4 / 3** |
+| **FR16 76** | **84** | **76** | **4** |
+| darkzig 98 / 99 | 105 | 98 / 99 | 2 / 2 |
+
+FR16 at k=84 landing in the same band as darkzig at k=105 is the cross-city check that the index
+is genuinely normalised rather than a darkzig coincidence.
+
+**Why the previous filter was wrong.** `--quality-top 0.40` kept the LOWEST 40% by mfa. Measured
+on the k=105 opts-filtered pool: mfa is quantised in steps of 1/k, the productive band sits at
+percentiles **p14-p52**, and the cut kept **p0-p40** — wasting a seventh of the budget *below* the
+band (too-tight skeletons that only return UNKNOWN) while excluding a quarter of the band itself.
+**The optimum is an interior BAND, not a bottom slice.** Arm C's quintile data had said the same
+(q1 36% SAT, q2 93%) and I built a bottom cut anyway.
+
+**A/B, same seed and same 240 probes, only the selection differing:**
+
+| | bottom-40% by mfa | **band [3,4]** |
+|---|---|---|
+| SAT rate | 46.7% | **69.6%** (+49%) |
+| median achieved | 100 | 100 |
+| screen best | 96 | **94** |
+| solves needed to reach 94 | 496 (polish pass) | **0 — the screen alone** |
+
+A **third independent 94** came out of it, verified (`exact_route` 94 OPTIMAL, 224/224, rotated=0,
+0 unsatisfied), at index 4 as predicted. `docs/records/darkzig-94-roads-band-k105.json`.
+
+**And it is 15x cheaper than the filter it replaces**, which is what makes it shippable:
+`opts_total` costs 1.494 ms/pattern (239 s for a 160k population — cannot fit a 60-120 s user
+budget); `mean_free_adjacency` costs 0.096 ms (15.4 s), and as a *predicate applied during
+generation* it is effectively free (200 banded patterns in 0.6 s).
+
+## The surrogate is a CLASSIFIER, not a gradient — so bandit/CEM/RL over the per-branch vector is dead (2026-07-31)
+
+Checked before building the guided search that the reopened Track F step 5 pointed at.
+**Within the productive band, nothing predicts `achieved`** (106 in-band SATs, all |rho| < 0.22):
+
+    branch_mean +0.05   branch_spread +0.09   longest_branch +0.08   gap_lo -0.22
+    n_branches  +0.19   n_fronts      +0.19   opts_total     +0.19   skew   -0.15
+    quality_index -0.15  k +0.18
+
+So `mean_free_adjacency`'s celebrated **rho +0.825 was almost entirely the BAND effect** — it
+separates in-band from out-of-band and is flat (-0.147) inside. There is no gradient for a policy
+to climb. The residual variance is **CP-SAT seed luck**, which `seed_polish` already exploits
+directly (22 of 31 skeletons improved by 1-4 roads).
+
+**Consequence: the learnable structure in this problem is a filter, and it is now extracted into
+one integer test.** What remains is irreducible solver noise, and the right attack on noise is
+more seeds, not a learned policy. This supersedes the 2026-07-31 "RL reopened" entry: reopened on
+headroom, closed again on *mechanism* — the headroom is real but is not reachable by learning,
+because within the reachable region the objective is flat.
+
+**Generalisable:** a surrogate with a high rank correlation may be a classifier in disguise.
+Before building an optimiser on it, re-measure the correlation *inside the region the optimiser
+would actually search*. Here that one check turned a 10^19-space "guided search is now justified"
+into "there is nothing to search".
