@@ -109,8 +109,13 @@ it is still n=2.
       k=246-266. Every probe UNKNOWN (undecided, *not* refuted). Open question whether it is
       road pressure (0.89) or CP-SAT model size (146 consumers)
 - [ ] **60 s and 600 s boxes** with the fixed `k_start` — only 120 s was verified end-to-end
-- [ ] **A real webapp run** — every measurement drove `RoadsFirstSearch` directly; the Flask
-      layer + SSE streaming + the UI have never been exercised end to end at these settings
+- [x] **A real webapp run — DONE at close, PASS.** Live Flask server: `/api/load` returned the
+      instance screen (LIKELY, pressure 0.405); `/api/optimize` applied BEST_PRESET at a 60 s
+      box; the k-walk started at the family-aware `k_start=111`; SSE streamed four progressive
+      improvements (107 -> 105 -> 104 -> **101**); the `done` event reported
+      `best_achieved=101`, wall 62.1 s (**1.03x** — the box was honoured).
+- [ ] **60 s reached the same 101 as 120 s** — the box may be shorter than necessary. Cheap
+      follow-up: sweep 30 / 45 / 60 s to find where quality actually starts to degrade
 
 ---
 
