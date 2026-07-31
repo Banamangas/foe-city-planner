@@ -2592,3 +2592,64 @@ with time units that is not derived from the deadline. Grep for those: here it w
 `probe_limit`, `seed_polish`, `warm_start_budget` -- three of the four found that way, and the
 fourth (`pick_k_start`) was a heuristic that wasted the budget rather than overrunning it, which
 the same audit surfaced because it asked "what does this phase spend?"
+
+## SAT_FILLER_FAIL: half of them were the packer giving up, not the city being full (2026-07-31)
+
+34% of FR16 probes returned `SAT_FILLER_FAIL` -- CP-SAT places every road-needing consumer, then
+the *filler* buildings (the ones needing no road access) have nowhere to go, and the whole layout
+is discarded. A user saw a run that found nothing, with no explanation.
+
+**Mining the 91 recorded failures first (free, no compute) answered more than the probe runs did:**
+- **The quality band does NOT avoid them** -- 38% fail in-band vs 42% out. Kills the "we already
+  fixed this" hypothesis for the price of reading a log.
+- **`k` drives it**: 25% / 41% / 52% at k=84 / 88 / 92. More roads, less room.
+- **Branch structure drives it harder**: `g12-22-s2` 12% vs `g8-14-s0` 69%.
+- **Mechanism is fragmentation**, agreeing on two measures: failures have more branches
+  (`n_fronts` AUC 0.658) and *higher* `opts_total` (AUC 0.704) -- looser skeletons that chop the
+  leftover space into unusable pieces.
+- **No trade-off to manage:** the settings already shipped (wide gaps, unequal branches, low k)
+  are simultaneously the best-quality *and* the lowest-failure region.
+
+**Then 12 real failures, four packing strategies:**
+
+| strategy | mean placed of 32 | **FULL 32/32** |
+|---|---|---|
+| current (area-desc, first-fit, stop at first miss) | 11.0 | **0/12** |
+| + never stop early | 30.7 | 0/12 |
+| maxside-desc + never stop early | 30.5 | 2/12 |
+| **best-fit + never stop early** | 31.2 | **6/12 (50%)** |
+
+**The mean was the wrong metric and I nearly shipped the wrong fix because of it.** At n=4 the
+means were tied (30.8 vs 30.8) and I concluded best-fit "doesn't earn its cost". But every
+building must be placed, so 31/32 is as invalid as 11/32: **only the FULL column decides
+validity**, and there best-fit recovers half the failures while not-stopping-early recovers none.
+
+**Cost, measured before shipping:** first-fit -> best-fit is 2.7ms -> 42ms on FR16 (32 fillers)
+and 26.7ms -> 434ms on darkzig (160 fillers). 16x relative, but **at most 1.45% of a single 30s
+probe**, once per SAT. Shipped.
+
+**Also shipped:** `prefilter` can now count filler area. It never did, so a pattern with room for
+the consumers and none for everything else passed the arithmetic and burned a full CP-SAT probe
+before failing. Sound (rejects only the already-doomed) and optional for backwards compatibility.
+
+### Four bad experiments before one good one -- the pattern in my own errors
+
+| attempt | what I changed to make it cheap | result |
+|---|---|---|
+| 1 | k=88, 19 patterns | n=1 |
+| 2 | `probe_limit` 300 -> 25 | **0 SATs in 43 probes, no data at all** |
+| 3 | dropped the `opts_total` ranking | 3 SATs in 48 probes |
+| 4 | restored both | 32 SATs, 12 failures, decisive |
+
+Every time I simplified the harness for speed I removed a property the measurement depended on --
+and #2 is precisely the 2026-07-22 `d` lesson (30s found 0 of 4 known-feasible patterns, 300s
+found 4 of 4) repeated by the person who wrote it down. **A harness is not overhead; the parts
+that make probes resolve ARE the experiment.** Meanwhile the free log-mining produced the most
+useful findings of the whole sub-task, reinforcing the standing lesson that the previous
+experiment's recorded results are the cheapest input to the next one.
+
+**Still open:** best-fit leaves 6 of 12 unrecovered, all at 29-31 of 32 -- so the layouts are
+~95% complete and are still discarded whole. Two candidates, neither measured: retry only the
+unplaced stragglers with a wider search (cheap -- a handful of items, not 32), and reporting
+`placed N of M` to the user instead of a binary failure, since fillers need no road access and a
+user may accept a layout missing one decorative building.
