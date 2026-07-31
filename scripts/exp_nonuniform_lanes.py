@@ -206,8 +206,25 @@ def known_population(region, th_fp, k):
     return known
 
 
+def quality_index(region, th, roads, k):
+    """`(2 - mean_free_adjacency) * k`, which reduces exactly to `losses - 2c`:
+    adjacencies the skeleton spends on the region boundary / TH, minus twice its
+    component count. An INTEGER, and k-normalised by construction.
+
+    Why this and not a percentile of mfa: mfa is quantised in steps of 1/k, so a
+    bottom-X% cut slices through the quantisation arbitrarily. Measured on every
+    record this project holds, the productive band is index 3-4 on BOTH cities
+    despite different k (darkzig 94/94/95/97/97 -> 4,4,3,4,3; FR16 76 at k=84 ->
+    4), while both >=98 layouts sit at index 2. A bottom-40% cut on darkzig kept
+    p0-p40 while the productive band was p14-p52 -- it wasted a seventh of the
+    budget below the band and excluded a quarter of the band itself.
+    """
+    return round((2.0 - mean_free_adjacency(region, th, roads)) * k)
+
+
 def select_take(region, consumers, scorer, th_anchors, th_fp, k, rng, *,
-                pool, probe, skews, opts_top, quality_top, log=None):
+                pool, probe, skews, opts_top, quality_top, quality_index_band=None,
+                log=None):
     """The screen's pattern selection, factored out so the polish pass rebuilds
     the SAME patterns by index. Consumes `rng` identically to the screen -- same
     seed + same k order + same pool/skews reproduces the sample exactly, which
@@ -219,7 +236,7 @@ def select_take(region, consumers, scorer, th_anchors, th_fp, k, rng, *,
              if p.roads not in known and prefilter(p, region, consumers) is None]
     if log:
         log(f"k={k}: {len(cands)} generated, {len(alive)} novel+alive")
-    if quality_top is None:
+    if quality_top is None and quality_index_band is None:
         fams = sorted({f for f, _ in alive})
         share = max(1, probe // max(1, len(fams)))
         take = []
@@ -230,6 +247,20 @@ def select_take(region, consumers, scorer, th_anchors, th_fp, k, rng, *,
         return take
     n1 = max(probe, int(opts_top * len(alive)))
     alive = sorted(alive, key=lambda fp: -scorer.opts_total(fp[1].th, fp[1].roads))[:n1]
+    if quality_index_band is not None:
+        lo, hi = quality_index_band
+        banded = [fp for fp in alive
+                  if lo <= quality_index(region, fp[1].th, fp[1].roads, k) <= hi]
+        if log:
+            log(f"  band: opts top {opts_top:.0%} -> {n1}, then quality_index in "
+                f"[{lo},{hi}] -> {len(banded)}")
+        if len(banded) < probe:
+            if log:
+                log(f"  WARNING: band holds only {len(banded)} < {probe} requested; "
+                    "widen --quality-index or raise --pool")
+        shuffled = list(banded)
+        rng.shuffle(shuffled)
+        return shuffled[:probe]
     n2 = max(probe, int(quality_top * len(alive)))
     alive = sorted(alive,
                    key=lambda fp: mean_free_adjacency(region, fp[1].th, fp[1].roads))[:n2]
@@ -346,6 +377,11 @@ def main() -> int:
     ap.add_argument("--quality-top", type=float, default=None,
                    help="matched-to-arm-C mode: after the opts_total slice, keep the "
                         "LOWEST fraction by mean_free_adjacency, then sample uniformly")
+    ap.add_argument("--quality-index", default=None,
+                   help="keep only skeletons whose (2-mfa)*k == losses-2c falls in "
+                        "this inclusive band, e.g. '3,4'. Derived, k-normalised and "
+                        "city-portable -- every record this project holds is at 3-4, "
+                        "both >=98 layouts at 2. Supersedes --quality-top.")
     ap.add_argument("--opts-top", type=float, default=0.10,
                    help="opts_total slice kept before the quality filter")
     ap.add_argument("--skews", default=None,
@@ -360,6 +396,8 @@ def main() -> int:
     ks = [int(x) for x in args.k.split(",")]
     skews = (tuple(float(x) for x in args.skews.split(",")) if args.skews
              else (0.0, 1.0, 2.0))
+    qband = (tuple(int(x) for x in args.quality_index.split(","))
+             if args.quality_index else None)
     if args.preflight:
         return preflight(layout, ks, min(args.pool, 3000), args.seed, args.opts_ref)
 
@@ -380,6 +418,7 @@ def main() -> int:
         take = select_take(region, consumers, scorer, th_anchors, th_fp, k, rng,
                            pool=args.pool, probe=args.probe, skews=skews,
                            opts_top=args.opts_top, quality_top=args.quality_top,
+                           quality_index_band=qband,
                            log=lambda m: print(m, flush=True))
         print(f"  probing {len(take)}: "
               f"{dict(collections.Counter(f for f, _ in take))}", flush=True)
