@@ -58,8 +58,15 @@ produced a usable layout.
 
 A user sees this as a run that found nothing, with no explanation. Never observed on darkzig
 (more slack), so it was invisible until the second city.
-- [ ] Surface it distinctly in the webapp rather than as a generic failure
-- [ ] Consider reserving filler area in the pattern prefilter, or packing fillers first
+- [x] **Filler area reserved in the prefilter** — `prefilter(..., fillers=)` counts it, so a
+      pattern with no room for everything is rejected before a probe is spent on it.
+- [x] **Best-fit greedy packing** (2026-07-31) — recovered 6 of 12 measured FR16 failures.
+- [x] **Exact CP-SAT repair** (2026-08-01, section 8B) — of the failures that survive the
+      above, **18 of 22 rescued** on 116 real FR16 SATs for 0.27% of runtime. The 4 it misses
+      were *proven* infeasible in ~0.1 s, so nothing further is recoverable by packing.
+      Residual failure rate is now ~3% of SATs, down from the 34% that opened this item.
+- [ ] Surface it distinctly in the webapp rather than as a generic failure — still the open
+      part: a user whose run dies this way sees a generic "found nothing".
 
 ### 2.2 A hand-set `probe_limit > time_box` still overruns
 Only `BEST_PRESET` was fixed. A user setting `time_box=120, probe_limit=300` manually still
@@ -182,22 +189,19 @@ Recording these so they are not re-litigated. Full reasoning in `tasks/lessons.m
 
 ---
 
-## 7. Branch state
+## 7. Branch state — all clear as of 2026-08-01
 
-`feat/track-f-skeleton-filters`, 6 commits, **not merged, not pushed**:
+Everything below is **merged into `main` and pushed**; no open branches, working tree clean.
 
-    2daef89  fix: family-aware k_start + honest time box
-    3f2ee5b  feat(webapp): record-holding settings + instance screen
-    869b373  feat: quality_index band, nonuniform family, road-pressure screen
-    702505c  fix: matched quality-filter test overturns the RL closure -- 95 -> 94
-    cff7679  feat: non-uniform grammar -- FR16 79 -> 76, RL closed on evidence
-    24f5015  feat: skeleton pre-filters + widened pitch range -- 98 -> 95
+    6654701  exp: region partitioning premise re-measured -- do not build
+    eeade9b  Merge branch 'feat/exact-filler-packing'
+    8abf620  Merge branch 'exp/calibration-third-city'
+    60cacce  Merge branch 'fix/filler-fail-visibility'
+    (earlier: fix/budget-bounded-phases, feat/track-f-skeleton-filters)
 
-`3f2ee5b` also contains pre-existing uncommitted webapp/frontend work that was interleaved
-with these edits in the same files — noted in its commit message.
-
-**Decide before merging:** whether item 1.1 (the `seed_polish` overrun) should be fixed on this
-branch first, since it is a defect in a shipped default rather than a missing feature.
+514 Python tests + 28 frontend tests pass on merged `main`. The two torch-dependent RL test
+modules (`test_rl_anneal`, `test_rl_gate`) are skipped — torch is not in `.venv`; they are
+archived-RL tests and unrelated to anything current.
 
 ---
 
