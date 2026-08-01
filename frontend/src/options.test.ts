@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { applyPreset, budgetWarning, byGroup, cliPreview, initialValues, isModified, modifiedCount, screenBanner, secondsToMinutes, specDefault } from "./options";
+import { applyPreset, budgetWarning, byGroup, cliPreview, initialValues, isModified, modifiedCount, fillerFailureNote, screenBanner, secondsToMinutes, specDefault } from "./options";
 import type { OptionSpec } from "./types";
 
 const specs: OptionSpec[] = [
@@ -145,5 +145,47 @@ describe("screenBanner", () => {
   it("only INFEASIBLE says the run cannot help", () => {
     // buildings already exceed the region -- the one case that is provable
     expect(screenBanner(s("INFEASIBLE"))!.canStillRun).toBe(false);
+  });
+});
+
+describe("fillerFailureNote", () => {
+  const ff = {
+    failures: 3, mean_placed: 29.3, mean_total: 32, worst_placed: 27,
+    top_unplaced: [{ name: "Cathedral", times: 3 }, { name: "Manor", times: 1 }],
+  };
+
+  it("says nothing when no layout died at the packing stage", () => {
+    expect(fillerFailureNote(null, false)).toBeNull();
+    expect(fillerFailureNote(undefined, true)).toBeNull();
+    expect(fillerFailureNote({ ...ff, failures: 0 }, false)).toBeNull();
+  });
+
+  it("explains a run that found nothing, rather than leaving it blank", () => {
+    const note = fillerFailureNote(ff, false)!;
+    expect(note.heading).toContain("No layout");
+    expect(note.heading).toContain("3");
+    expect(note.detail).toContain("29.3 of 32");
+    expect(note.detail).toContain("worst case 27");
+  });
+
+  it("names the buildings that had nowhere to go", () => {
+    expect(fillerFailureNote(ff, false)!.blames).toEqual(["Cathedral", "Manor"]);
+  });
+
+  it("points at space, not at running longer", () => {
+    // the actionable part: a longer run cannot fix a packing shortfall
+    expect(fillerFailureNote(ff, false)!.detail).toMatch(/space problem/);
+    expect(fillerFailureNote(ff, false)!.detail).toMatch(/than a longer run/);
+  });
+
+  it("reports discards as secondary when a layout WAS found", () => {
+    const note = fillerFailureNote(ff, true)!;
+    expect(note.heading).toContain("discarded");
+    expect(note.heading).not.toContain("No layout");
+  });
+
+  it("singularises a lone failure", () => {
+    expect(fillerFailureNote({ ...ff, failures: 1 }, true)!.heading)
+      .toContain("1 candidate layout discarded");
   });
 });

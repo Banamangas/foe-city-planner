@@ -1,4 +1,4 @@
-import type { CityScreen, OptionSpec, OptionValues } from "./types";
+import type { CityScreen, FillerFailures, OptionSpec, OptionValues } from "./types";
 
 /**
  * Pure helpers for the spec-driven Optimize panel.
@@ -127,4 +127,30 @@ export function screenBanner(screen: CityScreen | undefined | null):
   }
   return { severity: "warn", canStillRun: true,
            heading: "This city is outside the measured range" };
+}
+
+
+/** Explain a run that died at the filler stage, as a pure decision.
+ *
+ * Without this a user whose run ends this way sees "found nothing" and has no
+ * idea why: the search DID solve the hard part — every road-needing building
+ * was placed — and then failed on the leftovers. Returns null when no layout
+ * died this way, so the caller renders nothing in the normal case.
+ */
+export function fillerFailureNote(
+  ff: FillerFailures | undefined | null,
+  foundLayout: boolean,
+): { heading: string; detail: string; blames: string[] } | null {
+  if (!ff || ff.failures < 1) return null;
+  const shortfall = Math.max(0, ff.mean_total - ff.mean_placed);
+  const heading = foundLayout
+    ? `${ff.failures} candidate layout${ff.failures === 1 ? "" : "s"} discarded at the packing stage`
+    : `No layout: ${ff.failures} candidate${ff.failures === 1 ? " was" : "s were"} solved, then could not be filled`;
+  const detail =
+    `Every road-needing building was placed, but on average only `
+    + `${ff.mean_placed} of ${ff.mean_total} remaining buildings fitted `
+    + `(short by about ${shortfall.toFixed(1)}; worst case ${ff.worst_placed}). `
+    + `This is a space problem, not a road problem — removing a few large `
+    + `buildings, or freeing region cells, is more likely to help than a longer run.`;
+  return { heading, detail, blames: ff.top_unplaced.map((u) => u.name) };
 }

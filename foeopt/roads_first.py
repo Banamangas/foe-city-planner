@@ -107,9 +107,28 @@ def _stub_cells(region: set[Cell], th: Footprint, roads: set[Cell]) -> list[Cell
     return []
 
 
+COMB_MODES = ("both", "alternate")
+
+
 def generate_patterns(region: set[Cell], tw: int, tl: int, k: int,
                       rng: random.Random, max_patterns: int,
-                      th_mode: str = "coarse") -> list[Pattern]:
+                      th_mode: str = "coarse",
+                      modes: tuple[str, ...] | None = None) -> list[Pattern]:
+    """Comb family: a trunk along one town-hall side plus perpendicular teeth.
+
+    `modes` selects which branch policies to emit. "both" grows a tooth from
+    each seed in both perpendicular directions; "alternate" grows one tooth per
+    seed, alternating sides. Left unset the generator emits both, which is the
+    historical behaviour and is byte-identical to before this parameter existed.
+
+    Worth selecting because pooled FR16+FR17 probe logs show `alternate`
+    holding 9 of 9 SATs while `both` is 0 of 528 -- a lead found for free in
+    existing logs and, until this parameter, impossible to act on.
+    """
+    modes = tuple(modes) if modes else COMB_MODES
+    bad = set(modes) - set(COMB_MODES)
+    if bad:
+        raise ValueError(f"unknown comb mode(s): {sorted(bad)}")
     out: list[Pattern] = []
     seen: set[frozenset[Cell]] = set()
     for th in th_anchor_candidates(region, tw, tl, mode=th_mode):
@@ -121,7 +140,7 @@ def generate_patterns(region: set[Cell], tw: int, tl: int, k: int,
                 continue
             horiz = trunk[0][1] == trunk[-1][1]
             for spacing in (3, 4, 5, 6, 7):
-                for mode in ("both", "alternate"):
+                for mode in modes:
                     for use_stubs in (False, True):
                         roads: set[Cell] = set()
                         stubs = _stub_cells(reg, th, roads) if use_stubs else []
@@ -729,8 +748,14 @@ def _place_fillers(grid: Grid, fillers: list[Building], cand: Layout) -> list[Bu
 
 def validate(layout_src: Layout, pattern: Pattern, positions: dict,
              exact_repair: float = 0.0, exact_workers: int = 8,
-             exact_objective: str = "count") -> tuple[str, Layout | None, int]:
+             exact_objective: str = "count",
+             diag: dict | None = None) -> tuple[str, Layout | None, int]:
     """Turn a SAT consumer placement into a full, legal layout.
+
+    `diag`, if given, is filled with how the filler stage went -- `placed`,
+    `total` and the names of what did not fit. `_place_fillers` never exits
+    early, so on failure this is a real "placed N of M" rather than a bare
+    rejection, and the webapp can say which buildings had nowhere to go.
 
     `exact_repair` > 0 gives the CP-SAT filler packer that many seconds to
     rescue layouts the greedy packer cannot finish. It runs *only* on layouts
@@ -773,6 +798,11 @@ def validate(layout_src: Layout, pattern: Pattern, positions: dict,
             del cand.buildings[n_before:]
             cand.buildings.extend(apply_placements(placements))
             unplaced = still
+    if diag is not None:
+        diag["fillers_total"] = len(fillers)
+        diag["fillers_placed"] = len(fillers) - len(unplaced)
+        diag["unplaced"] = sorted(b.name for b in unplaced)
+        diag["repair_ran"] = bool(exact_repair > 0)
     if unplaced:
         return ("SAT_FILLER_FAIL", None, len(roads))
     bad = rotated_buildings(cand, canonical_dims(layout_src))
@@ -832,16 +862,17 @@ def _run_probe(payload: tuple) -> dict:
     # not once per run, so an unclamped value would let N filler failures add
     # N x exact_repair seconds to the box -- the same defect class as the
     # seed_polish overrun (tasks/lessons.md 2026-07-30).
+    vdiag: dict = {}
     vstat, vlay, achieved = validate(
         layout, pat, pos,
         exact_repair=min(_WORKER_EXACT_REPAIR, _WORKER_PROBE_LIMIT),
-        exact_workers=_WORKER_PROBE_WORKERS)
+        exact_workers=_WORKER_PROBE_WORKERS, diag=vdiag)
     if vstat == "OK":
         return {"k": k, "params": pat.params, "status": "SAT",
                 "achieved": achieved, "secs": secs, "layout": vlay,
                 "pat_index": pat_index, "pos": pos}
     return {"k": k, "params": pat.params, "status": vstat,
-            "achieved": None, "secs": secs, "layout": None,
+            "achieved": None, "secs": secs, "layout": None, "filler": vdiag,
             "pat_index": pat_index, "pos": pos}
 
 
@@ -863,9 +894,30 @@ def _run_probe_seq(payload: tuple) -> dict:
     finally:
         _WORKER_LAYOUT = None
 
+def new_filler_stats() -> dict:
+    """Running tally of the SAT_FILLER_FAIL population for one run."""
+    return {"failures": 0, "placed": 0, "total": 0, "worst": None,
+            "by_building": {}}
+
+
+def summarise_fillers(fs: dict) -> dict | None:
+    """Human-facing summary, or None when no layout died this way."""
+    if not fs or not fs["failures"]:
+        return None
+    worst_names = sorted(fs["by_building"].items(), key=lambda kv: -kv[1])[:5]
+    return {
+        "failures": fs["failures"],
+        "mean_placed": round(fs["placed"] / fs["failures"], 1),
+        "mean_total": round(fs["total"] / fs["failures"], 1),
+        "worst_placed": fs["worst"],
+        "top_unplaced": [{"name": n, "times": c} for n, c in worst_names],
+    }
+
+
 def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=None,
                         on_improvement=None, corpus=None, scorer=None,
-                        score_threshold=None) -> dict[int, tuple[str, int | None]]:
+                        score_threshold=None,
+                        filler_stats: dict | None = None) -> dict[int, tuple[str, int | None]]:
     """Generate + probe several k-levels' patterns in one shared pool dispatch
     instead of draining one level's ~200 patterns before the next level's are
     even generated. `_run_probe`'s payload/result already carry `k`, so this
@@ -876,6 +928,8 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
     `_probe_level` would have produced -- this is the determinism invariant
     that makes batching a pure speed change, not a different search."""
     th = layout.townhall.footprint
+    if filler_stats is None:
+        filler_stats = new_filler_stats()
     th_mode = getattr(params, "th_anchors", "coarse")
     family = getattr(params, "pattern_family", "comb")
     gen_fn = _pattern_generator(family)
@@ -889,6 +943,8 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
                 gen_kwargs["pitches"] = params.lane_pitches
         elif family == "nonuniform":
             gen_kwargs["quality_index_band"] = getattr(params, "quality_index_band", None)
+        elif family == "comb" and getattr(params, "comb_modes", None) is not None:
+            gen_kwargs["modes"] = params.comb_modes
         pats = gen_fn(region, th.width, th.length, k, rng, params.patterns,
                       **gen_kwargs)
         surviving = []
@@ -913,8 +969,24 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
         st["order"] += 1
         status = result["status"]
         achieved = result["achieved"]
-        log({"k": k, "params": pat.params, "status": status,
-             "achieved": achieved, "secs": result["secs"], "order": st["order"]})
+        row = {"k": k, "params": pat.params, "status": status,
+               "achieved": achieved, "secs": result["secs"], "order": st["order"]}
+        if result.get("filler"):
+            row["filler"] = result["filler"]
+        log(row)
+        if status == "SAT_FILLER_FAIL" and result.get("filler"):
+            # Accumulated so the run can report WHY it found nothing, instead of
+            # a bare "no layout". _place_fillers never exits early, so these are
+            # real "placed N of M" counts.
+            f = result["filler"]
+            fs = filler_stats
+            fs["failures"] += 1
+            fs["placed"] += f.get("fillers_placed", 0)
+            fs["total"] += f.get("fillers_total", 0)
+            fs["worst"] = (f.get("fillers_placed", 0) if fs["worst"] is None
+                           else min(fs["worst"], f.get("fillers_placed", 0)))
+            for nm in f.get("unplaced", []):
+                fs["by_building"][nm] = fs["by_building"].get(nm, 0) + 1
         if corpus is not None:
             corpus.record(k=k, roads=pat.roads, th=pat.th, status=status,
                           secs=result["secs"], pos=result.get("pos"))
@@ -972,10 +1044,12 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
 
 
 def _probe_level(layout, region, consumers, k, rng, params, log, pool=None,
-                 on_improvement=None, corpus=None, scorer=None, score_threshold=None) -> tuple[str, int | None]:
+                 on_improvement=None, corpus=None, scorer=None, score_threshold=None,
+                 filler_stats=None) -> tuple[str, int | None]:
     return _probe_levels_batch(layout, region, consumers, [k], rng, params, log, pool=pool,
                                on_improvement=on_improvement, corpus=corpus,
-                               scorer=scorer, score_threshold=score_threshold)[k]
+                               scorer=scorer, score_threshold=score_threshold,
+                               filler_stats=filler_stats)[k]
 
 
 class RoadsFirstSearch:
@@ -988,7 +1062,8 @@ class RoadsFirstSearch:
                  lane_cap: int | None = None, concurrent_levels: int = 1,
                  seed_polish: int = 0, lane_pitches: tuple[int, ...] | None = None,
                  quality_index_band: tuple[int, int] | None = None,
-                 exact_repair: float = 0.0):
+                 exact_repair: float = 0.0,
+                 comb_modes: tuple[str, ...] | None = None):
         self.layout = layout
         self.time_box = time_box
         self.patterns = patterns
@@ -1011,6 +1086,7 @@ class RoadsFirstSearch:
         self.concurrent_levels = concurrent_levels
         self.seed_polish = seed_polish
         self.exact_repair = exact_repair
+        self.comb_modes = comb_modes
 
     def _apply_seed_polish(self, best_holder: dict, on_improvement,
                            should_stop=None) -> dict | None:
@@ -1066,6 +1142,7 @@ class RoadsFirstSearch:
             polish_reserve = want if want >= self.probe_limit * 1.2 else 0.0
         deadline = time.monotonic() + self.time_box
         walk_deadline = deadline - polish_reserve
+        filler_stats = new_filler_stats()
 
         pool = None
         if self.workers > 1:
@@ -1092,6 +1169,7 @@ class RoadsFirstSearch:
             lane_pitches=self.lane_pitches,
             quality_index_band=self.quality_index_band,
             exact_repair=self.exact_repair,
+            comb_modes=self.comb_modes,
         )
 
         results: dict[int, tuple[str, int | None]] = {}
@@ -1145,7 +1223,8 @@ class RoadsFirstSearch:
                 batch = _probe_levels_batch(layout, region, consumers, missing, rng,
                                             params, lambda r: None, pool=pool,
                                             on_improvement=on_improvement, corpus=corpus,
-                                            scorer=self.scorer, score_threshold=self.score_threshold)
+                                            scorer=self.scorer, score_threshold=self.score_threshold,
+                                            filler_stats=filler_stats)
                 for kk, res in batch.items():
                     results[kk] = res
                     if on_status is not None:
@@ -1193,7 +1272,8 @@ class RoadsFirstSearch:
                         st, _ = level(k)
                 if st != "FEASIBLE":
                     return {"verdict": "FAMILY_TOO_WEAK", "walk_complete": not truncated,
-                            "deadline_hit": _should_stop(), "results": results}
+                            "deadline_hit": _should_stop(), "results": results,
+                            "filler_failures": summarise_fillers(filler_stats)}
 
             lo_feasible = k
             if self.concurrent_levels > 1:
@@ -1254,6 +1334,7 @@ class RoadsFirstSearch:
                     "best_achieved": best, "inconclusive_levels": unknowns,
                     "walk_complete": not truncated, "deadline_hit": _should_stop(),
                     "seed_polish": polish_info,
+                    "filler_failures": summarise_fillers(filler_stats),
                     "results": results}
         finally:
             if corpus is not None:

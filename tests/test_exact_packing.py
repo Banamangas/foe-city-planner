@@ -284,7 +284,7 @@ def test_repair_is_clamped_to_one_probe_limit():
     seen = {}
 
     def spy(layout, pat, pos, exact_repair=0.0, exact_workers=8,
-            exact_objective="count"):
+            exact_objective="count", diag=None):
         seen["limit"] = exact_repair
         seen["workers"] = exact_workers
         return ("OK", None, 0)
