@@ -164,6 +164,9 @@ def main(argv=None):
     p.add_argument("--pattern-family", choices=("comb", "lane"), default="comb")
     p.add_argument("--stub-priority", action="store_true")
     p.add_argument("--lane-cap", type=int, default=None)
+    p.add_argument("--exact-repair", type=float, default=0.0, metavar="SECONDS",
+                   help="CP-SAT seconds to rescue layouts the greedy filler "
+                        "packer cannot finish (SAT_FILLER_FAIL); 0 = off")
     args = p.parse_args(argv)
     if args.smoke:
         args.patterns = 20
@@ -238,6 +241,7 @@ def main(argv=None):
         pattern_family=args.pattern_family,
         stub_priority=args.stub_priority,
         lane_cap=args.lane_cap,
+        exact_repair=args.exact_repair,
     ).run(on_improvement=on_improvement, on_status=on_status)
     print(json.dumps({k: v for k, v in res.items() if k != "results"}, indent=1))
     per_level = {k: v[0] + (f" achieved={v[1]}" if v[1] is not None else "")
