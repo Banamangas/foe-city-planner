@@ -62,3 +62,39 @@ def test_run_result_carries_the_summary_key():
     from foeopt.roads_first import RoadsFirstSearch
     src = inspect.getsource(RoadsFirstSearch.run)
     assert '"filler_failures"' in src
+
+
+def test_the_walk_actually_accumulates_filler_failures(monkeypatch):
+    """The link that stochastic search cannot be relied on to exercise: a
+    SAT_FILLER_FAIL probe row must land in the run's tally, not be dropped."""
+    from types import SimpleNamespace
+    import foeopt.roads_first as rf
+    from foeopt.loader import load_layout
+
+    lay = load_layout('CityMap-Born-FR16-2026-07-07.json')
+    region = set(lay.region.cells)
+    consumers = lay.road_needing()
+
+    def fake_seq(payload):
+        pat = payload[0]
+        return {"k": payload[1], "params": pat.params, "status": "SAT_FILLER_FAIL",
+                "achieved": None, "secs": 0.1, "layout": None, "pat_index": 0,
+                "pos": None,
+                "filler": {"fillers_total": 32, "fillers_placed": 29,
+                           "unplaced": ["Cathedral", "Manor", "Barn"],
+                           "repair_ran": True}}
+
+    monkeypatch.setattr(rf, "_run_probe_seq", fake_seq)
+    stats = rf.new_filler_stats()
+    params = SimpleNamespace(patterns=6, probe_limit=1.0, probe_workers=1,
+                             deadline=float("inf"), th_anchors="coarse",
+                             pattern_family="comb")
+    rf._probe_levels_batch(lay, region, consumers, [96], __import__("random").Random(0),
+                           params, lambda r: None, pool=None, filler_stats=stats)
+
+    assert stats["failures"] > 0, "SAT_FILLER_FAIL rows were dropped"
+    summary = rf.summarise_fillers(stats)
+    assert summary["mean_placed"] == 29.0
+    assert summary["mean_total"] == 32.0
+    assert summary["worst_placed"] == 29
+    assert summary["top_unplaced"][0]["name"] in {"Cathedral", "Manor", "Barn"}
