@@ -93,7 +93,19 @@ count, which points at CP-SAT model size rather than packing. Three cities canno
       at low pressure, and few consumers at high pressure. Whichever fails identifies the cause
 - [ ] Re-tune the 0.8 / 0.5 thresholds once the cause is known
 
-### 3.2 `K_START_MARGIN["nonuniform"] = -4` — WRONG on the third city (2026-07-31)
+### 3.2 `K_START_MARGIN["nonuniform"]` — RESOLVED 2026-08-01, now `0`
+
+Changed from `-4` to `0` and verified end to end through `BEST_PRESET`: FR17
+k_start 121 -> **115** (was: nothing at all), FR16 k_start 88 -> **77** (was 76 --
+the change costs a measured one road there). See section 9 (E3).
+
+Note the diagnosis below ("the sign reverses") is superseded: it is not a
+feasibility cliff. The same k=121 on FR17 returns FEASIBLE, INCONCLUSIVE or
+INFEASIBLE depending only on whether the walk probed it first or reached it via
+a batched ascent. **Whichever k is probed first gets the whole box.** The
+original entry is kept below for the record.
+
+#### 3.2 (original entry) `K_START_MARGIN["nonuniform"] = -4` — WRONG on the third city (2026-07-31)
 **Superseded by measurement.** FR17's feasibility window sits at **sigma/2 + 12**, not
 sigma/2 - 4: the margin's *sign* reverses between cities (darkzig -8, FR16 -4, FR17 +12), and
 `auto` made FR17 climb 117->133, spending about half a short box. Worse, the k-walk assumes
@@ -127,9 +139,13 @@ it is still n=2.
 
 ## 4. Untested cities and configurations
 
-- [x] **FR17 — DONE 2026-07-31, and it is the session's clearest negative.** comb 123 vs
-      nonuniform 126 vs nonuniform+band 124 (at k=133; `FAMILY_TOO_WEAK` from 137), all at a
-      600 s box. **The new family LOSES here.** Also exposed: the quality band costs feasibility
+- [x] **FR17 — SUPERSEDED 2026-08-01.** The 2026-07-31 negative ("comb 123 vs nonuniform 126
+      vs nonuniform+band 124; the new family LOSES here") does not survive re-measurement.
+      Both of its inputs were compromised: the comb pool was half-filled with `both`-mode
+      patterns that are 0-for-528, and the nonuniform arms started at the `-4` margin, which
+      on FR17 spends the entire box ascending. With the corrected defaults FR17 reaches
+      **115** — better than every number in the original comparison. See section 9.
+      The original text is preserved in git history (commit eb779d3). Also exposed: the quality band costs feasibility
       (never measured against *no* filter — only against the bottom-40% filter it replaced), and
       the k-walk's monotonicity assumption is false. See `tasks/lessons.md` 2026-07-31.
 - [ ] **Which cities suit which family?** n=3 hypothesis only: nonuniform wins at low road

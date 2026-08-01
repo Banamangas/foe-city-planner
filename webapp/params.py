@@ -90,6 +90,17 @@ OPTION_SPECS: list[dict] = [
                 "cities (darkzig 94, FR16 76). Pair it with the quality band.",
     },
     {
+        "name": "comb_modes", "cli": "--comb-modes", "type": "choice",
+        "default": "alternate", "choices": ["alternate", "both", "off"],
+        "group": "patterns", "label": "Comb branch mode",
+        "help": "Which branch policy the 'comb' family may emit. 'alternate' "
+                "grows one tooth per seed; 'both' grows two. Defaults to "
+                "'alternate' on measurement: at equal 600 s boxes FR16 goes "
+                "90 -> 82 and FR17 goes from finding NOTHING to 124. In pooled "
+                "probe logs 'both' is 0-for-528. 'off' emits both, which is the "
+                "historical behaviour and reproduces pre-2026-08-01 records.",
+    },
+    {
         "name": "lane_cap", "cli": "--lane-cap", "type": "int_or_null",
         "default": None, "min": 1, "max": 1000,
         "group": "patterns", "label": "Lane cap (blank = none)",
@@ -111,13 +122,16 @@ OPTION_SPECS: list[dict] = [
     },
     {
         "name": "quality_index_band", "cli": "--quality-index", "type": "choice",
-        "default": "off", "choices": ["off", "3,4", "2,5"],
+        "default": "3,4", "choices": ["off", "3,4", "2,5"],
         "group": "patterns", "label": "Quality band",
         "help": "Keep only skeletons whose losses-2c index falls in the band. "
                 "Every record this project holds sits at 3-4 on both cities "
                 "despite different budgets; layouts at 2 are measurably worse. "
                 "Took the darkzig SAT rate from 47% to ~100% at equal quality. "
-                "Applies to the 'nonuniform' family.",
+                "Applies to the 'nonuniform' family. On by default: at a 900 s "
+                "box it is worth nothing on darkzig (101 either way) and is the "
+                "difference between finding NOTHING and matching the all-time "
+                "record on FR16 (76).",
     },
     {
         "name": "lane_pitches", "cli": "--pitches", "type": "choice",
@@ -239,6 +253,7 @@ BEST_PRESET: dict = {
     "seed_polish": 0,
     "concurrent_levels": 4,
     "exact_repair": 5.0,
+    "comb_modes": "alternate",
 }
 
 DEFAULTS: dict = {s["name"]: s["default"] for s in OPTION_SPECS}
