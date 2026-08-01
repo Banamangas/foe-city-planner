@@ -38,7 +38,7 @@ OPTION_SPECS: list[dict] = [
     },
     {
         "name": "exact_repair", "cli": "--exact-repair", "type": "float",
-        "default": 0.0, "min": 0.0, "max": 300.0, "advanced": True,
+        "default": 5.0, "min": 0.0, "max": 300.0, "advanced": True,
         "group": "budget", "label": "Exact filler repair (s, 0 = off)",
         "help": "When CP-SAT places every road-needing building but the greedy "
                 "filler packer cannot fit the rest, the layout is thrown away "
@@ -214,6 +214,18 @@ SMOKE_PRESET: dict = {
 # seconds for ONE road. It is a genuine lever for long runs (it produced the 94
 # and the 95) and remains available; it is simply a bad trade inside a user box.
 #
+# exact_repair is 5.0 -- ON, unlike the two knobs above, because it is the one
+# extra phase that is genuinely cheap. Measured over 116 real FR16 SATs: 19% of
+# them died at SAT_FILLER_FAIL, 18 of those 22 were rescued, and the whole
+# repair phase cost 2.53 s inside a 946 s run (0.27%). The 5 s budget is never
+# approached on a normal city -- FR16 rescues took 0.11 s mean, 0.17 s worst --
+# and it is clamped to probe_limit regardless.
+#
+# What it does NOT do is improve the record: the rescued layouts tie the best
+# greedy result at k=88 (78 roads, 3 such layouts -> 5) and are worse at k=92.
+# It is a throughput lever -- ~16% more legal layouts per run for ~0.3% of the
+# budget -- not a quality one.
+#
 # Expect ~101 roads on darkzig from a 2-minute box and ~76 on FR16 (its all-time
 # record) -- not darkzig's 94, which needed ~10 core-hours of screening plus a
 # 496-solve polish pass. 101 is a 60% cut on darkzig as found (250) and 36%
@@ -226,6 +238,7 @@ BEST_PRESET: dict = {
     "probe_limit": 30.0,
     "seed_polish": 0,
     "concurrent_levels": 4,
+    "exact_repair": 5.0,
 }
 
 DEFAULTS: dict = {s["name"]: s["default"] for s in OPTION_SPECS}
