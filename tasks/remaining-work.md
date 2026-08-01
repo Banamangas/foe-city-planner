@@ -314,3 +314,43 @@ merely defaulted, so no caller can silently disable the repair.
 Still open: whether the extra legal layouts convert into a better record over a long run.
 This sample says they arrive at the same road counts, so the honest expectation is a
 modest improvement in the expected minimum from +16% samples, not a step change.
+
+### A (cont.) — re-measured on search-produced layouts: DO NOT BUILD
+
+The first premise test used the *expert's* free space and passed. Re-run on four real
+record artifacts from `docs/records/` (`scripts/exp_region_partition_premise2.py`):
+
+    layout                            rects  1x1  area in rects>=16  biggest class
+    expert (user's own city)            23     0        98%          4x4 x77  ENOUGH
+    fr16-76-roads-nonuniform-k84        31     1        67%          4x4 x5   ENOUGH
+    darkzig-94-roads-nonuniform-k105    38     3        92%          4x4 x13  ENOUGH
+    darkzig-95-roads-lane-k105          42     1        90%          4x4 x13  ENOUGH
+    darkzig-98-roads-lane-k105          25     2        95%          4x4 x13  ENOUGH
+
+**The premise is not refuted** — search skeletons fragment the leftover space somewhat
+more than the expert's (FR16 drops to 67%, darkzig holds 90-95%), but usable zones still
+exist everywhere and every layout can host its biggest filler class.
+
+**Build it anyway and it would solve a problem these cities do not have.** Three numbers
+kill it, none of which are about geometry:
+
+    metric                          user's city   FR16    darkzig
+    slack at the packing stage         0.1%        31%      13%
+    fillers of area >= 16               46%        25%      22%
+    1x1 fillers (fill any hole)          0          9        45
+    screen_city verdict              UNLIKELY     LIKELY   LIKELY
+
+The user's inventory is the outlier: nearly half big buildings, no 1x1s at all, and three
+cells of slack. That is precisely the regime where placing rashly strands dead space and
+where their zone-by-size method pays. FR16 and darkzig have 13-31% slack and 9-45 1x1
+fillers that make *any* hole fillable, so greedy already succeeds 81% of the time there.
+
+And the residual is now covered: exact repair (section B) rescues 82% of the remaining
+`SAT_FILLER_FAIL`s, and the 4 it does not rescue were *proven* infeasible in ~0.1 s -- not
+packer weakness, so no packer can recover them. Region partitioning would be competing
+for a slice that is already closed.
+
+The one city where the method would matter is the user's own, and it screens UNLIKELY at
+road pressure 1.08 -- the search cannot produce layouts for it at all. Revisit only if
+road_pressure > 1.0 cities become solvable, or a city with a big-building inventory and
+near-zero slack shows up.
