@@ -28,6 +28,15 @@ CITIES = {
     "FR16": ("CityMap-Born-FR16-2026-07-07.json",),
     "FR17": ("CityMap-Born-FR17-2026-07-07.json",),
 }
+
+# Per-city CP-SAT probe budget. Not a free knob: too short and feasible
+# patterns come back UNKNOWN and are never detected, which reads as "the family
+# failed" when it means "the probe was starved". Measured in the first launch
+# of this matrix: FR17 at 30 s returned INCONCLUSIVE at every k it reached, on
+# both comb arms, and produced no comparison at all -- while FR16 at the same
+# 30 s produced a clean 90-vs-82. FR17 carries 77 consumers against FR16's 56,
+# so its model needs proportionally longer to decide.
+PROBE_LIMIT = {"darkzig": 30.0, "FR16": 30.0, "FR17": 90.0}
 _CACHE: dict = {}
 
 
@@ -41,11 +50,13 @@ def run_cell(exp, label, city_name, box, **kw):
     lay = city(city_name)
     t0 = time.monotonic()
     rec = {"exp": exp, "label": label, "city": city_name, "box": box,
+           "probe_limit": PROBE_LIMIT.get(city_name, 30.0),
            "params": {k: (list(v) if isinstance(v, tuple) else v)
                       for k, v in kw.items()}}
     try:
         search = RoadsFirstSearch(
-            lay, time_box=box, patterns=200, probe_limit=30.0,
+            lay, time_box=box, patterns=200,
+            probe_limit=PROBE_LIMIT.get(city_name, 30.0),
             workers=6, probe_workers=2, th_anchors="full",
             concurrent_levels=4, exact_repair=5.0, **kw)
         res = search.run()
@@ -121,12 +132,27 @@ def main(argv=None):
     p.add_argument("--quick", action="store_true",
                    help="tiny budgets -- smoke-test the harness, not a measurement")
     p.add_argument("--only", default=None, help="comma-separated exp ids, e.g. E1,E4")
+    p.add_argument("--resume", action="store_true",
+                   help="skip cells already recorded with a real result")
     args = p.parse_args(argv)
 
     cells = plan(quick=args.quick)
     if args.only:
         keep = set(args.only.split(","))
         cells = [c for c in cells if c["exp"] in keep]
+    if args.resume and pathlib.Path(args.out).exists():
+        # A cell only counts as done if it produced a RESULT. Cells that ran but
+        # returned best=None were starved, not answered, and must be redone.
+        done = set()
+        for line in pathlib.Path(args.out).read_text().splitlines():
+            r = json.loads(line)
+            if r.get("ok") and r.get("best") is not None:
+                done.add((r["exp"], r["label"], r["city"]))
+        before = len(cells)
+        cells = [c for c in cells
+                 if (c["exp"], c["label"], c["city_name"]) not in done]
+        print(f"resume: skipping {before - len(cells)} cells with results already",
+              flush=True)
     total_budget = sum(c["box"] for c in cells)
     print(f"{len(cells)} cells, {total_budget/60:.0f} min of budget "
           f"(+ overhead). SEQUENTIAL.", flush=True)
