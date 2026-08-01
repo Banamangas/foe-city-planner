@@ -131,7 +131,13 @@ def exact_pack(free: set[Cell], width: int, height: int,
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_limit
-    solver.parameters.num_search_workers = workers
+    # Floored at 2, not merely defaulted: single-threaded this model returns NO
+    # solution at all on a real instance (0/231 at 5s, twice), so a caller that
+    # innocently passes probe_workers=1 would get a repair that silently does
+    # nothing. Measured on the user's city at a 5s budget, greedy = 222:
+    #   workers=1 -> 0     workers=2 -> 228
+    #   workers=4 -> 224-228   workers=8 -> 230
+    solver.parameters.num_search_workers = max(2, workers)
     status = solver.Solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         return [], list(fillers)

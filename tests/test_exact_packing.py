@@ -267,7 +267,7 @@ def test_exact_repair_is_exposed_end_to_end():
     from foeopt.roads_first import RoadsFirstSearch
 
     spec = next(s for s in OPTION_SPECS if s["name"] == "exact_repair")
-    assert spec["default"] == 0.0, "must be off by default -- it costs CP-SAT time"
+    assert spec["default"] == 5.0, "on by default: 0.27% of runtime, +16% legal layouts"
     assert spec["type"] == "float"
     for fn in (JobManager.submit, RoadsFirstSearch.__init__):
         params = inspect.signature(fn).parameters
@@ -327,3 +327,12 @@ class SimplePattern:
     th = Footprint(0, 0, 1, 1)
     roads = frozenset()
     params: dict = {}
+
+
+def test_thread_count_is_floored_not_just_defaulted():
+    """workers=1 returns NO solution on a real instance, so an explicit 1 from
+    a caller (probe_workers=1 is legal) must not silently disable the repair."""
+    fillers = [mk(i, 2, 2) for i in range(4)]
+    placed, unplaced = exact_pack(box(4, 4), 4, 4, fillers, 10.0, workers=1)
+    assert unplaced == []
+    assert len(placed) == 4

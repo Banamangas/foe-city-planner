@@ -282,3 +282,35 @@ produced it. Test: 300s clamps to 30s.
 the *expert's own* free space, not a search-produced one. The real workload is the ~6 of
 32 FR16 SATs that still fail after best-fit greedy. Until the repair is run against those,
 "+8 fillers" is a ground-truth result, not a production one, and the default stays 0.
+
+### B (cont. 2) — validated on the REAL workload, and turned on
+
+120 probes on FR16 (nonuniform, band 3-4, opts_total-ranked, probe_limit 300 s, k=88 and
+k=92), each SAT validated twice on identical input: greedy alone, then greedy + 5 s repair.
+
+    k=88:  60 probes -> 58 SAT (44 OK, 14 SAT_FILLER_FAIL)   rescued 12/14
+    k=92:  60 probes -> 58 SAT (50 OK,  8 SAT_FILLER_FAIL)   rescued  6/8
+    total: 116 SAT, 22 filler failures (19%), 18 rescued (82%)
+    repair cost: 2.53 s across all 22 calls, inside a 946 s run = 0.27%
+                 mean 0.11 s, worst 0.17 s -- the 5 s budget is never approached
+
+**It does not improve the record.** The rescued layouts tie the best greedy result at
+k=88 (78 roads; 3 such layouts becomes 5) and are strictly worse at k=92 (best rescued
+83 vs best greedy-OK 81). This is a throughput lever -- ~16% more legal layouts per run
+for ~0.3% of the budget -- not a quality one. Enabled by default on that basis
+(OPTION_SPECS 5.0, BEST_PRESET 5.0); library defaults stay 0.0 so programmatic callers
+opt in explicitly.
+
+The 4 unrescued failures are not solver timeouts: the model is always trivially feasible
+(place nothing), so terminating in ~0.1 s means CP-SAT *proved* the maximum. Greedy's
+failure is ambiguous; this one is a proof the skeleton cannot hold every filler.
+
+Footgun found and closed while wiring: `probe_workers` may legitimately be 1, and at
+1 thread the model returns NO solution at all on a large instance. Measured on the user's
+city at 5 s (greedy 222): workers=1 -> 0, workers=2 -> 228, workers=4 -> 224-228,
+workers=8 -> 230. The thread count is therefore FLOORED at 2 inside `exact_pack`, not
+merely defaulted, so no caller can silently disable the repair.
+
+Still open: whether the extra legal layouts convert into a better record over a long run.
+This sample says they arrive at the same road counts, so the honest expectation is a
+modest improvement in the expected minimum from +16% samples, not a step change.
