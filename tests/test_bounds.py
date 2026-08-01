@@ -147,16 +147,28 @@ def test_pick_k_start_margin_is_family_aware():
     assert base > 20, "fixture too small to exercise the margin"
     assert pick_k_start(lay, "comb") == base
     assert pick_k_start(lay, "lane") == base
-    assert pick_k_start(lay, "nonuniform") == base - 12   # +8 -> -4
+    # comb +8, nonuniform +0 -> the families differ by exactly 8.
+    # nonuniform was -4 (a gap of 12) until 2026-08-01; see the test below.
+    assert pick_k_start(lay, "nonuniform") == base - 8    # +8 -> +0
 
 
 def test_pick_k_start_nonuniform_matches_the_validated_settings(repo_root):
-    """The -4 margin must land on the settings measured to work at a 120 s box:
-    darkzig 111 (cliff at 104) and FR16 84 (cliff at 80; 84 reproduced FR16's
-    all-time record of 76 in two minutes)."""
+    """SUPERSEDED 2026-08-01: the margin is now +0, so these are sigma/2 exactly.
+
+    The old -4 (darkzig 111, FR16 84) was calibrated on those two cities and was
+    better on both -- FR16 reproduced its record of 76 from 84. It was then
+    measured on a third city at equal 600 s boxes and turned out not to be
+    survivable: FR17 starting at 117 spends its entire box ascending and returns
+    FAMILY_TOO_WEAK, while starting at 121 reaches 115 (beating that city's
+    previous best of 123).
+
+    So the change trades a measured ONE road on FR16 (76 -> 77) for FR17 working
+    at all. Recorded here rather than silently re-tuned, because the earlier
+    numbers were not wrong -- they were calibrated on too few cities.
+    """
     import pathlib
     from foeopt.loader import load_layout
-    cases = [("darkzig.json", 111), ("CityMap-Born-FR16-2026-07-07.json", 84)]
+    cases = [("darkzig.json", 115), ("CityMap-Born-FR16-2026-07-07.json", 88)]
     checked = 0
     for fname, expected in cases:
         p = pathlib.Path(repo_root) / fname

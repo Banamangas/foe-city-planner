@@ -60,3 +60,24 @@ def test_search_exposes_the_lever_and_defaults_to_off():
     params = inspect.signature(RoadsFirstSearch.__init__).parameters
     assert "comb_modes" in params
     assert params["comb_modes"].default is None
+
+
+# --- the shipped defaults ----------------------------------------------------
+
+def test_product_default_is_alternate_but_the_generator_default_is_not():
+    """The split matters. The PRODUCT ships `alternate` because it measured
+    better (FR16 90 -> 82, FR17 nothing -> 124), but `generate_patterns` still
+    emits both modes when unasked, so every record produced before 2026-08-01
+    stays reproducible by calling the generator the way those runs called it."""
+    from webapp.params import BEST_PRESET, DEFAULTS
+
+    assert DEFAULTS["comb_modes"] == "alternate"
+    assert BEST_PRESET["comb_modes"] == "alternate"
+    assert inspect.signature(generate_patterns).parameters["modes"].default is None
+
+
+def test_off_restores_the_historical_behaviour():
+    from webapp.runner import _parse_modes
+    assert _parse_modes("off") is None          # -> generator emits both
+    assert _parse_modes("alternate") == ("alternate",)
+    assert _parse_modes("both") == ("both",)

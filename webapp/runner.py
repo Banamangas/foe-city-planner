@@ -26,6 +26,13 @@ def _parse_pitches(spec: str):
     return tuple(range(int(lo), int(hi) + 1))
 
 
+def _parse_modes(spec: str):
+    """'off' means emit every mode, i.e. the historical generator behaviour."""
+    if not spec or spec == "off":
+        return None
+    return (spec,)
+
+
 def layout_to_dict(layout: Layout) -> dict:
     """Serialize a validated Layout to the compact dict format for SSE/API."""
     return {
@@ -50,7 +57,7 @@ class JobManager:
                lane_cap: int | None = None, warm_start: bool = False,
                warm_start_budget: float = 30.0,
                quality_index_band: str = "off", lane_pitches: str = "off",
-               exact_repair: float = 0.0) -> str:
+               exact_repair: float = 0.0, comb_modes: str = "alternate") -> str:
         """Start a RoadsFirstSearch in a background thread and return its id.
 
         Keyword names match webapp.params.OPTION_SPECS one for one, so the
@@ -107,6 +114,7 @@ class JobManager:
                     quality_index_band=_parse_range(quality_index_band),
                     lane_pitches=_parse_pitches(lane_pitches),
                     exact_repair=exact_repair,
+                    comb_modes=_parse_modes(comb_modes),
                 )
                 res = search.run(on_improvement=on_improvement,
                                  on_status=on_status,

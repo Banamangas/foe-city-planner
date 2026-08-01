@@ -33,7 +33,26 @@ def report_bounds(layout: Layout) -> dict[str, int]:
 # Margin added to sigma_half per pattern family. Feasibility sits ABOVE
 # sigma_half for the comb/lane families and BELOW it for the nonuniform family,
 # so the sign of the margin differs -- see pick_k_start.
-K_START_MARGIN: dict[str, int] = {"comb": 8, "lane": 8, "nonuniform": -4}
+# Margin added to sigma/2 to choose where the k-walk starts.
+#
+# `nonuniform` was -4, calibrated on darkzig and FR16. The 2026-08-01 matrix
+# (tasks/remaining-work.md section 9) measured it on both cities at equal
+# 600 s boxes and -4 is not survivable:
+#
+#     margin        -4     +0     +8    +12
+#     FR16          76     77     81     81
+#     FR17     NOTHING    115    119    127
+#
+# -4 buys ONE road on FR16 and costs FR17 every result it has. +0 is strictly
+# more robust, and 115 on FR17 beats that city's previous best of 123.
+#
+# Note this is a budget-allocation effect, not a feasibility cliff: the same
+# k=121 on FR17 comes back FEASIBLE, INCONCLUSIVE or INFEASIBLE depending only
+# on whether the walk probed it first or reached it through a batched ascent.
+# Whichever k is probed FIRST gets the whole box; every later level shares what
+# is left. That is why starting in the right place matters so much, and why a
+# cleverer *constant* is not the real fix -- see section 9.
+K_START_MARGIN: dict[str, int] = {"comb": 8, "lane": 8, "nonuniform": 0}
 
 
 def pick_k_start(layout: Layout, family: str = "comb") -> int:
