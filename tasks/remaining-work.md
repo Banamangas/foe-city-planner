@@ -358,3 +358,98 @@ The one city where the method would matter is the user's own, and it screens UNL
 road pressure 1.08 -- the search cannot produce layouts for it at all. Revisit only if
 road_pressure > 1.0 cities become solvable, or a city with a big-building inventory and
 near-zero slack shows up.
+
+---
+
+## 9. Overnight matrix — 2026-08-01, 34 cells, 0 errors, ~5 h
+
+Strictly sequential (no two cells ever concurrent), equal wall-clock within each
+comparison, budgets honoured at 1.03x median / 1.14x worst. Raw rows:
+`scripts/_overnight.jsonl` (gitignored); driver `scripts/exp_overnight.py`.
+
+### E1 — comb `alternate` vs `both`: DECISIVE, adopt `alternate`
+
+    FR16  600s   both 90        alternate 82
+    FR17  600s   both NOTHING   alternate 124
+    FR17  900s   comb, modes MIXED (E2)  ->  NOTHING
+
+The unrestricted family fails on FR17 at a 50% LARGER budget than the run where
+`alternate`-only succeeded: `both` patterns (0-for-528 in pooled logs) consume
+enough of the pool that the family reads FAMILY_TOO_WEAK. This was unreachable
+before 2026-08-01 — `generate_patterns` hardcoded both modes.
+
+**This also invalidates the FR17 entry in section 4.** "comb 123" was measured on
+a pool half-filled with patterns that never produce a SAT.
+
+### E2 — family x city: no family wins everywhere; the band is not cosmetic
+
+                    comb    nonuniform   nonuniform+band
+    darkzig          109        101           101
+    FR16              88      NOTHING          76      <- ties the all-time record
+    FR17           NOTHING    NOTHING       NOTHING     <- but see E3
+
+The band is worth **nothing** on darkzig and is the difference between **total
+failure and the record** on FR16. Keep it on; do not read darkzig alone.
+
+### E3 — `k_start` margin: it is NOT a sign reversal, it is a CLIFF
+
+                margin:    -4      +0      +8     +12
+    FR16 (k)               84      88      96     100
+                           76      77      81      81
+    FR17 (k)              117     121     129     133
+                      NOTHING     115     119     127
+
+Both cities want k_start as LOW as possible — the gradient has the same sign on
+both, quality degrading monotonically as k_start rises. What differs is where the
+cliff sits: FR16's below 84, FR17's between 117 and 121. The shipped `-4` lands
+just above FR16's cliff (optimal) and just below FR17's (catastrophic).
+
+**Therefore no constant margin can be correct** — any constant is a guess about a
+city-specific cliff location. `K_START_MARGIN` is the wrong SHAPE of solution.
+Replace with adaptive cliff-finding (already an unclaimed item in section 5).
+
+**And this manufactured a false negative about a whole family.** `nonuniform+band`
+returned nothing on FR17 in E2 *because E2 used the auto k_start* (= the -4
+margin). Given a workable start it reaches **115** — beating FR17's previous best
+of 123 by 8 and beating comb-alternate's 124. Section 3.2's "the sign reverses on
+the third city" and section 4's "the new family LOSES here" both dissolve: the
+walk was starting in the wrong place.
+
+### E4 — box size: hypothesis REFUTED, do not shorten the default
+
+    30s -> 105, 105, 105
+    45s -> 104, 104, 104
+    60s -> 101, 101, 101
+
+Section 4 asked this because 60 s had matched 120 s. It does not generalise
+downward: quality improves monotonically with budget and 30 s costs 4 roads.
+Identical across all three repeats — the search is far more reproducible at these
+budgets than the "CP-SAT seed luck" framing suggested.
+
+Minor: the 45 s cells overran to 1.11-1.14x while 30 s and 60 s held 1.03-1.04x.
+A box that is not a clean multiple of `probe_limit` (30 s) leaves a partial probe
+slot. Cosmetic, but it is the same defect class as section 1.
+
+### E5 — polish path end-to-end: PASS, closes item 1.1
+
+    seed_polish=0    -> 101,  605.5 s (1.01x)
+    seed_polish=12   -> 100,  574.7 s (0.96x)
+
+First end-to-end exercise of the polish path in a box large enough to use it
+(600 s -> reserve -> seeds actually run). It improved 101 -> 100 and came in
+UNDER budget at 0.96x, because the reserve stops the walk early to pay for it.
+Previously only the "correctly does nothing at 120 s" case was verified.
+
+### Decisions NOT taken
+
+No default was changed while the user slept. Three candidates, in order of
+evidence strength: (1) comb default -> `alternate`; (2) replace `K_START_MARGIN`
+with adaptive cliff-finding; (3) keep the quality band on.
+
+### Method note — the same mistake, one layer up
+
+The first launch fixed `probe_limit = 30 s` for every city; FR17 (77 consumers vs
+FR16's 56) returned INCONCLUSIVE on every cell and read as a family failure. That
+is lessons.md 2026-07-22 exactly — a starved probe mistaken for a negative result
+— committed in a driver whose own docstring warns about it. Caught at 40 min
+rather than 4.7 h. `probe_limit` is now per city.
