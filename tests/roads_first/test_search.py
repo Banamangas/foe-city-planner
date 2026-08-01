@@ -193,7 +193,8 @@ def test_search_concurrent_levels_ascent_batches_multiple_ks(monkeypatch):
         return ("INFEASIBLE", None)  # k_start itself always infeasible -> ascent kicks in
 
     def fake_probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=None,
-                                on_improvement=None, corpus=None, scorer=None, score_threshold=None):
+                                on_improvement=None, corpus=None, scorer=None,
+                                score_threshold=None, **_kw):
         seen_batches.append(list(ks))
         # first batch after k_start=1: [5, 9, 13] -- make 9 the smallest feasible
         return {kk: (("FEASIBLE", kk) if kk == 9 else ("INFEASIBLE", None)) for kk in ks}
@@ -220,7 +221,8 @@ def test_search_concurrent_levels_descent_batches_multiple_ks(monkeypatch):
         return ("FEASIBLE", k)  # k_start=100 itself feasible -> straight to descent
 
     def fake_probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=None,
-                                on_improvement=None, corpus=None, scorer=None, score_threshold=None):
+                                on_improvement=None, corpus=None, scorer=None,
+                                score_threshold=None, **_kw):
         seen_batches.append(list(ks))
         # descending from 100: batch [96, 92, 88] -- 92 is the deepest still feasible
         return {kk: (("FEASIBLE", kk) if kk >= 92 else ("INFEASIBLE", None)) for kk in ks}
@@ -253,7 +255,8 @@ def test_search_concurrent_levels_reaches_same_verdict_as_sequential(monkeypatch
         return truth(k)
 
     def fake_probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=None,
-                                on_improvement=None, corpus=None, scorer=None, score_threshold=None):
+                                on_improvement=None, corpus=None, scorer=None,
+                                score_threshold=None, **_kw):
         return {kk: truth(kk) for kk in ks}
 
     monkeypatch.setattr(mod, "_probe_level", fake_probe_level)

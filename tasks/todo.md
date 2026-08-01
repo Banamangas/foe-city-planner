@@ -730,3 +730,68 @@ That is whether it WORKS; whether it is WORTH running is a separate axis — dar
 - [ ] **Not done:** `screen_city` is not surfaced in the webapp UI; no end-to-end timing run of
       the nonuniform family inside a real 60-120 s box; `SAT_FILLER_FAIL` (34% of FR16 probes)
       still untreated.
+
+---
+
+# Overnight plan — 2026-08-01 02:35 → ~09:00
+
+Autonomous run while the user sleeps. No blocking questions are possible, so
+every judgement call is recorded here with its reasoning.
+
+## Governing constraints
+
+1. **Serialize everything.** CP-SAT budgets are wall-clock, not CPU time, so two
+   experiments running at once inflate each other's UNKNOWN rate and understate
+   SAT rates. Measured earlier this session: FR16 went 2.7-3.1 -> 4.2 probes/min
+   simply by killing the competing job. One driver, one experiment at a time.
+2. **All code and tests land BEFORE the first measurement.** The suite is 74 s
+   multi-core; running it mid-experiment would bias that experiment. After
+   launch: monitoring only.
+3. **Smoke-test every experiment at a tiny budget first.** Four filler
+   experiments were wasted earlier this session by launching before checking the
+   harness. Not repeating that.
+4. **Equal wall-clock A/B.** Arms differing in budget are not comparable.
+
+## Phase 1 — code, tests, commit (02:35-03:30)
+
+- [ ] 1a. `modes` lever for the comb family. `generate_patterns` hardcodes
+      `for mode in ("both", "alternate")`; there is no way to select one, so the
+      9/9-vs-0/528 lead is currently untestable. Opt-in, byte-identical when
+      unset (same shape as `lane_pitches`).
+- [ ] 1b. `SAT_FILLER_FAIL` visibility. `_place_fillers` already returns the
+      unplaced list and never exits early, so "placed N of M" exists and is
+      thrown away. Surface it so such a run stops looking like "found nothing".
+- [ ] 1c. Overnight driver `scripts/run_overnight.sh` — strictly sequential.
+- [ ] 1d. Smoke-test each experiment at ~30 s budgets.
+- [ ] 1e. Full suite + commit.
+
+## Phase 2 — measurements, strictly serial (03:30-09:00)
+
+| # | experiment | why | budget |
+|---|---|---|---|
+| E1 | `alternate` vs `both`, comb, FR16 + FR17 | 9/9 vs 0/528 in existing logs, never exploited | 4 x 600 s |
+| E2 | family x city: {comb, nonuniform, nonuniform+band} x {darkzig, FR16, FR17} | BEST_PRESET hard-codes `nonuniform` on n=2 and FR17 contradicts it -- the biggest live correctness risk in what shipped | 9 x 900 s |
+| E3 | `k_start` margin sweep, nonuniform, FR16 + FR17 | `K_START_MARGIN["nonuniform"] = -4` is calibrated on two cities, its sign reverses on the third, and it decides where the whole budget is spent | 8 x 600 s |
+| E4 | box sweep 30/45/60 s on darkzig, 3 repeats | 60 s already reached the same 101 as 120 s; the default box may be longer than needed | ~20 min |
+| E5 | polish path end-to-end at a 600 s box | only "correctly does nothing at 120 s" is verified end to end; the reserve arithmetic is unit-tested but never exercised | 2 x 600 s |
+
+Total ~5 h 15 plus overhead.
+
+**FR24 deliberately excluded**: 0 SAT in 1182 probes across two prior campaigns,
+so its expected value per hour is far below everything above. Stays open in
+`remaining-work.md`.
+
+## Decisions made without being able to ask
+
+- **Cities**: darkzig, FR16, FR17. The user's own city is excluded -- it screens
+  UNLIKELY (road pressure 1.08) and the search cannot produce layouts for it.
+- **E2 at 900 s not 600 s**: FR17 needed 600 s to produce its negative result at
+  all; 900 s lets each arm be beaten fairly rather than by budget starvation.
+- **On error the driver logs and continues** to the next experiment rather than
+  aborting the night.
+- **No default changes while the user sleeps.** The runs produce evidence; the
+  decisions wait for them.
+
+## Review
+
+(filled in as results land)

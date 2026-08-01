@@ -88,3 +88,16 @@ export type LayoutListItem = {
   id: string; city_id: string; k: number; achieved: number;
   roads_count: number; created_at: string;
 };
+
+/** Why a run that found no layout found none, when the cause was filler packing.
+ *
+ * CP-SAT placed every road-needing building and the remaining "filler" buildings
+ * then had nowhere to go. The greedy packer never exits early, so these are real
+ * "placed N of M" counts rather than a bare rejection. */
+export interface FillerFailures {
+  failures: number;
+  mean_placed: number;
+  mean_total: number;
+  worst_placed: number;
+  top_unplaced: { name: string; times: number }[];
+}
