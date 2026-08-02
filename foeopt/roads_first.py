@@ -894,6 +894,59 @@ def _run_probe_seq(payload: tuple) -> dict:
     finally:
         _WORKER_LAYOUT = None
 
+LEVEL_STATUSES = ("FEASIBLE", "INFEASIBLE", "INCONCLUSIVE", "UNDERSAMPLED")
+
+
+def classify_level(st: dict) -> tuple[str, int | None]:
+    """Four outcomes, distinguished by WHY no layout was found.
+
+    The distinction is not cosmetic. Before 2026-08-03 a level that was
+    never probed -- or barely probed -- reported INFEASIBLE, because it had
+    seen no non-proof failure to contradict it. When the deadline fires the
+    pool terminates and *every* level is classified, so levels with ZERO
+    probes were reporting a refutation on no evidence whatsoever. That
+    produced two wrong conclusions in tasks/remaining-work.md, and made the
+    same k on FR17 read FEASIBLE, INCONCLUSIVE or INFEASIBLE depending only
+    on the order the walk happened to reach it (section 9).
+
+      FEASIBLE      a legal layout was found.
+      INFEASIBLE    every surviving pattern was probed and refuted. Still
+                    only a statement about THIS SAMPLE, never about the
+                    family -- but it is at least exhaustive over the sample.
+      INCONCLUSIVE  fully probed, but some probes came back undecided
+                    (UNKNOWN/ROUTE_FAIL/...). Act on it by raising
+                    `probe_limit`: the solver ran out of time per pattern.
+      UNDERSAMPLED  the sample was not finished. Says nothing at all about
+                    feasibility. Act on it by raising `time_box`.
+    """
+    if st["best_achieved"] is not None:
+        return ("FEASIBLE", st["best_achieved"])
+    if not st["pats"]:
+        return ("INCONCLUSIVE", None)
+    if st["order"] < len(st["surviving"]):
+        return ("UNDERSAMPLED", None)
+    return ("INCONCLUSIVE" if st["saw_nonproof_failure"] else "INFEASIBLE", None)
+
+
+
+def _fill_coverage(state: dict, ks, coverage: dict | None) -> None:
+    """How much of each level's sample actually got probed.
+
+    Without this a caller cannot tell an exhaustive negative from a level that
+    the deadline cut off after two patterns -- which is exactly the confusion
+    UNDERSAMPLED exists to remove.
+    """
+    if coverage is None:
+        return
+    for k in ks:
+        st = state.get(k)
+        if st is None:
+            continue
+        coverage[k] = {"generated": len(st["pats"]),
+                       "surviving": len(st["surviving"]),
+                       "probed": min(st["order"], len(st["surviving"]))}
+
+
 def new_filler_stats() -> dict:
     """Running tally of the SAT_FILLER_FAIL population for one run."""
     return {"failures": 0, "placed": 0, "total": 0, "worst": None,
@@ -917,7 +970,8 @@ def summarise_fillers(fs: dict) -> dict | None:
 def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=None,
                         on_improvement=None, corpus=None, scorer=None,
                         score_threshold=None,
-                        filler_stats: dict | None = None) -> dict[int, tuple[str, int | None]]:
+                        filler_stats: dict | None = None,
+                        coverage: dict | None = None) -> dict[int, tuple[str, int | None]]:
     """Generate + probe several k-levels' patterns in one shared pool dispatch
     instead of draining one level's ~200 patterns before the next level's are
     even generated. `_run_probe`'s payload/result already carry `k`, so this
@@ -1003,13 +1057,6 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
             st["saw_nonproof_failure"] = True
         return time.monotonic() > params.deadline
 
-    def classify(st):
-        if st["best_achieved"] is not None:
-            return ("FEASIBLE", st["best_achieved"])
-        if not st["pats"]:
-            return ("INCONCLUSIVE", None)
-        return ("INCONCLUSIVE" if st["saw_nonproof_failure"] else "INFEASIBLE", None)
-
     if pool is None:
         for i, k in enumerate(ks):
             interrupted = False
@@ -1024,12 +1071,11 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
                     interrupted = True
                     break
             if interrupted:
-                out = {kk: classify(state[kk]) for kk in ks[:i]}
-                sb = state[k]["best_achieved"]
-                out[k] = ("INCONCLUSIVE" if sb is None else "FEASIBLE", sb)
-                for kk in ks[i + 1:]:
-                    out[kk] = ("INCONCLUSIVE", None)
-                return out
+                # classify() already reports UNDERSAMPLED for the interrupted
+                # level and for every level after it (probed 0 of N), so there
+                # is nothing to special-case here any more.
+                _fill_coverage(state, ks, coverage)
+                return {kk: classify_level(state[kk]) for kk in ks}
     else:
         payloads = [(pat, k, idx) for k in ks for idx, pat in enumerate(state[k]["surviving"])]
         for result in pool.imap_unordered(_run_probe, payloads):
@@ -1040,16 +1086,17 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
                 pool.terminate()
                 break
 
-    return {k: classify(state[k]) for k in ks}
+    _fill_coverage(state, ks, coverage)
+    return {k: classify_level(state[k]) for k in ks}
 
 
 def _probe_level(layout, region, consumers, k, rng, params, log, pool=None,
                  on_improvement=None, corpus=None, scorer=None, score_threshold=None,
-                 filler_stats=None) -> tuple[str, int | None]:
+                 filler_stats=None, coverage=None) -> tuple[str, int | None]:
     return _probe_levels_batch(layout, region, consumers, [k], rng, params, log, pool=pool,
                                on_improvement=on_improvement, corpus=corpus,
                                scorer=scorer, score_threshold=score_threshold,
-                               filler_stats=filler_stats)[k]
+                               filler_stats=filler_stats, coverage=coverage)[k]
 
 
 class RoadsFirstSearch:
@@ -1143,6 +1190,7 @@ class RoadsFirstSearch:
         deadline = time.monotonic() + self.time_box
         walk_deadline = deadline - polish_reserve
         filler_stats = new_filler_stats()
+        level_coverage: dict[int, dict] = {}
 
         pool = None
         if self.workers > 1:
@@ -1212,7 +1260,9 @@ class RoadsFirstSearch:
                 results[k] = _probe_level(layout, region, consumers, k, rng,
                                           params, lambda r: None, pool=pool,
                                           on_improvement=on_improvement, corpus=corpus,
-                                          scorer=self.scorer, score_threshold=self.score_threshold)
+                                          scorer=self.scorer, score_threshold=self.score_threshold,
+                                          filler_stats=filler_stats,
+                                          coverage=level_coverage)
                 if on_status is not None:
                     on_status(k, results[k][0], 0, 0)
             return results[k]
@@ -1224,7 +1274,8 @@ class RoadsFirstSearch:
                                             params, lambda r: None, pool=pool,
                                             on_improvement=on_improvement, corpus=corpus,
                                             scorer=self.scorer, score_threshold=self.score_threshold,
-                                            filler_stats=filler_stats)
+                                            filler_stats=filler_stats,
+                                            coverage=level_coverage)
                 for kk, res in batch.items():
                     results[kk] = res
                     if on_status is not None:
@@ -1273,7 +1324,10 @@ class RoadsFirstSearch:
                 if st != "FEASIBLE":
                     return {"verdict": "FAMILY_TOO_WEAK", "walk_complete": not truncated,
                             "deadline_hit": _should_stop(), "results": results,
-                            "filler_failures": summarise_fillers(filler_stats)}
+                            "filler_failures": summarise_fillers(filler_stats),
+                            "level_coverage": level_coverage,
+                            "undersampled_levels": sum(
+                                1 for r in results.values() if r[0] == "UNDERSAMPLED")}
 
             lo_feasible = k
             if self.concurrent_levels > 1:
@@ -1328,13 +1382,19 @@ class RoadsFirstSearch:
                                                       should_stop=_stop_polish)
                 if polish_info is not None and polish_info["improved"]:
                     best = polish_info["after"]
-            unknowns = sum(1 for r in results.values() if r[0] == "INCONCLUSIVE")
+            # UNDERSAMPLED counts as unknown: the level was not finished, so it
+            # is no more a refutation than an undecided probe is.
+            unknowns = sum(1 for r in results.values()
+                           if r[0] in ("INCONCLUSIVE", "UNDERSAMPLED"))
             return {"verdict": "DONE",
                     "lowest_feasible_k_probed": hi if best is not None else None,
                     "best_achieved": best, "inconclusive_levels": unknowns,
                     "walk_complete": not truncated, "deadline_hit": _should_stop(),
                     "seed_polish": polish_info,
                     "filler_failures": summarise_fillers(filler_stats),
+                    "level_coverage": level_coverage,
+                    "undersampled_levels": sum(
+                        1 for r in results.values() if r[0] == "UNDERSAMPLED"),
                     "results": results}
         finally:
             if corpus is not None:

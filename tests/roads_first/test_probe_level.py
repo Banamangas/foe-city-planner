@@ -221,16 +221,22 @@ def test_probe_levels_batch_pool_none_deadline_interrupts_correctly(monkeypatch)
                                   Deadline, lambda r: None, pool=None,
                                   on_improvement=lambda vlay, k, achieved: improvements.append((k, achieved)))
 
-    assert out[1] == ("INFEASIBLE", None)
+    assert out[1] == ("INFEASIBLE", None)      # fully probed, all refuted
     assert out[2] == ("FEASIBLE", 2)
-    assert out[3] == ("INCONCLUSIVE", None)
+    # k=3 was never reached at all. Sharpened 2026-08-03 from INCONCLUSIVE
+    # ("probed, undecided") to UNDERSAMPLED ("not finished") -- the two call for
+    # opposite fixes: raise probe_limit vs raise time_box.
+    assert out[3] == ("UNDERSAMPLED", None)
     assert improvements == [(2, 2)]
 
 
-def test_probe_levels_batch_pool_none_interrupted_all_unsat_so_far_is_inconclusive(monkeypatch):
-    """The interrupted level never sees a SAT before the cutoff -- it must
-    be INCONCLUSIVE (we didn't finish testing it), not INFEASIBLE (we
-    didn't prove anything either)."""
+def test_probe_levels_batch_pool_none_interrupted_all_unsat_so_far_is_undersampled(monkeypatch):
+    """The interrupted level never sees a SAT before the cutoff -- it must not
+    be INFEASIBLE (we didn't prove anything).
+
+    Since 2026-08-03 this is UNDERSAMPLED rather than INCONCLUSIVE, which is
+    what this test always meant: "we didn't finish testing it".
+    """
     lay, c1, region = _batch_layout()
     region_set = set(region.cells)
 
@@ -257,10 +263,11 @@ def test_probe_levels_batch_pool_none_interrupted_all_unsat_so_far_is_inconclusi
 
     out = mod._probe_levels_batch(lay, region_set, [c1], [1, 2], random.Random(0),
                                   Deadline, lambda r: None, pool=None)
-    assert out[1] == ("INCONCLUSIVE", None), (
+    assert out[1] == ("UNDERSAMPLED", None), (
         "an interrupted level with zero SAT so far must not be misreported "
         "as INFEASIBLE just because everything tested so far was clean")
-    assert out[2] == ("INCONCLUSIVE", None)
+    # k=2 was never reached either -- same reasoning.
+    assert out[2] == ("UNDERSAMPLED", None)
 
 
 def test_probe_levels_batch_pool_dispatches_one_imap_unordered_call_across_all_ks(monkeypatch):
@@ -295,9 +302,19 @@ def test_probe_levels_batch_pool_dispatches_one_imap_unordered_call_across_all_k
     assert all(status == "INFEASIBLE" for status, _ in out.values())
 
 
-def test_probe_levels_batch_pool_deadline_preserves_fallthrough_quirk(monkeypatch):
-    """Pre-existing quirk in the pooled branch (unchanged by this refactor):
-    unlike the pool=None branch, a deadline hit mid-stream does NOT
+def test_probe_levels_batch_pool_deadline_does_not_refute_unprobed_levels(monkeypatch):
+    """FIXED 2026-08-03. This test previously pinned the bug as a deliberate
+    quirk: on a deadline the pooled branch terminates and falls through to the
+    tail classifier, so a level that received ZERO results reported INFEASIBLE
+    -- a refutation on no evidence.
+
+    That is how the same k on FR17 came back FEASIBLE, INCONCLUSIVE or
+    INFEASIBLE depending only on the order the walk reached it, and it produced
+    two wrong conclusions in tasks/remaining-work.md. Such a level is now
+    UNDERSAMPLED.
+
+    Original description of the pooled branch, still accurate: unlike the
+    pool=None branch, a deadline hit mid-stream does NOT
     special-case incomplete levels -- they fall through to the same 3-way
     tail logic as a fully-completed level. A level with zero results
     processed before the cutoff can therefore come out INFEASIBLE despite
@@ -339,7 +356,6 @@ def test_probe_levels_batch_pool_deadline_preserves_fallthrough_quirk(monkeypatc
     out = mod._probe_levels_batch(lay, region_set, [c1], [1, 2], random.Random(0),
                                   Deadline, lambda r: None, pool=pool)
     assert pool.terminated
-    # k=2 never got a single result (deadline tripped processing k=1's only
-    # pattern) yet falls through to the standard tail logic -> INFEASIBLE,
-    # preserving the pre-existing pooled-branch behavior bit-for-bit.
-    assert out[2] == ("INFEASIBLE", None)
+    # k=2 never got a single result (the deadline tripped while processing
+    # k=1's only pattern). It must therefore claim nothing about feasibility.
+    assert out[2] == ("UNDERSAMPLED", None)

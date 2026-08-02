@@ -248,7 +248,16 @@ def main(argv=None):
                  for k, v in sorted(res["results"].items())}
     print("levels:", json.dumps(per_level, indent=1))
     if any(v[0] == "INFEASIBLE" for v in res["results"].values()):
-        print("note: INFEASIBLE = all sampled patterns UNSAT at that k, not a family-wide floor proof")
+        print("note: INFEASIBLE = every sampled pattern probed and UNSAT at that k, "
+              "not a family-wide floor proof")
+    under = [k for k, v in res["results"].items() if v[0] == "UNDERSAMPLED"]
+    if under:
+        cov = res.get("level_coverage") or {}
+        detail = ", ".join(
+            f"k={k}: {cov.get(k, {}).get('probed', '?')}/{cov.get(k, {}).get('surviving', '?')}"
+            for k in sorted(under))
+        print(f"note: UNDERSAMPLED at {len(under)} level(s) -- the sample was not "
+              f"finished, so these say NOTHING about feasibility. Raise --time-box. [{detail}]")
     return 0
 
 
