@@ -42,9 +42,9 @@ user raising the slider still gets an unbounded overrun.
 - [x] **Audit done, and it found a fourth by inspection:** `warm_start` ran `repack(budget_seconds=
       warm_start_budget)` *entirely outside* the box (a 60 s request took 90 s). Now charged
       against the box and capped at half of it.
-- [ ] **End-to-end check of the polish path in a box big enough to use it** (600 s -> 150 s
-      reserve -> ~5 seeds). The arithmetic is unit-tested; only the "does nothing at 120 s" case
-      has been verified end to end
+- [x] **DONE 2026-08-01 (section 9, E5).** 600 s box on darkzig: polish off -> 101 at 1.01x,
+      polish on -> **100 at 0.96x** — under budget, because the reserve stops the walk early to
+      pay for it. The path works end to end and the reserve arithmetic holds in practice.
 
 ---
 
@@ -65,8 +65,10 @@ A user sees this as a run that found nothing, with no explanation. Never observe
       above, **18 of 22 rescued** on 116 real FR16 SATs for 0.27% of runtime. The 4 it misses
       were *proven* infeasible in ~0.1 s, so nothing further is recoverable by packing.
       Residual failure rate is now ~3% of SATs, down from the 34% that opened this item.
-- [ ] Surface it distinctly in the webapp rather than as a generic failure — still the open
-      part: a user whose run dies this way sees a generic "found nothing".
+- [x] **DONE 2026-08-01.** `run()` reports `filler_failures` (count, mean placed of total,
+      worst case, repeat offenders); the frontend's `fillerFailureNote()` says explicitly that
+      this is a SPACE problem and a longer run will not fix it. Note the single-level probe path
+      was dropping these until 2026-08-03 (section 10).
 
 ### 2.2 A hand-set `probe_limit > time_box` still overruns
 Only `BEST_PRESET` was fixed. A user setting `time_box=120, probe_limit=300` manually still
@@ -112,8 +114,12 @@ sigma/2 - 4: the margin's *sign* reverses between cities (darkzig -8, FR16 -4, F
 feasibility is **monotone in k** and steps *up* when k_start is infeasible — so a k_start above
 the window is **unrecoverable** (FR17 + band: feasible at 133, `FAMILY_TOO_WEAK` from 137 after
 15 levels). No constant can be safe when the window moves 20 levels between cities.
-- [ ] **Adaptive cliff-finding is now the only defensible fix**, not an optimisation: spend ~20%
-      of the box bisecting for the window, exploit the rest.
+- [x] **SUPERSEDED 2026-08-03 — there is no cliff to find.** The same k=121 on FR17 returns
+      FEASIBLE, INCONCLUSIVE or INFEASIBLE depending only on whether the walk probed it first or
+      reached it through a batched ascent: whichever k is probed FIRST gets the whole box.
+      Much of the apparent "window" was levels reporting refutations they never probed
+      (section 10). Bisecting for a phantom would have been wasted work. What remains genuinely
+      open is the budget-allocation question below.
 - [ ] **Consider making the walk bidirectional** when k_start proves infeasible — currently it
       can only climb, and climbing away from the window loses the run. Core search change:
       own branch, own pre-committed gate.
@@ -123,17 +129,23 @@ The cliff is sharp: one step of 4 too low returns `FAMILY_TOO_WEAK` (nothing at 
 Measured: darkzig 106 works / 104 fails; FR16 84 works / 80 fails. -8 is optimal on darkzig
 (98 vs 103) and **fatal on FR16**. -4 is the largest margin safe on both, and leaves ~5 roads
 on the table on darkzig.
-- [ ] **Adaptive cliff-finding** (the real fix): spend ~20% of the box bisecting for the
-      feasibility frontier with short probes, then exploit the remainder at the lowest feasible
-      k. Needs no per-city calibration and self-corrects where -4 is wrong. **Separate design +
-      pre-committed gate — not a productionisation ride-along**
-- [ ] Until then, validate -4 on a third city before trusting it generally
+- [x] **Validated on a third city 2026-08-01 and FAILED** — `-4` finds nothing on FR17. Margin
+      is now `0`; costs a measured one road on FR16 (76 -> 77) and gains FR17 everything
+      (nothing -> 115). See section 9 (E3).
+- [ ] **The real open problem: budget allocation across levels.** The first level probed gets
+      the whole box; later levels share the remainder and are usually UNDERSAMPLED. That is why
+      k_start matters so much and why any constant margin is fragile. A fix would allocate
+      probes across levels deliberately rather than first-come-first-served. **Own branch, own
+      pre-committed gate.**
 
 ### 3.3 The quality band `[3,4]` — two cities
 `quality_index = (2 - mfa) * k == losses - 2c`. Every record sits at 3-4 (darkzig k=105/106,
 FR16 k=84); both >=98-road layouts sit at 2. Encouraging that it held across different k, but
 it is still n=2.
-- [ ] Check the band on a third city before treating it as a law
+- [x] **Checked 2026-08-01 (section 9, E2) — it is NOT a law, and it is not cosmetic either.**
+      At a 900 s box the band is worth nothing on darkzig (101 with and without) and is the
+      difference between finding NOTHING and matching the all-time record on FR16 (76). No FR17
+      data: every E2 arm there was starved by the `-4` k_start. On by default on that basis.
 
 ---
 
@@ -162,22 +174,27 @@ it is still n=2.
 - [ ] **FR24 remains unsolved** — 0 SAT in 135 probes at k=205/220/235 plus 0 in 1047 at
       k=246-266. Every probe UNKNOWN (undecided, *not* refuted). Open question whether it is
       road pressure (0.89) or CP-SAT model size (146 consumers)
-- [ ] **60 s and 600 s boxes** with the fixed `k_start` — only 120 s was verified end-to-end
+- [x] **DONE 2026-08-01** — 30/45/60 s swept with 3 repeats each (section 9, E4) and many
+      600 s / 900 s cells across E1-E3.
 - [x] **A real webapp run — DONE at close, PASS.** Live Flask server: `/api/load` returned the
       instance screen (LIKELY, pressure 0.405); `/api/optimize` applied BEST_PRESET at a 60 s
       box; the k-walk started at the family-aware `k_start=111`; SSE streamed four progressive
       improvements (107 -> 105 -> 104 -> **101**); the `done` event reported
       `best_achieved=101`, wall 62.1 s (**1.03x** — the box was honoured).
-- [ ] **60 s reached the same 101 as 120 s** — the box may be shorter than necessary. Cheap
-      follow-up: sweep 30 / 45 / 60 s to find where quality actually starts to degrade
+- [x] **REFUTED 2026-08-01 (section 9, E4).** Quality improves monotonically with budget:
+      30 s -> 105, 45 s -> 104, 60 s -> 101, each identical across three repeats. 30 s costs
+      4 roads. No case for shortening the default box. (Also: the search is far more
+      reproducible at these budgets than the "CP-SAT seed luck" framing suggested.)
 
 ---
 
 ## 5. Leads found and never followed
 
-- [ ] **`mode=alternate` (comb family)** — pooled FR16+FR17, `alternate` holds **9 of 9 SATs**
-      and `both` is **0 of 528**. Found free in existing probe logs, never exploited. Cheap: a
-      one-line default flip for the comb family, but needs an A/B
+- [x] **DONE 2026-08-01/03 — measured, then shipped as the default.** It was not even testable
+      before: `generate_patterns` hardcoded both modes. At equal 600 s boxes FR16 goes 90 -> 82
+      and FR17 goes from finding NOTHING to 124, and the mixed-mode family fails at a 50%
+      LARGER budget than the alternate-only run that succeeded. Default set at the product
+      level; the generator still emits both when unasked so old records stay reproducible.
 - [ ] **`SkeletonScorer` / `opts_total` is now unused in production** — superseded by the band
       filter (cheaper *and* better: 69.6% vs 46.7% SAT). Kept as tested research tooling. Decide
       whether to keep or delete
