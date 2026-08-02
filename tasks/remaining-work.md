@@ -469,3 +469,59 @@ FR16's 56) returned INCONCLUSIVE on every cell and read as a family failure. Tha
 is lessons.md 2026-07-22 exactly — a starved probe mistaken for a negative result
 — committed in a driver whose own docstring warns about it. Caught at 40 min
 rather than 4.7 h. `probe_limit` is now per city.
+
+
+---
+
+## 10. `INFEASIBLE` vs under-sampled — FIXED 2026-08-03
+
+`classify` returned INFEASIBLE whenever no layout was found and no probe had come
+back undecided — **without ever checking whether the level's sample had been
+probed at all**. On a deadline the pooled branch calls `pool.terminate()` and then
+classifies *every* level, so levels that received zero probes reported a
+refutation on no evidence. One test (`..._preserves_fallthrough_quirk`) pinned
+this deliberately, describing it as behaviour to keep "bit-for-bit".
+
+Re-running FR17 from the old bad start (`k_start=117`) shows the scale of it:
+
+    BEFORE   k=117 INCONCLUSIVE   121 INCONCLUSIVE   125 INFEASIBLE  129 INFEASIBLE  133 INFEASIBLE
+    AFTER    k=117 INCONCLUSIVE  probed 35/35
+             k=121 UNDERSAMPLED  probed  1/24     <- the level that yields 115 roads
+             k=125 UNDERSAMPLED  probed  0/28
+             k=129 UNDERSAMPLED  probed  0/23
+             k=133 UNDERSAMPLED  probed  0/15
+
+Three levels previously claimed refutation having probed **zero** patterns, and
+the one level that actually produces FR17's best result was probed **once out of
+24** before being reported as merely inconclusive.
+
+### The vocabulary now
+
+  * `FEASIBLE` — a legal layout was found.
+  * `INFEASIBLE` — every surviving pattern probed and refuted. Still only a
+    statement about that sample, never about the family, but exhaustive over it.
+  * `INCONCLUSIVE` — fully probed, some probes undecided. **Raise `probe_limit`.**
+  * `UNDERSAMPLED` — the sample was not finished. Says nothing about feasibility.
+    **Raise `time_box`.**
+
+`run()` now also returns `level_coverage` (`generated` / `surviving` / `probed`
+per k) and `undersampled_levels`. `classify_level` was lifted to module scope so
+it is tested directly rather than through a mirror that could drift. Surfaced in
+the CLI and via `coverageNote()` in the frontend, which names the least-tested
+level and tells the user which of the two knobs to turn — they need opposite
+fixes and nothing previously distinguished them.
+
+### Second bug found while verifying
+
+FR17's FIRST level reported `probed ?/?`. `run()` probes through two helpers —
+`_probe_level` for a single k, `_probe_levels_batch` for a batch — and only the
+batch path forwarded the tallies. The single path is the one that gets the whole
+budget and matters most. It was also dropping **filler failures**, silently
+weakening the `SAT_FILLER_FAIL` reporting added on 2026-08-01. Both now forwarded,
+with a test asserting each path carries both.
+
+### Consequence for past results
+
+Any `INFEASIBLE` in a log written before 2026-08-03 may mean "not probed". The
+INFEASIBLE entries in sections 3.2, 4 and 9 should be read as unverified unless
+the level's coverage is known.

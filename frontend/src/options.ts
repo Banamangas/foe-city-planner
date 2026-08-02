@@ -154,3 +154,45 @@ export function fillerFailureNote(
     + `buildings, or freeing region cells, is more likely to help than a longer run.`;
   return { heading, detail, blames: ff.top_unplaced.map((u) => u.name) };
 }
+
+
+/** Explain a run whose levels were never finished, as a pure decision.
+ *
+ * UNDERSAMPLED and INCONCLUSIVE both mean "no layout here", but they call for
+ * OPPOSITE fixes and the user cannot be expected to know which: an unfinished
+ * sample needs a longer time-box, whereas a finished sample full of undecided
+ * probes needs a longer per-probe limit. Returns null when neither applies.
+ */
+export function coverageNote(
+  results: Record<string, [string, number | null]> | undefined | null,
+  coverage: Record<string, { generated: number; surviving: number; probed: number }> | undefined | null,
+): { heading: string; advice: string; worst: string | null } | null {
+  if (!results) return null;
+  const entries = Object.entries(results);
+  const under = entries.filter(([, r]) => r[0] === "UNDERSAMPLED");
+  const incon = entries.filter(([, r]) => r[0] === "INCONCLUSIVE");
+  if (under.length === 0 && incon.length === 0) return null;
+
+  if (under.length >= incon.length && under.length > 0) {
+    let worst: string | null = null;
+    let worstFrac = Infinity;
+    for (const [k] of under) {
+      const c = coverage?.[k];
+      if (!c || c.surviving === 0) continue;
+      const frac = c.probed / c.surviving;
+      if (frac < worstFrac) { worstFrac = frac; worst = `k=${k}: ${c.probed} of ${c.surviving} skeletons tried`; }
+    }
+    return {
+      heading: `${under.length} road count${under.length === 1 ? " was" : "s were"} never fully tested`,
+      advice: "The run ended before finishing these, so they say nothing about "
+        + "whether a layout exists there. Raise the time-box to find out.",
+      worst,
+    };
+  }
+  return {
+    heading: `${incon.length} road count${incon.length === 1 ? "" : "s"} could not be decided`,
+    advice: "Every skeleton at these road counts was tried, but the solver ran "
+      + "out of time on individual ones. Raise the probe limit, not the time-box.",
+    worst: null,
+  };
+}

@@ -201,7 +201,8 @@ def test_k_start_auto_resolves_to_pick_k_start_value(monkeypatch):
 
     captured_k = []
     def spy_probe_level(layout, region, consumers, k, rng, args, log, pool=None,
-                        on_improvement=None, corpus=None, scorer=None, score_threshold=None):
+                        on_improvement=None, corpus=None, scorer=None,
+                        score_threshold=None, **_kw):
         captured_k.append(k)
         return ("FEASIBLE", 200)  # short-circuit: one level, then walk stops
 
@@ -232,7 +233,8 @@ def test_k_start_explicit_integer_overrides_auto(monkeypatch):
 
     captured_k = []
     def spy_probe_level(layout, region, consumers, k, rng, args, log, pool=None,
-                        on_improvement=None, corpus=None, scorer=None, score_threshold=None):
+                        on_improvement=None, corpus=None, scorer=None,
+                        score_threshold=None, **_kw):
         captured_k.append(k)
         return ("FEASIBLE", 200)
     monkeypatch.setattr(mod, "_probe_level", spy_probe_level)
@@ -268,7 +270,8 @@ def test_fallback_cap_is_k_max_not_168(monkeypatch):
 
     probed_ks = []
     def spy_probe_level(layout, region, consumers, k, rng, args, log, pool=None,
-                        on_improvement=None, corpus=None, scorer=None, score_threshold=None):
+                        on_improvement=None, corpus=None, scorer=None,
+                        score_threshold=None, **_kw):
         probed_ks.append(k)
         return ("INFEASIBLE", None)  # every level infeasible -> fallback climbs
     monkeypatch.setattr(mod, "_probe_level", spy_probe_level)

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { applyPreset, budgetWarning, byGroup, cliPreview, initialValues, isModified, modifiedCount, fillerFailureNote, screenBanner, secondsToMinutes, specDefault } from "./options";
+import { applyPreset, budgetWarning, coverageNote, byGroup, cliPreview, initialValues, isModified, modifiedCount, fillerFailureNote, screenBanner, secondsToMinutes, specDefault } from "./options";
 import type { OptionSpec } from "./types";
 
 const specs: OptionSpec[] = [
@@ -187,5 +187,52 @@ describe("fillerFailureNote", () => {
   it("singularises a lone failure", () => {
     expect(fillerFailureNote({ ...ff, failures: 1 }, true)!.heading)
       .toContain("1 candidate layout discarded");
+  });
+});
+
+describe("coverageNote", () => {
+  const cov = {
+    "84": { generated: 200, surviving: 200, probed: 3 },
+    "88": { generated: 200, surviving: 200, probed: 150 },
+  };
+
+  it("says nothing when every level was decided", () => {
+    expect(coverageNote({ "84": ["FEASIBLE", 76] }, cov)).toBeNull();
+    expect(coverageNote({ "84": ["INFEASIBLE", null] }, cov)).toBeNull();
+    expect(coverageNote(null, cov)).toBeNull();
+  });
+
+  it("tells the user to raise the TIME-BOX when levels were unfinished", () => {
+    const n = coverageNote({ "84": ["UNDERSAMPLED", null] }, cov)!;
+    expect(n.advice).toMatch(/time-box/);
+    expect(n.advice).not.toMatch(/probe limit/);
+  });
+
+  it("tells the user to raise the PROBE LIMIT when levels were undecided", () => {
+    const n = coverageNote({ "84": ["INCONCLUSIVE", null] }, cov)!;
+    expect(n.advice).toMatch(/probe limit/);
+    expect(n.advice).toMatch(/not the time-box/);
+  });
+
+  it("never claims an unfinished level proved anything", () => {
+    const n = coverageNote({ "84": ["UNDERSAMPLED", null] }, cov)!;
+    expect(n.advice).toMatch(/say nothing/);
+  });
+
+  it("points at the least-tested level so the number is concrete", () => {
+    const n = coverageNote(
+      { "84": ["UNDERSAMPLED", null], "88": ["UNDERSAMPLED", null] }, cov)!;
+    expect(n.worst).toBe("k=84: 3 of 200 skeletons tried");
+  });
+
+  it("survives missing coverage data", () => {
+    const n = coverageNote({ "84": ["UNDERSAMPLED", null] }, undefined)!;
+    expect(n.heading).toContain("never fully tested");
+    expect(n.worst).toBeNull();
+  });
+
+  it("singularises one level", () => {
+    expect(coverageNote({ "84": ["UNDERSAMPLED", null] }, cov)!.heading)
+      .toContain("1 road count was");
   });
 });

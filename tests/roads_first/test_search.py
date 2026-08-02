@@ -23,7 +23,8 @@ def test_search_on_improvement_fires_on_sat(monkeypatch):
     fake_layout_result = SimpleNamespace(roads={(0, 2)}, buildings=[])
 
     def fake_probe_level(layout, region, consumers, k, rng, params, log, pool=None,
-                         on_improvement=None, corpus=None, scorer=None, score_threshold=None):
+                         on_improvement=None, corpus=None, scorer=None,
+                        score_threshold=None, **_kw):
         if on_improvement is not None:
             on_improvement(fake_layout_result, k, k)
         return ("FEASIBLE", k)
@@ -49,7 +50,8 @@ def test_search_should_stop_interrupts(monkeypatch):
     stop_flag = {"calls": 0}
 
     def fake_probe_level(layout, region, consumers, k, rng, params, log, pool=None,
-                         on_improvement=None, corpus=None, scorer=None, score_threshold=None):
+                         on_improvement=None, corpus=None, scorer=None,
+                        score_threshold=None, **_kw):
         return ("FEASIBLE", k)
 
     monkeypatch.setattr(mod, "_probe_level", fake_probe_level)
@@ -71,7 +73,8 @@ def test_search_on_status_fires_after_level(monkeypatch):
     statuses = []
 
     def fake_probe_level(layout, region, consumers, k, rng, params, log, pool=None,
-                         on_improvement=None, corpus=None, scorer=None, score_threshold=None):
+                         on_improvement=None, corpus=None, scorer=None,
+                        score_threshold=None, **_kw):
         return ("FEASIBLE", k)
 
     monkeypatch.setattr(mod, "_probe_level", fake_probe_level)
@@ -93,7 +96,8 @@ def test_search_k_start_auto_resolves(monkeypatch):
     captured_k = []
 
     def fake_probe_level(layout, region, consumers, k, rng, params, log, pool=None,
-                         on_improvement=None, corpus=None, scorer=None, score_threshold=None):
+                         on_improvement=None, corpus=None, scorer=None,
+                        score_threshold=None, **_kw):
         captured_k.append(k)
         return ("FEASIBLE", 200)
 
@@ -114,7 +118,8 @@ def test_search_pattern_family_propagates_to_params(monkeypatch):
     captured = []
 
     def fake_probe_level(layout, region, consumers, k, rng, params, log, pool=None,
-                         on_improvement=None, corpus=None, scorer=None, score_threshold=None):
+                         on_improvement=None, corpus=None, scorer=None,
+                        score_threshold=None, **_kw):
         captured.append(getattr(params, "pattern_family", "MISSING"))
         return ("FEASIBLE", k)
 
@@ -132,7 +137,8 @@ def test_search_pattern_family_defaults_to_comb(monkeypatch):
     captured = []
 
     def fake_probe_level(layout, region, consumers, k, rng, params, log, pool=None,
-                         on_improvement=None, corpus=None, scorer=None, score_threshold=None):
+                         on_improvement=None, corpus=None, scorer=None,
+                        score_threshold=None, **_kw):
         captured.append(getattr(params, "pattern_family", "MISSING"))
         return ("FEASIBLE", k)
 
@@ -149,7 +155,8 @@ def test_search_family_too_weak(monkeypatch):
     lay = _tiny_layout()
 
     def fake_probe_level(layout, region, consumers, k, rng, params, log, pool=None,
-                         on_improvement=None, corpus=None, scorer=None, score_threshold=None):
+                         on_improvement=None, corpus=None, scorer=None,
+                        score_threshold=None, **_kw):
         return ("INFEASIBLE", None)
 
     monkeypatch.setattr(mod, "_probe_level", fake_probe_level)
@@ -166,7 +173,8 @@ def test_search_concurrent_levels_default_is_1_never_calls_batch(monkeypatch):
     batch_calls = []
 
     def fake_probe_level(layout, region, consumers, k, rng, params, log, pool=None,
-                         on_improvement=None, corpus=None, scorer=None, score_threshold=None):
+                         on_improvement=None, corpus=None, scorer=None,
+                        score_threshold=None, **_kw):
         return ("FEASIBLE", k) if k <= 5 else ("INFEASIBLE", None)
 
     def fake_probe_levels_batch(*a, **kw):
@@ -189,7 +197,8 @@ def test_search_concurrent_levels_ascent_batches_multiple_ks(monkeypatch):
     seen_batches = []
 
     def fake_probe_level(layout, region, consumers, k, rng, params, log, pool=None,
-                         on_improvement=None, corpus=None, scorer=None, score_threshold=None):
+                         on_improvement=None, corpus=None, scorer=None,
+                        score_threshold=None, **_kw):
         return ("INFEASIBLE", None)  # k_start itself always infeasible -> ascent kicks in
 
     def fake_probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=None,
@@ -217,7 +226,8 @@ def test_search_concurrent_levels_descent_batches_multiple_ks(monkeypatch):
     seen_batches = []
 
     def fake_probe_level(layout, region, consumers, k, rng, params, log, pool=None,
-                         on_improvement=None, corpus=None, scorer=None, score_threshold=None):
+                         on_improvement=None, corpus=None, scorer=None,
+                        score_threshold=None, **_kw):
         return ("FEASIBLE", k)  # k_start=100 itself feasible -> straight to descent
 
     def fake_probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=None,
@@ -251,7 +261,8 @@ def test_search_concurrent_levels_reaches_same_verdict_as_sequential(monkeypatch
         return ("FEASIBLE", k) if k >= 13 else ("INFEASIBLE", None)
 
     def fake_probe_level(layout, region, consumers, k, rng, params, log, pool=None,
-                         on_improvement=None, corpus=None, scorer=None, score_threshold=None):
+                         on_improvement=None, corpus=None, scorer=None,
+                        score_threshold=None, **_kw):
         return truth(k)
 
     def fake_probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=None,
