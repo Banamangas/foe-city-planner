@@ -795,3 +795,56 @@ so its expected value per hour is far below everything above. Stays open in
 ## Review
 
 (filled in as results land)
+
+---
+
+# Level budget allocation — 2026-08-03 (overnight, autonomous)
+
+## Diagnosis: three defects, not one
+
+**D1 — no per-level budget cap.** `level(k)` probes every surviving pattern with
+no bound but the walk deadline. Measured on FR17 at k_start=117: the first level
+probed 35/35 patterns at probe_limit=90 across 6 workers = **up to 525 s of a
+600 s box on one level**, which then came back INCONCLUSIVE. Everything after it
+got 1 probe or zero.
+
+**D2 — batch payloads are grouped by level.**
+`[(pat, k, idx) for k in ks for idx, pat in ...]` hands the pool all of k1's
+patterns, then all of k2's. `imap_unordered` consumes roughly in order, so a
+"concurrent" batch still drains level by level — contradicting the function's own
+docstring ("instead of draining one level's ~200 patterns before the next
+level's are even generated"). Generation was made concurrent; probing was not.
+
+**D3 — UNDERSAMPLED is treated as a refutation by the control flow.** Descent
+`break`s when no level is FEASIBLE; ascent jumps to `max(batch_ks)`. Both discard
+levels that were never probed. Currently masked because UNDERSAMPLED only arises
+at the deadline (so the run is ending anyway) — but it becomes live the moment D1
+is fixed, because then levels stop early with budget still on the clock.
+
+## What I will and will not do
+
+**Do:** D2 unconditionally (it is a bug against stated intent, no policy in it).
+D1 + D3 behind `level_slice_frac`, default None = today's behaviour exactly.
+
+**Not do:** a bidirectional walk, and any re-tuning of `K_START_MARGIN`. Both are
+separate changes and would confound this measurement.
+
+**Arbitration on the risk:** capping the first level is NOT free. At record k
+feasibility is ~1%, so fewer probes at a genuinely feasible level can lose the
+SAT that produces the good road count. This must therefore be measured on cities
+where k_start is RIGHT (does it hurt?) as well as where it is WRONG (does it
+rescue?). A change that only ever helps the broken case is not worth shipping if
+it degrades the healthy one.
+
+## Overnight A/B
+
+Arms (equal 600 s boxes, per-city probe_limit as calibrated 2026-08-01):
+  baseline            — current behaviour
+  interleave          — D2 only
+  slice0.35 / slice0.5— D2 + D1 + D3 at two fractions
+
+Cells: {darkzig, FR16, FR17} x {default k_start, deliberately-wrong k_start}.
+The wrong-start arm is the point: robustness to a bad start is what this buys.
+
+Adopt only if: no city regresses at its default start, AND at least one
+wrong-start case improves.
