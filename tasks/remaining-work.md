@@ -598,10 +598,22 @@ runs; changing the surrounding lifetime breaks it silently.**
 
 ### Honest limits
 
-* **n=1 per cell.** Run-to-run variance is real: a standalone repeat of one cell
-  gave 99 where the matrix gave 104. The bad-start results (NOTHING -> a real
-  layout) are far outside that noise; the "no regression at default starts"
-  claim rests on single samples and is being re-measured with repeats.
+* **n=1 per cell in the A/B, now n=4 via a repeat study** (18 further cells,
+  `scripts/exp_slice_repeats.py`, 0 errors). The weak half of the evidence held
+  and improved:
+
+        city       old (n=4)              slice35 (n=4)          verdict
+        darkzig    [104,104,104,104]      [99,99,103,104]        BETTER
+        FR16       [77,77,77,77]          [77,77,77,77]          tie
+        FR17       [115,115,115,115]      [115,115,115,115]      tie
+
+  Sliced is **never worse in any paired run** and better in 3 of 4 on darkzig;
+  its worst observed result equals the unsliced arm's best. So the honest
+  summary at a correct k_start is not "no measured cost" but "a real gain on one
+  city, parity on two". The A/B's single darkzig cell (104) was the outlier, not
+  the norm -- exactly what n=1 could not have told us.
+  Note `old` is near-deterministic (104/104/104/104) because it explores ONE
+  level; the sliced arm varies because it explores seven.
 * This does **not** make `k_start` unimportant — a bad start still costs quality
   (FR16 81 vs 77, FR17 130 vs 115). It converts catastrophic failure into
   graceful degradation, which is a different and lesser claim than "the walk no
