@@ -1143,7 +1143,7 @@ class RoadsFirstSearch:
                  quality_index_band: tuple[int, int] | None = None,
                  exact_repair: float = 0.0,
                  comb_modes: tuple[str, ...] | None = None,
-                 level_slice_frac: float | None = None,
+                 level_slice_frac: float | None = 0.35,
                  interleave_levels: bool = True):
         self.layout = layout
         self.time_box = time_box
@@ -1168,10 +1168,16 @@ class RoadsFirstSearch:
         self.seed_polish = seed_polish
         self.exact_repair = exact_repair
         self.comb_modes = comb_modes
-        # None = today's behaviour exactly: a level probes until the walk
-        # deadline. A fraction caps each level at that share of the REMAINING
-        # budget, so the walk can afford to visit several. Not free -- see the
-        # arbitration note in tasks/todo.md 2026-08-03.
+        # Caps each probing call at this share of the REMAINING budget, so one
+        # level cannot consume the box. None restores the pre-2026-08-03
+        # behaviour.
+        #
+        # 0.35 from the 24-cell A/B (tasks/remaining-work.md section 11). From a
+        # k_start below the productive region the unsliced walk returns NOTHING
+        # on all three cities; 0.35 returns 101 / 81 / 130. From the correct
+        # k_start it changes no result on any city (104 / 77 / 115 either way),
+        # so it is insurance with no measured cost. 0.50 was rejected: it costs
+        # a road on FR16's correct start and fails to rescue FR17 at all.
         self.level_slice_frac = level_slice_frac
         # Measurement knob only: False restores the level-grouped payload order
         # that made a "concurrent" batch drain one level at a time.

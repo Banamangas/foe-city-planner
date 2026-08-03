@@ -542,3 +542,67 @@ with a test asserting each path carries both.
 Any `INFEASIBLE` in a log written before 2026-08-03 may mean "not probed". The
 INFEASIBLE entries in sections 3.2, 4 and 9 should be read as unverified unless
 the level's coverage is known.
+
+---
+
+## 11. Level budget allocation — FIXED 2026-08-03, `level_slice_frac=0.35`
+
+24-cell A/B, strictly sequential, equal 600 s boxes, per-city probe_limit. Driver
+`scripts/exp_level_budget_ab.py`; raw rows `scripts/_levelbudget.jsonl`
+(gitignored). 0 errors, max overrun 1.06x.
+
+### Results
+
+    DEFAULT k_start (the regression guard)
+    city        old  interleave  slice35  slice50      levels touched (old -> slice35)
+    darkzig     104     104        104      104              1 -> 7
+    FR16         77      77         77       78              5 -> 7
+    FR17        115     115        115      115              5 -> 6
+
+    BAD k_start, below the productive region (what this buys)
+    city        old  interleave  slice35  slice50      levels touched (old -> slice35)
+    darkzig    NONE    NONE        101      103              1 -> 10
+    FR16       NONE    NONE         81       81              1 -> 8
+    FR17       NONE    NONE        130     NONE              5 -> 9
+
+**0.35 adopted**: rescues all three cities from a bad start and changes no result
+from a correct one. **0.50 rejected**: costs a road on FR16's correct start *and*
+fails to rescue FR17 — too large a slice starves everything after the first level.
+
+### The three defects, and which one actually mattered
+
+**D1 (per-level slice) is the whole effect.** Without it the walk spends the
+entire box on one level: darkzig's default start touched exactly ONE level in
+600 s (184 probes on k=115) and never descended.
+
+**D2 (interleaved payloads) changed 0 of 6 outcomes.** It is still a real bug —
+the old order gave k=84 fifty probes and k=80/76/72 *zero* while classifying all
+four — and it makes `UNDERSAMPLED` coverage meaningful. But it is inert on
+results, because the first level is a single un-batched call: by the time a batch
+is dispatched the budget is already gone. Fixing the batch order cannot help when
+nothing reaches the batch. Kept as a correctness fix, claimed as nothing more.
+
+**D3 (UNDERSAMPLED-aware control flow) is load-bearing only with D1.** Before
+slicing, UNDERSAMPLED arose only at the deadline, so the walk's reaction was
+moot. With slicing it fires mid-run, and without D3 the walk would end on levels
+it never probed — trading one bug for a worse one.
+
+### A bug the A/B found that no test did
+
+`pool.terminate()` leaves the pool permanently unusable. It had always been
+correct, because it was only ever reached at the *walk* deadline when the pool
+was about to be discarded. Slicing made it fire mid-run and every later level
+died with `ValueError: Pool not running`. The walk now rebuilds the pool, but
+only while budget remains. **A line can be correct purely because of when it
+runs; changing the surrounding lifetime breaks it silently.**
+
+### Honest limits
+
+* **n=1 per cell.** Run-to-run variance is real: a standalone repeat of one cell
+  gave 99 where the matrix gave 104. The bad-start results (NOTHING -> a real
+  layout) are far outside that noise; the "no regression at default starts"
+  claim rests on single samples and is being re-measured with repeats.
+* This does **not** make `k_start` unimportant — a bad start still costs quality
+  (FR16 81 vs 77, FR17 130 vs 115). It converts catastrophic failure into
+  graceful degradation, which is a different and lesser claim than "the walk no
+  longer needs a good start".

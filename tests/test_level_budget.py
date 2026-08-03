@@ -61,12 +61,17 @@ def test_interleaving_handles_levels_of_different_sizes():
 
 # --- D1: the slice -----------------------------------------------------------
 
-def test_slice_defaults_to_off_so_behaviour_is_unchanged():
-    """The whole change must be inert unless asked for -- every result this
-    project holds was produced without it."""
+def test_slice_defaults_to_the_measured_fraction():
+    """0.35, adopted from the 24-cell A/B: it rescues all three cities from a
+    bad k_start (NOTHING -> 101/81/130) and changes no result from a correct one
+    (104/77/115 either way). 0.50 was rejected -- it costs a road on FR16's
+    correct start and fails to rescue FR17.
+
+    None still restores the pre-2026-08-03 behaviour, which is how every earlier
+    record in this repo was produced."""
     import inspect
     p = inspect.signature(mod.RoadsFirstSearch.__init__).parameters
-    assert p["level_slice_frac"].default is None
+    assert p["level_slice_frac"].default == 0.35
 
 
 def test_slice_deadline_caps_the_call_but_never_extends_it():
