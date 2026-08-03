@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import json
 import multiprocessing
 import random
@@ -971,7 +972,8 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
                         on_improvement=None, corpus=None, scorer=None,
                         score_threshold=None,
                         filler_stats: dict | None = None,
-                        coverage: dict | None = None) -> dict[int, tuple[str, int | None]]:
+                        coverage: dict | None = None,
+                        runtime: dict | None = None) -> dict[int, tuple[str, int | None]]:
     """Generate + probe several k-levels' patterns in one shared pool dispatch
     instead of draining one level's ~200 patterns before the next level's are
     even generated. `_run_probe`'s payload/result already carry `k`, so this
@@ -984,6 +986,13 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
     th = layout.townhall.footprint
     if filler_stats is None:
         filler_stats = new_filler_stats()
+    # A slice caps THIS call, so one level cannot eat the whole box. Measured on
+    # FR17 at k_start=117: the first level alone could consume 525 s of a 600 s
+    # box (35 patterns x 90 s / 6 workers) and then return INCONCLUSIVE, leaving
+    # every later level with one probe or none.
+    slice_deadline = getattr(params, "slice_deadline", None)
+    effective_deadline = (params.deadline if slice_deadline is None
+                          else min(params.deadline, slice_deadline))
     th_mode = getattr(params, "th_anchors", "coarse")
     family = getattr(params, "pattern_family", "comb")
     gen_fn = _pattern_generator(family)
@@ -1055,7 +1064,7 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
                     recorder(k, achieved, pat, vlay)
         elif status in ("UNKNOWN", "ROUTE_FAIL", "INVALID", "SAT_FILLER_FAIL", "SAT_ROTATED"):
             st["saw_nonproof_failure"] = True
-        return time.monotonic() > params.deadline
+        return time.monotonic() > effective_deadline
 
     if pool is None:
         for i, k in enumerate(ks):
@@ -1077,13 +1086,35 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
                 _fill_coverage(state, ks, coverage)
                 return {kk: classify_level(state[kk]) for kk in ks}
     else:
-        payloads = [(pat, k, idx) for k in ks for idx, pat in enumerate(state[k]["surviving"])]
+        # Round-robin across levels, not grouped by level. Grouped payloads make
+        # imap_unordered drain k1 entirely before touching k2, so a "concurrent"
+        # batch is concurrent only in generation -- exactly what this function's
+        # docstring says it exists to avoid. Measured consequence: on a deadline
+        # the later levels of a batch had probed 0 of 28 patterns and were still
+        # being classified (see tasks/remaining-work.md section 10).
+        if getattr(params, "interleave_levels", True):
+            _by_level = [[(pat, k, idx) for idx, pat in enumerate(state[k]["surviving"])]
+                         for k in ks]
+            payloads = [p for row in itertools.zip_longest(*_by_level) for p in row
+                        if p is not None]
+        else:
+            # Pre-2026-08-03 order, retained ONLY so the A/B can reproduce it.
+            payloads = [(pat, k, idx) for k in ks
+                        for idx, pat in enumerate(state[k]["surviving"])]
         for result in pool.imap_unordered(_run_probe, payloads):
             k = result["k"]
             idx = result["pat_index"]
             pat = state[k]["surviving"][idx]
             if handle_result(k, result, pat):
+                # Kills in-flight probes, which is what we want -- but it also
+                # leaves the pool permanently unusable. Before slicing this only
+                # ever happened at the walk deadline, when the pool was about to
+                # be discarded anyway; a slice fires mid-run, so the caller MUST
+                # be told to rebuild or every later level dies with
+                # "ValueError: Pool not running".
                 pool.terminate()
+                if runtime is not None:
+                    runtime["pool_terminated"] = True
                 break
 
     _fill_coverage(state, ks, coverage)
@@ -1092,11 +1123,12 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
 
 def _probe_level(layout, region, consumers, k, rng, params, log, pool=None,
                  on_improvement=None, corpus=None, scorer=None, score_threshold=None,
-                 filler_stats=None, coverage=None) -> tuple[str, int | None]:
+                 filler_stats=None, coverage=None, runtime=None) -> tuple[str, int | None]:
     return _probe_levels_batch(layout, region, consumers, [k], rng, params, log, pool=pool,
                                on_improvement=on_improvement, corpus=corpus,
                                scorer=scorer, score_threshold=score_threshold,
-                               filler_stats=filler_stats, coverage=coverage)[k]
+                               filler_stats=filler_stats, coverage=coverage,
+                               runtime=runtime)[k]
 
 
 class RoadsFirstSearch:
@@ -1110,7 +1142,9 @@ class RoadsFirstSearch:
                  seed_polish: int = 0, lane_pitches: tuple[int, ...] | None = None,
                  quality_index_band: tuple[int, int] | None = None,
                  exact_repair: float = 0.0,
-                 comb_modes: tuple[str, ...] | None = None):
+                 comb_modes: tuple[str, ...] | None = None,
+                 level_slice_frac: float | None = 0.35,
+                 interleave_levels: bool = True):
         self.layout = layout
         self.time_box = time_box
         self.patterns = patterns
@@ -1134,6 +1168,20 @@ class RoadsFirstSearch:
         self.seed_polish = seed_polish
         self.exact_repair = exact_repair
         self.comb_modes = comb_modes
+        # Caps each probing call at this share of the REMAINING budget, so one
+        # level cannot consume the box. None restores the pre-2026-08-03
+        # behaviour.
+        #
+        # 0.35 from the 24-cell A/B (tasks/remaining-work.md section 11). From a
+        # k_start below the productive region the unsliced walk returns NOTHING
+        # on all three cities; 0.35 returns 101 / 81 / 130. From the correct
+        # k_start it changes no result on any city (104 / 77 / 115 either way),
+        # so it is insurance with no measured cost. 0.50 was rejected: it costs
+        # a road on FR16's correct start and fails to rescue FR17 at all.
+        self.level_slice_frac = level_slice_frac
+        # Measurement knob only: False restores the level-grouped payload order
+        # that made a "concurrent" batch drain one level at a time.
+        self.interleave_levels = interleave_levels
 
     def _apply_seed_polish(self, best_holder: dict, on_improvement,
                            should_stop=None) -> dict | None:
@@ -1192,14 +1240,15 @@ class RoadsFirstSearch:
         filler_stats = new_filler_stats()
         level_coverage: dict[int, dict] = {}
 
-        pool = None
-        if self.workers > 1:
-            pool = multiprocessing.Pool(
+        def _new_pool():
+            return multiprocessing.Pool(
                 self.workers,
                 initializer=_worker_init,
                 initargs=(layout, self.probe_limit, self.probe_workers,
                          self.symmetry_breaking, self.hints, self.stub_priority,
                          None, self.exact_repair))
+
+        pool = _new_pool() if self.workers > 1 else None
 
         corpus = None
 
@@ -1218,6 +1267,7 @@ class RoadsFirstSearch:
             quality_index_band=self.quality_index_band,
             exact_repair=self.exact_repair,
             comb_modes=self.comb_modes,
+            interleave_levels=self.interleave_levels,
         )
 
         results: dict[int, tuple[str, int | None]] = {}
@@ -1255,27 +1305,72 @@ class RoadsFirstSearch:
                 return True
             return time.monotonic() + self.probe_limit >= deadline
 
+        attempts: dict[int, int] = {}
+        runtime: dict = {}
+
+        def _restore_pool():
+            """A slice expiry terminates the pool mid-run, which leaves it
+            permanently unusable -- every later level would raise "Pool not
+            running". Rebuild it, but only while there is still budget to use it
+            for; at the walk deadline the run is over anyway."""
+            nonlocal pool
+            if not runtime.pop("pool_terminated", False):
+                return
+            if pool is not None and not _should_stop():
+                pool = _new_pool()
+
+        def _set_slice():
+            """Cap the next probing call at a share of what is left."""
+            if self.level_slice_frac is None:
+                params.slice_deadline = None
+                return
+            remaining = walk_deadline - time.monotonic()
+            params.slice_deadline = (time.monotonic()
+                                     + max(self.probe_limit,
+                                           remaining * self.level_slice_frac))
+
+        def _needs_probe(kk):
+            """Re-probe a level that merely ran out of slice, at most twice.
+
+            Without this, D1 turns every truncated level into a permanent
+            'not feasible' and the walk gives up with budget still on the clock
+            -- trading one bug for a worse one."""
+            if kk not in results:
+                return True
+            return (self.level_slice_frac is not None
+                    and results[kk][0] == "UNDERSAMPLED"
+                    and attempts.get(kk, 0) < 2
+                    and not _should_stop())
+
         def level(k):
-            if k not in results:
+            if _needs_probe(k):
+                attempts[k] = attempts.get(k, 0) + 1
+                _set_slice()
                 results[k] = _probe_level(layout, region, consumers, k, rng,
                                           params, lambda r: None, pool=pool,
                                           on_improvement=on_improvement, corpus=corpus,
                                           scorer=self.scorer, score_threshold=self.score_threshold,
                                           filler_stats=filler_stats,
-                                          coverage=level_coverage)
+                                          coverage=level_coverage, runtime=runtime)
+                _restore_pool()
                 if on_status is not None:
                     on_status(k, results[k][0], 0, 0)
             return results[k]
 
         def levels(ks):
-            missing = [kk for kk in ks if kk not in results]
+            missing = [kk for kk in ks if _needs_probe(kk)]
             if missing:
+                for kk in missing:
+                    attempts[kk] = attempts.get(kk, 0) + 1
+                _set_slice()
                 batch = _probe_levels_batch(layout, region, consumers, missing, rng,
                                             params, lambda r: None, pool=pool,
                                             on_improvement=on_improvement, corpus=corpus,
                                             scorer=self.scorer, score_threshold=self.score_threshold,
                                             filler_stats=filler_stats,
-                                            coverage=level_coverage)
+                                            coverage=level_coverage,
+                                            runtime=runtime)
+                _restore_pool()
                 for kk, res in batch.items():
                     results[kk] = res
                     if on_status is not None:
@@ -1311,6 +1406,12 @@ class RoadsFirstSearch:
                         if feasible_ks:
                             k = min(feasible_ks)
                             st = "FEASIBLE"
+                        elif any(batch[kk][0] == "UNDERSAMPLED" and _needs_probe(kk)
+                                 for kk in batch_ks):
+                            # Levels that merely ran out of slice are not
+                            # refutations. Climbing past them would abandon
+                            # untested ground AND move away from the good k.
+                            continue
                         else:
                             k = max(batch_ks)
                             st = batch[k][0]
@@ -1344,6 +1445,11 @@ class RoadsFirstSearch:
                     feasible_ks = [kk for kk in batch_ks if batch[kk][0] == "FEASIBLE"]
                     if len(feasible_ks) == len(batch_ks):
                         lo_feasible = min(batch_ks)
+                    elif any(batch[kk][0] == "UNDERSAMPLED" and _needs_probe(kk)
+                             for kk in batch_ks):
+                        # Do not end the descent on levels we never finished
+                        # probing -- that is giving up with budget on the clock.
+                        continue
                     elif feasible_ks:
                         lo_feasible = min(feasible_ks)
                         break
