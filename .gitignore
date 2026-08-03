@@ -25,3 +25,5 @@ city-user-data-foe-helper.json
 CityMap-Born-FR*.json
 scripts/_smoke.jsonl
 scripts/_overnight.jsonl
+scripts/_levelbudget.jsonl
+scripts/_lb_smoke.jsonl
