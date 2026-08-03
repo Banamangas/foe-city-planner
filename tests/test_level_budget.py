@@ -200,3 +200,37 @@ def test_coverage_reports_the_shortfall_a_slice_creates(monkeypatch):
     probed = sum(c["probed"] for c in cov.values())
     assert probed == sum(counts.values())
     assert any(c["probed"] < c["surviving"] for c in cov.values())
+
+
+def test_pool_termination_is_signalled_to_the_caller():
+    """Found by the A/B, not by a test: `pool.terminate()` leaves the pool
+    permanently unusable. Before slicing it was only ever reached at the walk
+    deadline, when the pool was about to be discarded -- so nothing noticed. A
+    slice fires MID-RUN, and every later level then died with
+    `ValueError: Pool not running`.
+
+    The batch must therefore tell the caller it killed the pool.
+    """
+    import inspect
+    src = inspect.getsource(mod._probe_levels_batch)
+    term = src[src.index("pool.terminate()"):]
+    assert 'runtime["pool_terminated"] = True' in term[:300]
+
+
+def test_the_walk_rebuilds_a_pool_a_slice_killed():
+    import inspect
+    src = inspect.getsource(mod.RoadsFirstSearch.run)
+    assert "_restore_pool" in src
+    restore = src[src.index("def _restore_pool"):]
+    assert "_new_pool()" in restore[:600]
+    # rebuilding after the walk is over would just cost a fork for nothing
+    assert "_should_stop()" in restore[:600]
+
+
+def test_every_probing_call_site_restores_the_pool():
+    """Both the single-level and batched paths can terminate it; missing either
+    reintroduces the crash on a different code path."""
+    import inspect
+    src = inspect.getsource(mod.RoadsFirstSearch.run)
+    assert src.count("_restore_pool()") >= 2
+    assert src.count("runtime=runtime") >= 2

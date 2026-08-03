@@ -972,7 +972,8 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
                         on_improvement=None, corpus=None, scorer=None,
                         score_threshold=None,
                         filler_stats: dict | None = None,
-                        coverage: dict | None = None) -> dict[int, tuple[str, int | None]]:
+                        coverage: dict | None = None,
+                        runtime: dict | None = None) -> dict[int, tuple[str, int | None]]:
     """Generate + probe several k-levels' patterns in one shared pool dispatch
     instead of draining one level's ~200 patterns before the next level's are
     even generated. `_run_probe`'s payload/result already carry `k`, so this
@@ -1105,7 +1106,15 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
             idx = result["pat_index"]
             pat = state[k]["surviving"][idx]
             if handle_result(k, result, pat):
+                # Kills in-flight probes, which is what we want -- but it also
+                # leaves the pool permanently unusable. Before slicing this only
+                # ever happened at the walk deadline, when the pool was about to
+                # be discarded anyway; a slice fires mid-run, so the caller MUST
+                # be told to rebuild or every later level dies with
+                # "ValueError: Pool not running".
                 pool.terminate()
+                if runtime is not None:
+                    runtime["pool_terminated"] = True
                 break
 
     _fill_coverage(state, ks, coverage)
@@ -1114,11 +1123,12 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
 
 def _probe_level(layout, region, consumers, k, rng, params, log, pool=None,
                  on_improvement=None, corpus=None, scorer=None, score_threshold=None,
-                 filler_stats=None, coverage=None) -> tuple[str, int | None]:
+                 filler_stats=None, coverage=None, runtime=None) -> tuple[str, int | None]:
     return _probe_levels_batch(layout, region, consumers, [k], rng, params, log, pool=pool,
                                on_improvement=on_improvement, corpus=corpus,
                                scorer=scorer, score_threshold=score_threshold,
-                               filler_stats=filler_stats, coverage=coverage)[k]
+                               filler_stats=filler_stats, coverage=coverage,
+                               runtime=runtime)[k]
 
 
 class RoadsFirstSearch:
@@ -1224,14 +1234,15 @@ class RoadsFirstSearch:
         filler_stats = new_filler_stats()
         level_coverage: dict[int, dict] = {}
 
-        pool = None
-        if self.workers > 1:
-            pool = multiprocessing.Pool(
+        def _new_pool():
+            return multiprocessing.Pool(
                 self.workers,
                 initializer=_worker_init,
                 initargs=(layout, self.probe_limit, self.probe_workers,
                          self.symmetry_breaking, self.hints, self.stub_priority,
                          None, self.exact_repair))
+
+        pool = _new_pool() if self.workers > 1 else None
 
         corpus = None
 
@@ -1289,6 +1300,18 @@ class RoadsFirstSearch:
             return time.monotonic() + self.probe_limit >= deadline
 
         attempts: dict[int, int] = {}
+        runtime: dict = {}
+
+        def _restore_pool():
+            """A slice expiry terminates the pool mid-run, which leaves it
+            permanently unusable -- every later level would raise "Pool not
+            running". Rebuild it, but only while there is still budget to use it
+            for; at the walk deadline the run is over anyway."""
+            nonlocal pool
+            if not runtime.pop("pool_terminated", False):
+                return
+            if pool is not None and not _should_stop():
+                pool = _new_pool()
 
         def _set_slice():
             """Cap the next probing call at a share of what is left."""
@@ -1322,7 +1345,8 @@ class RoadsFirstSearch:
                                           on_improvement=on_improvement, corpus=corpus,
                                           scorer=self.scorer, score_threshold=self.score_threshold,
                                           filler_stats=filler_stats,
-                                          coverage=level_coverage)
+                                          coverage=level_coverage, runtime=runtime)
+                _restore_pool()
                 if on_status is not None:
                     on_status(k, results[k][0], 0, 0)
             return results[k]
@@ -1338,7 +1362,9 @@ class RoadsFirstSearch:
                                             on_improvement=on_improvement, corpus=corpus,
                                             scorer=self.scorer, score_threshold=self.score_threshold,
                                             filler_stats=filler_stats,
-                                            coverage=level_coverage)
+                                            coverage=level_coverage,
+                                            runtime=runtime)
+                _restore_pool()
                 for kk, res in batch.items():
                     results[kk] = res
                     if on_status is not None:
