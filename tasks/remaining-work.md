@@ -132,11 +132,12 @@ on the table on darkzig.
 - [x] **Validated on a third city 2026-08-01 and FAILED** — `-4` finds nothing on FR17. Margin
       is now `0`; costs a measured one road on FR16 (76 -> 77) and gains FR17 everything
       (nothing -> 115). See section 9 (E3).
-- [ ] **The real open problem: budget allocation across levels.** The first level probed gets
-      the whole box; later levels share the remainder and are usually UNDERSAMPLED. That is why
-      k_start matters so much and why any constant margin is fragile. A fix would allocate
-      probes across levels deliberately rather than first-come-first-served. **Own branch, own
-      pre-committed gate.**
+- [x] **DONE 2026-08-03 — see section 11.** `level_slice_frac=0.35` caps each probing call at
+      that share of the remaining budget. From a k_start below the productive region the walk
+      went from returning NOTHING on all three cities to 101 / 81 / 130; from a correct k_start
+      it is never worse across n=4 paired runs and better on darkzig. It does NOT make k_start
+      unimportant — a bad start still costs quality — but it converts catastrophic failure into
+      graceful degradation.
 
 ### 3.3 The quality band `[3,4]` — two cities
 `quality_index = (2 - mfa) * k == losses - 2c`. Every record sits at 3-4 (darkzig k=105/106,
