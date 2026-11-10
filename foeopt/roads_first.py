@@ -954,6 +954,10 @@ _WORKER_STUB_PRIORITY: bool = False
 _WORKER_SOLVER_OVERRIDES: dict[str, object] | None = None
 _WORKER_EXACT_REPAIR: float = 0.0
 _WORKER_OBJECTIVE_LIMIT: float = 0.0
+# Seconds kept back for validate() after the objective solve, and the smallest
+# objective budget worth starting (hinted, it improves within seconds).
+OBJECTIVE_MARGIN_S = 3.0
+OBJECTIVE_MIN_S = 2.0
 
 
 def _worker_init(layout: Layout, probe_limit: float, probe_workers: int,
@@ -976,7 +980,8 @@ def _worker_init(layout: Layout, probe_limit: float, probe_workers: int,
 
 
 def _run_probe(payload: tuple) -> dict:
-    pat, k, pat_index = payload
+    pat, k, pat_index = payload[:3]
+    deadline = payload[3] if len(payload) > 3 else None
     layout = _WORKER_LAYOUT
     region = set(layout.region.cells)
     consumers = layout.road_needing()
@@ -1003,12 +1008,16 @@ def _run_probe(payload: tuple) -> dict:
         layout, pat, pos,
         exact_repair=min(_WORKER_EXACT_REPAIR, _WORKER_PROBE_LIMIT),
         exact_workers=_WORKER_PROBE_WORKERS, diag=vdiag)
-    if _WORKER_OBJECTIVE_LIMIT > 0:
-        # Clamped to one probe's own limit, for the same reason as exact_repair
-        # above: charged per SAT, an unclamped value lets N SATs add N x limit.
+    # Clamped to one probe's own limit, for the same reason as exact_repair
+    # above (charged per SAT, an unclamped value lets N SATs add N x limit),
+    # AND to the caller's deadline less a margin for validate(): a result that
+    # arrives after the deadline is thrown away with the pool.
+    olimit = min(_WORKER_OBJECTIVE_LIMIT, _WORKER_PROBE_LIMIT)
+    if deadline is not None:
+        olimit = min(olimit, deadline - time.monotonic() - OBJECTIVE_MARGIN_S)
+    if _WORKER_OBJECTIVE_LIMIT > 0 and olimit >= OBJECTIVE_MIN_S:
         odiag: dict = {}
-        opos = minimize_needed(pat, region, consumers, pos,
-                               limit=min(_WORKER_OBJECTIVE_LIMIT, _WORKER_PROBE_LIMIT),
+        opos = minimize_needed(pat, region, consumers, pos, limit=olimit,
                                workers=_WORKER_PROBE_WORKERS, diag=odiag)
         if opos is not None:
             ostat, olay, oach = validate(
@@ -1042,8 +1051,10 @@ def _run_probe_seq(payload: tuple) -> dict:
     _WORKER_SOLVER_OVERRIDES = rest[3] if len(rest) > 3 else None
     _WORKER_EXACT_REPAIR = rest[4] if len(rest) > 4 else 0.0
     _WORKER_OBJECTIVE_LIMIT = rest[5] if len(rest) > 5 else 0.0
+    # Only forwarded when the objective is on: off stays byte-identical.
+    deadline = rest[6] if len(rest) > 6 and _WORKER_OBJECTIVE_LIMIT > 0 else None
     try:
-        return _run_probe((pat, k, 0))
+        return _run_probe((pat, k, 0) if deadline is None else (pat, k, 0, deadline))
     finally:
         _WORKER_LAYOUT = None
 
@@ -1233,7 +1244,8 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
                                          getattr(params, "stub_priority", False),
                                          None,
                                          getattr(params, "exact_repair", 0.0),
-                                         getattr(params, "objective_limit", 0.0)))
+                                         getattr(params, "objective_limit", 0.0),
+                                         effective_deadline))
                 if handle_result(k, result, pat):
                     interrupted = True
                     break
@@ -1259,6 +1271,13 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
             # Pre-2026-08-03 order, retained ONLY so the A/B can reproduce it.
             payloads = [(pat, k, idx) for k in ks
                         for idx, pat in enumerate(state[k]["surviving"])]
+        if getattr(params, "objective_limit", 0.0) > 0:
+            # The objective phase must know the deadline: probe + objective can
+            # exceed a level slice, and a slice expiry terminates the pool,
+            # killing every in-flight SAT with it (measured: FR16 at a 60 s box
+            # found NOTHING with the objective on). time.monotonic is
+            # system-wide on Linux, so it is comparable inside the workers.
+            payloads = [(*p, effective_deadline) for p in payloads]
         for result in pool.imap_unordered(_run_probe, payloads):
             k = result["k"]
             idx = result["pat_index"]

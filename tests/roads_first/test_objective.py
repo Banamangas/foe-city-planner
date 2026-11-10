@@ -160,3 +160,42 @@ def test_production_prefilter_receives_fillers(monkeypatch):
                            random.Random(0), params, lambda r: None)
     assert seen and all(f is not None and [b.entity_id for b in f] == [20] for f in seen)
     assert real is not spy
+
+
+def test_objective_respects_the_deadline(monkeypatch):
+    """A SAT that arrives with too little budget left must skip the objective
+    (and so still return the feasibility layout) rather than run past the
+    deadline and be thrown away with the pool."""
+    pytest.importorskip("ortools")
+    import time
+    region, pat = _corridor()
+    th = _b(1, 2, 2, needs=False, th=True, x=0, y=1)
+    consumers = [_b(10 + i, 1, 1, x=2 + i, y=1) for i in range(2)]
+    lay = Layout(Region(frozenset(region)), [th, *consumers], th, {})
+
+    def boom(*a, **k):
+        raise AssertionError("objective ran with no budget left")
+
+    monkeypatch.setattr(rf, "minimize_needed", boom)
+    res = rf._run_probe_seq((pat, 10, lay, 5.0, 1, False, None, False, None, 0.0,
+                             5.0, time.monotonic() + 1.0))
+    assert res["status"] == "SAT"
+
+
+def test_objective_limit_is_clamped_to_remaining_budget(monkeypatch):
+    pytest.importorskip("ortools")
+    import time
+    region, pat = _corridor()
+    th = _b(1, 2, 2, needs=False, th=True, x=0, y=1)
+    consumers = [_b(10 + i, 1, 1, x=2 + i, y=1) for i in range(2)]
+    lay = Layout(Region(frozenset(region)), [th, *consumers], th, {})
+    seen = {}
+
+    def spy(pattern, region, consumers, positions, *, limit, **kw):
+        seen["limit"] = limit
+        return None
+
+    monkeypatch.setattr(rf, "minimize_needed", spy)
+    rf._run_probe_seq((pat, 10, lay, 30.0, 1, False, None, False, None, 0.0,
+                       30.0, time.monotonic() + 10.0))
+    assert 0 < seen["limit"] <= 10.0 - rf.OBJECTIVE_MARGIN_S
