@@ -167,6 +167,9 @@ def main(argv=None):
     p.add_argument("--exact-repair", type=float, default=0.0, metavar="SECONDS",
                    help="CP-SAT seconds to rescue layouts the greedy filler "
                         "packer cannot finish (SAT_FILLER_FAIL); 0 = off")
+    p.add_argument("--objective-limit", type=float, default=0.0, metavar="SECONDS",
+                   help="after each SAT, CP-SAT seconds minimising the skeleton "
+                        "cells the placement needs (hinted, never worse); 0 = off")
     args = p.parse_args(argv)
     if args.smoke:
         args.patterns = 20
@@ -242,6 +245,7 @@ def main(argv=None):
         stub_priority=args.stub_priority,
         lane_cap=args.lane_cap,
         exact_repair=args.exact_repair,
+        objective_limit=args.objective_limit,
     ).run(on_improvement=on_improvement, on_status=on_status)
     print(json.dumps({k: v for k, v in res.items() if k != "results"}, indent=1))
     per_level = {k: v[0] + (f" achieved={v[1]}" if v[1] is not None else "")
