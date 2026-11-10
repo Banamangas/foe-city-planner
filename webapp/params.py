@@ -48,6 +48,15 @@ OPTION_SPECS: list[dict] = [
                 "would otherwise be discarded, and is clamped to the probe "
                 "limit so a rescue can at most double one probe; 0 = off.",
     },
+    {
+        "name": "objective_limit", "cli": "--objective-limit", "type": "float",
+        "default": 0.0, "min": 0.0, "max": 300.0, "advanced": True,
+        "group": "budget", "label": "Placement objective (s, 0 = off)",
+        "help": "After each feasible probe, spend up to this many seconds "
+                "re-placing the road-needing buildings to minimise the road "
+                "cells they actually need, starting from the feasible answer "
+                "(so it can never do worse). Clamped to the probe limit; 0 = off.",
+    },
     # ---- search shape ----
     {
         "name": "patterns", "cli": "--patterns", "type": "int",
