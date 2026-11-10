@@ -136,7 +136,7 @@ export function OptimizePanel() {
       {spec?.presets?.best && (
         <div className="row">
           <button disabled={running} className="preset-best"
-            title="The configuration that holds this project's records on both measured cities (darkzig 94 roads, FR16 76) — non-uniform skeletons filtered to the productive quality band, with seed polish."
+            title="The configuration that holds this project's records on both measured cities (darkzig 94 roads, FR16 76) — non-uniform skeletons filtered to the productive quality band, with exact filler repair. Seed polish is off: it does not pay inside a short box."
             onClick={() => setValues(applyPreset(specs, values, spec.presets.best))}>
             Use best-known settings
           </button>

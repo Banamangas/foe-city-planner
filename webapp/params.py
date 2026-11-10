@@ -18,6 +18,8 @@ parameter but a preset, served as SMOKE_PRESET below.
 """
 from __future__ import annotations
 
+import math
+
 OPTION_SPECS: list[dict] = [
     # ---- basic (rendered in the panel body, not behind the toggle) ----
     {
@@ -229,10 +231,11 @@ SMOKE_PRESET: dict = {
 # family -- unlike the lane family, where 30 s missed every known-feasible
 # pattern (tasks/lessons.md 2026-07-22).
 #
-# seed_polish is 0 here, NOT the 12 the research runs used, for the same reason:
-# _apply_seed_polish runs AFTER the walk and loops sequentially over seeds with no
-# deadline check, so it is bounded by its own parameter rather than the remaining
-# budget. Measured at a 120 s box: seed_polish=0 took 127 s (1.06x) and reached
+# seed_polish is 0 here, NOT the 12 the research runs used. It used to run after
+# the walk with no deadline check (bounded by its own parameter, not the box);
+# since 2026-07-31 it is budget-bounded (reserve + should_stop), but it still
+# does not pay inside a short box: a reserve that fits a seed starves the walk.
+# Measured at a 120 s box, before the fix: seed_polish=0 took 127 s (1.06x) and reached
 # 101 roads; seed_polish=12 took 281 s (2.34x) and reached 100 -- 154 extra
 # seconds for ONE road. It is a genuine lever for long runs (it produced the 94
 # and the 95) and remains available; it is simply a bad trade inside a user box.
@@ -274,10 +277,24 @@ class OptionError(ValueError):
 
 
 def _as_number(spec: dict, raw, cast):
+    kind = "an integer" if cast is int else "a number"
+    bad = OptionError(f"{spec['name']}: expected {kind}, got {raw!r}")
+    # bool is an int subclass: JSON true would otherwise become 1.
+    if isinstance(raw, bool):
+        raise bad
     try:
-        value = cast(raw)
+        value = float(raw) if cast is int else cast(raw)
     except (TypeError, ValueError):
-        raise OptionError(f"{spec['name']}: expected {'an integer' if cast is int else 'a number'}, got {raw!r}")
+        raise bad
+    # NaN passes both range comparisons below (every comparison is False), and
+    # inf would reach the solver as a time budget.
+    if not math.isfinite(value):
+        raise bad
+    if cast is int:
+        # int(2.7) silently truncates; a fractional "integer" is a client bug.
+        if value != int(value):
+            raise bad
+        value = int(value)
     lo, hi = spec.get("min"), spec.get("max")
     if lo is not None and value < lo:
         raise OptionError(f"{spec['name']}: must be >= {lo} (got {value})")
