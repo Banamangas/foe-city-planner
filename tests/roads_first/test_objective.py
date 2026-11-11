@@ -451,7 +451,9 @@ def test_deepening_reprobes_unknown_levels_with_a_growing_limit(monkeypatch):
     assert res["best_achieved"] == 18
     d = res["deepen"]
     assert d["start_hi"] == 20 and d["end_hi"] == 18
-    assert d["rounds"][0] == {"limit": 30, "status": {19: "INCONCLUSIVE",
+    # the bound (20, best roads) is re-solved first, then unknowns nearest-first
+    assert d["rounds"][0] == {"limit": 30, "status": {20: "FEASIBLE", 19: "INCONCLUSIVE",
                                                       18: "FEASIBLE", 16: "INCONCLUSIVE"}}
+    assert list(d["rounds"][0]["status"])[:2] == [20, 19]
     assert d["rounds"][1]["limit"] == 90 and 17 in d["rounds"][1]["status"]
     assert (18, 30) in seen and res["profile"]["wall_s"] >= 2   # used the box

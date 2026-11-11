@@ -1996,7 +1996,7 @@ class RoadsFirstSearch:
             params.deadline = _walk_end()
             remaining = params.deadline - time.monotonic()
             params.slice_deadline = (time.monotonic()
-                                     + max(self.probe_limit,
+                                     + max(params.probe_limit,
                                            remaining * self.level_slice_frac))
 
         def _needs_probe(kk):
@@ -2116,9 +2116,13 @@ class RoadsFirstSearch:
                                  reverse=True)
                 if hi > 1 and hi - 1 not in results:
                     unknown.insert(0, hi - 1)      # a new bound opens an unprobed level
-                todo = unknown or ([hi - 1] if hi > 1 else [])
-                if not todo:
-                    break
+                # Also re-solve the level that holds the best road count, and the
+                # bound: on FR17 (600 s) the 103 comes from a longer objective at
+                # k~116, not from a lower k (deepening reached k=114 yet kept 105).
+                scored = [(r[1], kk) for kk, r in results.items() if r[1] is not None]
+                resolve = {hi} | ({min(scored)[1]} if scored else set())
+                todo = sorted(resolve, reverse=True) + [kk for kk in unknown
+                                                        if kk not in resolve]
                 new_limit = min(limit * DEEPEN_FACTOR, max(DEEPEN_MAX_S, self.probe_limit))
                 if new_limit != limit:
                     # worker limits are baked in at pool init: rebuild once per step
@@ -2132,7 +2136,7 @@ class RoadsFirstSearch:
                         pool = _new_pool()
                 status = {}
                 for i in range(0, len(todo), step):
-                    ks = [kk for kk in todo[i:i + step] if kk < hi]
+                    ks = [kk for kk in todo[i:i + step] if kk < hi or kk in resolve]
                     if not ks:
                         continue
                     if _should_stop():
@@ -2154,7 +2158,7 @@ class RoadsFirstSearch:
                             on_status(kk, res[0], 0, 0)
                     ok = [kk for kk in ks if batch[kk][0] == "FEASIBLE"]
                     if ok:
-                        hi = min(ok)
+                        hi = min(hi, min(ok))
                 info["rounds"].append({"limit": limit, "status": status})
             info["end_hi"] = hi
             if limit != self.probe_limit:
