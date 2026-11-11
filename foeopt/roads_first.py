@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
-from foeopt.model import Building, Footprint, Layout, Region
+from foeopt.model import Building, Footprint, Layout, Region, contact_cells
 from foeopt.bounds import pick_k_start
 from foeopt.corpus import CorpusWriter
 from foeopt.exact_packing import apply_placements, exact_pack
@@ -496,6 +496,8 @@ def prefilter(pattern: Pattern, region: set[Cell],
     return None
 
 
+from foeopt.chains import compose, expand, expand_buildings
+from foeopt.legality import MILITARY_POLICIES
 from foeopt.packing import Grid, first_fit
 from foeopt.router import RouteError, route
 from foeopt.validate import canonical_dims, is_valid, rotated_buildings
@@ -530,7 +532,24 @@ def _anchor_candidates(b: Building, region: set[Cell], blocked: set[Cell],
             cells = fp.cells()
             if not (cells <= region) or (cells & blocked):
                 continue
-            if any(c in roads for c in fp.border_cells()):
+            if any(c in roads for c in contact_cells(b, x, y)):
+                out.append((x, y))
+    return out
+
+
+def _lane_anchor_candidates(b: Building, region: set[Cell], blocked: set[Cell],
+                            lane_cells: set[Cell]) -> list[tuple[int, int]]:
+    """Anchors for a two-lane building: its contact edge must reach a candidate
+    two-lane tile cell (the tile, not the skeleton, connects it to the TH)."""
+    out = []
+    w, l = b.footprint.width, b.footprint.length
+    x0, y0, x1, y1 = _bbox(region)
+    for y in range(y0, y1 - l + 2):
+        for x in range(x0, x1 - w + 2):
+            cells = Footprint(x, y, w, l).cells()
+            if not (cells <= region) or (cells & blocked):
+                continue
+            if contact_cells(b, x, y) & lane_cells:
                 out.append((x, y))
     return out
 
@@ -541,9 +560,9 @@ def _add_symmetry_breaking(m, cand, xs, ys) -> None:
     explores every permutation of them as distinct symmetric solutions. Chain
     a lexicographic (x, y) <= ordering across each size-group to collapse
     that permutation symmetry to one representative assignment."""
-    groups: dict[tuple[int, int], list[int]] = {}
+    groups: dict[tuple, list[int]] = {}
     for i, (b, _) in enumerate(cand):
-        groups.setdefault((b.footprint.width, b.footprint.length), []).append(i)
+        groups.setdefault(_class_key(b), []).append(i)
     for members in groups.values():
         for a, b_idx in zip(members, members[1:]):
             lt = m.NewBoolVar(f"symlt{a}_{b_idx}")
@@ -598,7 +617,7 @@ def _stub_priority_hints(pattern: Pattern,
                 continue
             w, l = b.footprint.width, b.footprint.length
             for (x, y) in opts:
-                if c in Footprint(x, y, w, l).border_cells():
+                if c in contact_cells(b, x, y):
                     touching.append((w * l, i, (x, y)))
                     break
         touching.sort(key=lambda t: t[0], reverse=True)
@@ -703,11 +722,46 @@ def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
 PROBE_MODELS = ("item", "position")
 
 
-def _size_classes(consumers: list[Building]) -> dict[tuple[int, int], list[Building]]:
-    out: dict[tuple[int, int], list[Building]] = {}
+def _class_key(b: Building) -> tuple:
+    """Buildings are interchangeable in the placement model only if EVERY
+    placement-relevant property matches: size, road-contact edge (composite
+    chains) and road level. Size alone is not enough (review 2026-11-11)."""
+    return (b.footprint.width, b.footprint.length, b.contact, b.road_level)
+
+
+def _size_classes(consumers: list[Building]) -> dict[tuple, list[Building]]:
+    out: dict[tuple, list[Building]] = {}
     for b in consumers:
-        out.setdefault((b.footprint.width, b.footprint.length), []).append(b)
+        out.setdefault(_class_key(b), []).append(b)
     return out
+
+
+# Two-lane roads (user-confirmed 2026-11-11): 2x2 tiles, and a road_level-2
+# building needs an all-two-lane path to the TH. Modelled here as the layout the
+# player uses: ONE tile touching the TH, with the building touching that tile.
+# Longer two-lane paths are not modelled (no such skeleton -> UNSAT).
+LANE_KEY = (2, 2, "two-lane tile", 2)   # lits key; [0], [1] are the tile size
+LANE_PREFIX = "lane2:"                  # positions key prefix for chosen tiles
+
+
+def _lane_tiles(pattern: Pattern, region: set[Cell]) -> list[tuple[int, int]]:
+    """Top-left anchors of 2x2 tiles inside the region, off the TH, with at
+    least one cell on the TH border. Tiles may overlap skeleton road cells
+    (those just become two-lane)."""
+    th = pattern.th
+    th_cells, th_border = th.cells(), th.border_cells()
+    out = []
+    for tx in range(th.x - 2, th.x + th.width + 1):
+        for ty in range(th.y - 2, th.y + th.length + 1):
+            cells = Footprint(tx, ty, 2, 2).cells()
+            if cells <= region and not (cells & th_cells) and (cells & th_border):
+                out.append((tx, ty))
+    return out
+
+
+def lane_tiles_of(positions: dict) -> list[tuple[int, int]]:
+    return [tuple(v[:2]) for k, v in positions.items()
+            if isinstance(k, str) and k.startswith(LANE_PREFIX)]
 
 
 def _position_model(pattern: Pattern, region: set[Cell], consumers: list[Building],
@@ -728,14 +782,46 @@ def _position_model(pattern: Pattern, region: set[Cell], consumers: list[Buildin
     blocked = set(pattern.roads) | set(pattern.th.cells())
     classes = _size_classes(consumers)
     cover: dict[Cell, list] = {}
-    lits: dict[tuple[int, int], list] = {}
-    for (w, l), members in classes.items():
-        opts = _anchor_candidates(members[0], region, blocked, pattern.roads)
+    lits: dict[tuple, list] = {}
+    tiles: list = []                       # [((tx, ty), literal, tile cells)]
+    if any(key[3] >= 2 for key in classes):
+        for (tx, ty) in _lane_tiles(pattern, region):
+            cells = Footprint(tx, ty, 2, 2).cells()
+            u = m.NewBoolVar(f"lane_{tx}_{ty}")
+            tiles.append(((tx, ty), u, cells))
+            for c in cells - blocked:      # tile cells off the skeleton occupy space
+                cover.setdefault(c, []).append(u)
+        if not tiles:
+            return None
+        lits[LANE_KEY] = [(xy, u) for xy, u, _ in tiles]
+    tile_users: dict = {}
+    for key, members in classes.items():
+        w, l = key[0], key[1]
+        lane = key[3] >= 2
+        if lane:
+            lane_cells = set().union(*(cells for _, _, cells in tiles))
+            opts = _lane_anchor_candidates(members[0], region, blocked, lane_cells)
+        else:
+            opts = _anchor_candidates(members[0], region, blocked, pattern.roads)
         row = []
         for (x, y) in opts:
             touch = None
+            if lane:
+                ctc = contact_cells(members[0], x, y)
+                users = [(xy, u) for xy, u, cells in tiles if cells & ctc
+                         and not (cells & Footprint(x, y, w, l).cells())]
+                if not users:
+                    continue
+                v = m.NewBoolVar(f"z{w}x{l}L_{x}_{y}")
+                m.AddBoolOr([u for _, u in users]).OnlyEnforceIf(v)
+                for xy, _ in users:
+                    tile_users.setdefault(xy, []).append(v)
+                row.append(((x, y), v))
+                for c in Footprint(x, y, w, l).cells():
+                    cover.setdefault(c, []).append(v)
+                continue
             if needed is not None:
-                touch = [needed[c] for c in Footprint(x, y, w, l).border_cells()
+                touch = [needed[c] for c in contact_cells(members[0], x, y)
                          if c in needed]
                 if not touch:
                     continue
@@ -748,7 +834,9 @@ def _position_model(pattern: Pattern, region: set[Cell], consumers: list[Buildin
         if len(row) < len(members):
             return None
         m.Add(sum(v for _, v in row) == len(members))
-        lits[(w, l)] = row
+        lits[key] = row
+    for xy, u, _ in tiles:                 # a tile exists only to serve a building
+        m.AddBoolOr(tile_users.get(xy, [])).OnlyEnforceIf(u)
     for vs in cover.values():
         if len(vs) > 1:
             m.AddAtMostOne(vs)
@@ -764,6 +852,9 @@ def _position_solution(solver, lits, classes) -> dict:
         chosen = sorted(xy for xy, v in lits[size] if solver.Value(v))
         for b, (x, y) in zip(members, chosen):
             pos[b.entity_id] = (x, y, size[0], size[1])
+    for i, (tx, ty) in enumerate(sorted(xy for xy, v in lits.get(LANE_KEY, ())
+                                        if solver.Value(v))):
+        pos[f"{LANE_PREFIX}{i}"] = (tx, ty, 2, 2)
     return pos
 
 
@@ -896,8 +987,7 @@ def minimize_needed(pattern: Pattern, region: set[Cell], consumers: list[Buildin
         hint_xy = tuple(positions[b.entity_id][:2])
         ol = []
         for (x, y) in opts:
-            touch = [needed[c] for c in Footprint(x, y, w, l).border_cells()
-                     if c in needed]
+            touch = [needed[c] for c in contact_cells(b, x, y) if c in needed]
             if not touch:
                 continue  # borders only TH-unreachable skeleton cells
             o = m.NewBoolVar(f"o{i}_{x}_{y}")
@@ -947,10 +1037,14 @@ def _minimize_needed_position(m, needed, pattern, region, consumers, positions,
         return None
     m, lits, classes = built
     used = {(x, y, w, l) for (x, y, w, l) in positions.values()}
-    for (w, l), row in lits.items():
+    for key, row in lits.items():
+        w, l = key[0], key[1]
         for (x, y), v in row:
             m.AddHint(v, (x, y, w, l) in used)
-    m.Minimize(sum(needed.values()))
+    # a two-lane tile's cells off the skeleton are extra road
+    tile_cost = [len(Footprint(x, y, 2, 2).cells() - set(pattern.roads)) * u
+                 for (x, y), u in lits.get(LANE_KEY, ())]
+    m.Minimize(sum(needed.values()) + sum(tile_cost))
     solver = cp_model.CpSolver()
     solver.parameters.num_search_workers = workers
     solver.parameters.random_seed = seed
@@ -1041,10 +1135,19 @@ def validate(layout_src: Layout, pattern: Pattern, positions: dict,
     for b in consumers:
         x, y, w, l = positions[b.entity_id]
         placed.append(replace(b, footprint=Footprint(x, y, w, l)))
+    # Composite chains become their real members before routing: the router
+    # and validators only ever see real buildings (foeopt/chains.py).
+    placed = expand_buildings(placed)
     th = replace(layout_src.townhall, footprint=pattern.th)
     cand = Layout(layout_src.region, [th, *placed], th, {})
+    # Two-lane buildings: the placement's chosen 2x2 tiles are fixed level-2
+    # roads; with none chosen, route() refuses rather than fake a 1x1 tile.
+    fixed = None
+    if any(b.road_level >= 2 for b in placed if b.needs_road):
+        fixed = {c: 2 for (tx, ty) in lane_tiles_of(positions)
+                 for c in Footprint(tx, ty, 2, 2).cells()}
     try:
-        roads = route(cand)
+        roads = route(cand, fixed=fixed)
     except RouteError:
         return ("ROUTE_FAIL", None, 0)
     cand.roads = roads
@@ -1077,7 +1180,8 @@ def validate(layout_src: Layout, pattern: Pattern, positions: dict,
         diag["repair_ran"] = bool(exact_repair > 0)
     if unplaced:
         return ("SAT_FILLER_FAIL", None, len(roads))
-    bad = rotated_buildings(cand, canonical_dims(layout_src))
+    cand.buildings = expand_buildings(cand.buildings)
+    bad = rotated_buildings(cand, canonical_dims(expand(layout_src)))
     if bad:
         return ("SAT_ROTATED", None, len(roads))
     return ("OK", cand, len(roads))
@@ -1098,6 +1202,8 @@ _WORKER_MODEL: str = "item"
 # Seconds kept back for validate() after the objective solve, and the smallest
 # objective budget worth starting (hinted, it improves within seconds).
 OBJECTIVE_MARGIN_S = 3.0
+EXACT_FINISH_S = 10.0      # exact_route cap on the final layout
+EXACT_FINISH_MIN_S = 1.0  # below this, skip exact finish rather than start it
 OBJECTIVE_MIN_S = 2.0
 
 
@@ -1491,8 +1597,30 @@ class RoadsFirstSearch:
                  objective_polish: float = 0.0,
                  objective_polish_top: int = 3,
                  exact_finish: bool = False,
-                 probe_model: str = "item"):
-        self.layout = layout
+                 probe_model: str = "position",
+                 keep_chains: bool = True,
+                 military: str = "connect"):
+        # Linked chains are placed as rigid composites so their links survive
+        # (user-confirmed rule, 2026-11-11); every emitted layout is expanded
+        # back to real buildings inside validate().
+        if military not in MILITARY_POLICIES:
+            raise ValueError(f"military must be one of {MILITARY_POLICIES}")
+        self.military = military
+        self.source_layout = layout
+        if military == "unconnected":
+            # Explicit per-run choice: two-lane buildings are left off the road
+            # and packed like any building that needs none.
+            layout = Layout(layout.region,
+                            [replace(b, needs_road=False)
+                             if b.needs_road and b.road_level >= 2 else b
+                             for b in layout.buildings],
+                            layout.townhall, dict(layout.roads))
+        elif probe_model != "position" and any(
+                b.road_level >= 2 for b in layout.road_needing()):
+            raise ValueError("a two-lane building with military='connect' needs "
+                             "probe_model='position' (the item model has no "
+                             "two-lane tiles); or pass military='unconnected'")
+        self.layout = compose(layout) if keep_chains else layout
         if probe_model not in PROBE_MODELS:
             raise ValueError(f"probe_model must be one of {PROBE_MODELS}")
         # "position": symmetry-free CP-SAT encoding (see _position_model). The
@@ -1552,12 +1680,21 @@ class RoadsFirstSearch:
         # that made a "concurrent" batch drain one level at a time.
         self.interleave_levels = interleave_levels
 
-    def _apply_exact_finish(self, latest: dict, on_improvement) -> dict:
+    def _apply_exact_finish(self, latest: dict, on_improvement,
+                            deadline: float | None = None, should_stop=None) -> dict:
         """exact_route on the best layout; emit it only if strictly smaller and
-        still valid. Bounded at 10 s: the fixed-placement model is tiny."""
+        still valid. Capped at EXACT_FINISH_S and at the time left before
+        `deadline`; skipped (never started) when stopped or out of time."""
         from foeopt.exact_router import exact_route
         lay, before = latest["layout"], latest["achieved"]
-        res = exact_route(lay, time_limit=10.0)
+        limit = EXACT_FINISH_S
+        if deadline is not None:
+            limit = min(limit, deadline - time.monotonic())
+        if (should_stop is not None and should_stop()) or limit < EXACT_FINISH_MIN_S:
+            return {"before": before, "after": before, "status": "SKIPPED",
+                    "optimal": False}
+        lane = {c: lvl for c, lvl in lay.roads.items() if lvl >= 2}
+        res = exact_route(lay, time_limit=limit, **({"fixed": lane} if lane else {}))
         after = before
         if res.roads is not None and res.count is not None and res.count < before:
             cand = Layout(lay.region, lay.buildings, lay.townhall, dict(res.roads))
@@ -1602,7 +1739,7 @@ class RoadsFirstSearch:
                 "candidates": len(cands), "per_skeleton": per}
 
     def _apply_seed_polish(self, best_holder: dict, on_improvement,
-                           should_stop=None) -> dict | None:
+                           should_stop=None, incumbent: int | None = None) -> dict | None:
         """Opt-in (seed_polish>0): re-solve the best skeleton under N CP-SAT
         seeds and keep a strictly-lower legal road count. probe() has no
         objective, so the placement it returns -- and thus route()'s count --
@@ -1623,7 +1760,11 @@ class RoadsFirstSearch:
                                   probe_limit=self.probe_limit,
                                   probe_workers=self.probe_workers,
                                   should_stop=should_stop)
+        # Compare against the GLOBAL incumbent (objective polish may already
+        # have beaten the walk's best skeleton), not just that skeleton's count.
         baseline = best_holder.get("achieved")
+        if incumbent is not None and (baseline is None or incumbent < baseline):
+            baseline = incumbent
         improved = (res.achieved is not None and baseline is not None
                     and res.achieved < baseline)
         if improved and on_improvement is not None:
@@ -1634,15 +1775,20 @@ class RoadsFirstSearch:
                 "stopped_early": res.n_tried < self.seed_polish}
 
     def run(self, on_improvement=None, on_status=None, should_stop=None) -> dict:
+        # ONE incumbent for every phase (walk, objective polish, seed polish,
+        # exact finish): a layout reaches the caller only if it strictly beats
+        # everything published before, so emitted counts never go up and the
+        # returned best is the last emitted layout. (Before: seed polish compared
+        # against the stale walk best and could publish 95 after 90.)
         latest: dict = {"layout": None, "k": None, "achieved": None}
-        if self.exact_finish:
-            user_cb = on_improvement
+        user_cb = on_improvement
 
-            def on_improvement(vlay, k, achieved):  # noqa: F811 -- wraps the caller's
-                if latest["achieved"] is None or achieved < latest["achieved"]:
-                    latest.update(layout=vlay, k=k, achieved=achieved)
-                if user_cb is not None:
-                    user_cb(vlay, k, achieved)
+        def on_improvement(vlay, k, achieved):  # noqa: F811 -- wraps the caller's
+            if latest["achieved"] is not None and achieved >= latest["achieved"]:
+                return
+            latest.update(layout=vlay, k=k, achieved=achieved)
+            if user_cb is not None:
+                user_cb(vlay, k, achieved)
         layout = self.layout
         region = set(layout.region.cells)
         consumers = layout.road_needing()
@@ -1667,9 +1813,12 @@ class RoadsFirstSearch:
             objective_reserve = self.time_box * self.objective_polish
             if objective_reserve < OBJECTIVE_MIN_S + OBJECTIVE_MARGIN_S:
                 objective_reserve = 0.0  # cannot fit one useful solve
-        deadline = time.monotonic() + self.time_box
+        # exact_finish runs last, inside the box: reserve its (small) solve.
+        exact_reserve = min(EXACT_FINISH_S, self.time_box * 0.05) if self.exact_finish else 0.0
+        deadline = time.monotonic() + self.time_box - exact_reserve
         walk_deadline = deadline - polish_reserve - objective_reserve
         polish_deadline = deadline - polish_reserve  # objective polish ends here
+        hard_deadline = deadline + exact_reserve
         filler_stats = new_filler_stats()
         level_coverage: dict[int, dict] = {}
 
@@ -1941,14 +2090,14 @@ class RoadsFirstSearch:
             polish_info = None
             if best is not None and self.seed_polish > 0:
                 polish_info = self._apply_seed_polish(best_holder, on_improvement,
-                                                      should_stop=_stop_polish)
-                if polish_info is not None and polish_info["improved"]:
-                    best = polish_info["after"]
+                                                      should_stop=_stop_polish,
+                                                      incumbent=latest["achieved"])
             exact_info = None
             if self.exact_finish and latest["layout"] is not None:
-                exact_info = self._apply_exact_finish(latest, on_improvement)
-                if exact_info["after"] < best:
-                    best = exact_info["after"]
+                exact_info = self._apply_exact_finish(latest, on_improvement,
+                                                      hard_deadline, should_stop)
+            if latest["achieved"] is not None:
+                best = latest["achieved"] if best is None else min(best, latest["achieved"])
             # UNDERSAMPLED counts as unknown: the level was not finished, so it
             # is no more a refutation than an undecided probe is.
             unknowns = sum(1 for r in results.values()

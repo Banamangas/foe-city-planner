@@ -20,10 +20,13 @@ def build_layout(city_data: dict, helper_data: dict) -> Layout:
         if (x, y) not in region.cells:  # off-grid: anchor outside region
             continue
         cid = e["cityentity_id"]
-        if e["type"] == "street":
-            roads[(x, y)] = catalog.provided_level(cid)
-            continue
         size = catalog.size(cid)
+        if e["type"] == "street":
+            # A street covers its whole footprint (two-lane tiles are 2x2).
+            w, length = size or (1, 1)
+            for cell in Footprint(x, y, w, length).cells():
+                roads[cell] = max(roads.get(cell, 0), catalog.provided_level(cid))
+            continue
         if size is None:
             raise ValueError(f"Cannot resolve size for {cid}")
         w, length = size
@@ -47,10 +50,13 @@ def build_layout(city_data: dict, helper_data: dict) -> Layout:
             is_townhall=is_th,
             set_id=catalog.set_id(cid),
             chain_id=catalog.chain_id(cid),
+            link_positions=catalog.link_positions(cid),
             name=catalog.name(cid),
         )
         buildings.append(building)
         if is_th:
             townhall = building
 
-    return Layout(region=region, buildings=buildings, townhall=townhall, roads=roads)
+    layout = Layout(region=region, buildings=buildings, townhall=townhall, roads=roads)
+    layout.catalog_known = catalog.known
+    return layout

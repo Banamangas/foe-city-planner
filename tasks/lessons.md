@@ -2827,3 +2827,22 @@ the only legal layout came from the DEFAULT 10-18 (111). Not a lever at this sam
 (Run overlapped one A/B cell at nice; affects that cell's timing, not these verdicts, which
 are mostly proven UNSAT.) **The reasoning was plausible and wrong; the fast model is what
 made checking it cheap enough to do before building anything.**
+
+## Game rules enforced; a confident data claim that was wrong (2026-11-11, day)
+
+- **I claimed "FR exports carry no catalog, so their chains can't be detected"** in the
+  morning report and in memory. All three FR exports have `CityEntities` (2733 entries).
+  The claim came from seeing zero chains, not from checking for the catalog. **Rule:
+  "absent" and "not detectable" are different results. Before claiming either, check the
+  input field the detection relies on.**
+- **The export's `state.connected` contradicts geometry.** darkzig's military has
+  `connected: False`, yet one 2x2 two-lane tile touches both its edge and the TH's. Trust
+  the geometry, which the game draws, over a status flag.
+- **The validator came first, and immediately paid off:** all 11 darkzig records are
+  invalid (two-lane path + broken chain), all 5 FR records are valid, and all 5 inputs pass.
+  Without the gate, the darkzig "records" would have kept being compared against legal
+  layouts.
+- **A rule must change the model, not just the check:** chains became rigid composites with
+  a contact edge, and two-lane became a tile variable in the position model. The class key
+  had to grow from (w, l) to (w, l, contact, road_level). Size alone silently merged
+  buildings with different placement rules (review 2026-11-11).

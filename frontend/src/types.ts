@@ -52,7 +52,7 @@ export type LoadResponse = {
 
 export type Improvement = {
   k: number; achieved: number;
-  roads: [number, number][];
+  roads: [number, number, number?][];   // [x, y, level]; level 2 = two-lane tile
   buildings: Record<string, [number, number, number, number]>;
 };
 
