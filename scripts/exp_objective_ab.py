@@ -85,6 +85,29 @@ def verify(src, lay) -> dict:
             "on_road": sum(1 for c in cells if c in r)}
 
 
+def manifest(name, kwargs) -> dict:
+    """Enough to reproduce and compare a row honestly (Codex plan, Task 0)."""
+    import hashlib
+    import os
+    import subprocess
+    import ortools
+    from foeopt.legality import LEGALITY_VERSION
+    root = pathlib.Path(__file__).resolve().parent.parent
+
+    def git(*a):
+        return subprocess.run(["git", *a], cwd=root, capture_output=True, text=True).stdout.strip()
+
+    h = hashlib.sha256()
+    for f in CITIES[name]:
+        h.update((root / f).read_bytes())
+    return {"git_rev": git("rev-parse", "--short", "HEAD"),
+            "git_dirty": bool(git("status", "--porcelain", "--untracked-files=no")),
+            "input_sha256": h.hexdigest()[:16], "rules_version": LEGALITY_VERSION,
+            "ortools": ortools.__version__, "cpus": os.cpu_count(),
+            "effective_options": {k: (list(v) if isinstance(v, tuple) else v)
+                                  for k, v in kwargs.items()}}
+
+
 def run_cell(arm, name, box, rep, outdir):
     lay = city(name)
     pl = ARMS[arm].get("probe_limit", PROBE_LIMIT[name])
@@ -99,15 +122,16 @@ def run_cell(arm, name, box, rep, outdir):
                         t=round(time.monotonic() - t0, 1))
         rec.setdefault("first_s", round(time.monotonic() - t0, 1))
 
+    kwargs = dict(time_box=box, patterns=200, probe_limit=pl,
+                  workers=6, probe_workers=2, th_anchors="full", concurrent_levels=4,
+                  pattern_family="nonuniform", quality_index_band=(3, 4),
+                  k_start=rec["k_start"], exact_repair=5.0,
+                  **{key: (pl if v == "PL" else v) for key, v in ARMS[arm].items()
+                     if key not in ("k_offset", "probe_limit")})
+    rec["manifest"] = manifest(name, kwargs)
     try:
-        res = RoadsFirstSearch(
-            lay, time_box=box, patterns=200, probe_limit=pl,
-            workers=6, probe_workers=2, th_anchors="full", concurrent_levels=4,
-            pattern_family="nonuniform", quality_index_band=(3, 4),
-            k_start=rec["k_start"], exact_repair=5.0,
-            **{key: (pl if v == "PL" else v) for key, v in ARMS[arm].items()
-               if key not in ("k_offset", "probe_limit")}
-        ).run(on_improvement=on_imp)
+        res = RoadsFirstSearch(lay, **kwargs).run(on_improvement=on_imp)
+        rec["profile"] = res.get("profile")
         rec.update(ok=True, best=res.get("best_achieved"), verdict=res.get("verdict"),
                    best_k=best["k"], best_t=best["t"],
                    levels={str(k): v[0] for k, v in res.get("results", {}).items()},
