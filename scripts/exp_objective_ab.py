@@ -33,8 +33,10 @@ CITIES = {
     "darkzig": ("darkzig.json",),
     "FR16": ("CityMap-Born-FR16-2026-07-07.json",),
     "FR17": ("CityMap-Born-FR17-2026-07-07.json",),
+    "FR24": ("CityMap-Born-FR24-2026-07-07.json",),
+    "user": ("city-user-data.json", "city-user-data-foe-helper.json"),
 }
-PROBE_LIMIT = {"darkzig": 30.0, "FR16": 30.0, "FR17": 90.0}
+PROBE_LIMIT = {"darkzig": 30.0, "FR16": 30.0, "FR17": 90.0, "FR24": 90.0, "user": 90.0}
 _CACHE: dict = {}
 
 # arm -> RoadsFirstSearch kwargs; "PL" is replaced by the city's probe_limit.
