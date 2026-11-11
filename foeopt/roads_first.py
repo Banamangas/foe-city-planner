@@ -1976,6 +1976,38 @@ class RoadsFirstSearch:
                         on_status(kk, res[0], 0, 0)
             return {kk: results[kk] for kk in ks}
 
+        def _probe_ks(ks):
+            if self.concurrent_levels > 1:
+                return levels(ks)
+            return {kk: level(kk) for kk in ks}
+
+        def _boundary_search(k_top):
+            """The ascent ended without a feasible level. Before giving up:
+            (1) finish levels that merely ran out of slice (bounded by
+            _needs_probe), then (2) search DOWNWARD from the top level. At or
+            near k_max the skeleton fills almost every free cell, so the walk
+            had nowhere to climb (the 97%-full user city: k_start = k_max = 145,
+            the player's own city uses 142). Fewer roads leave spare cells
+            for packing, so feasibility is not monotone here. Returns the
+            lowest feasible k found, or None."""
+            retry = sorted(kk for kk in results if _needs_probe(kk))
+            if retry:
+                ok = [kk for kk, r in _probe_ks(retry).items() if r[0] == "FEASIBLE"]
+                if ok:
+                    return min(ok)
+            step = max(1, self.concurrent_levels)
+            nxt = min(results) - 4 if results else k_top - 4
+            while nxt >= 1 and not _should_stop():
+                ks = [kk for kk in (nxt - 4 * i for i in range(step)) if kk >= 1]
+                ok = [kk for kk, r in _probe_ks(ks).items() if r[0] == "FEASIBLE"]
+                boundary_info["probed"].extend(ks)
+                if ok:
+                    return min(ok)
+                nxt = min(ks) - 4
+            return None
+
+        boundary_info: dict = {"probed": []}
+
         try:
             if self.corpus_dir:
                 corpus = CorpusWriter(self.corpus_dir, layout)
@@ -2021,9 +2053,14 @@ class RoadsFirstSearch:
                             break
                         k += 4
                         st, _ = level(k)
+                if st != "FEASIBLE" and not _should_stop():
+                    found = _boundary_search(k)
+                    if found is not None:
+                        k, st = found, "FEASIBLE"
                 if st != "FEASIBLE":
                     return {"verdict": "FAMILY_TOO_WEAK", "walk_complete": not truncated,
                             "deadline_hit": _should_stop(), "results": results,
+                            "boundary_descent": boundary_info["probed"],
                             "filler_failures": summarise_fillers(filler_stats),
                             "level_coverage": level_coverage,
                             "undersampled_levels": sum(
@@ -2107,6 +2144,7 @@ class RoadsFirstSearch:
                     "best_achieved": best, "inconclusive_levels": unknowns,
                     "walk_complete": not truncated, "deadline_hit": _should_stop(),
                     "seed_polish": polish_info,
+                    "boundary_descent": boundary_info["probed"],
                     "objective_polish": objective_info,
                     "exact_finish": exact_info,
                     "filler_failures": summarise_fillers(filler_stats),
