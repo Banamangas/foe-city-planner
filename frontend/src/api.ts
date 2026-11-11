@@ -32,8 +32,8 @@ export function improvementToView(
   _palette: Palette,
 ): { optimized_roads: RoadView[]; buildings: BuildingView[] } {
   const [ox, oy] = origin;
-  const optimized_roads: RoadView[] = imp.roads.map(([x, y]) => ({
-    x: (x - ox) * cell, y: (y - oy) * cell, level: 1,
+  const optimized_roads: RoadView[] = imp.roads.map(([x, y, level]) => ({
+    x: (x - ox) * cell, y: (y - oy) * cell, level: level ?? 1,
   }));
   const buildings: BuildingView[] = [];
   for (const id of Object.keys(imp.buildings)) {

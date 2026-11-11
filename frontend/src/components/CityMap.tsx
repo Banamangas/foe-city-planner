@@ -50,12 +50,14 @@ export function CityMap() {
     ctx.fillStyle = p.region;
     for (const [x, y] of view.region) ctx.fillRect(x, y, cell, cell);
 
-    if (showOpt && optimized) {
-      ctx.fillStyle = p.optimized_road;
-      for (const r of optimized.roads) ctx.fillRect(r.x, r.y, cell, cell);
-    } else {
-      ctx.fillStyle = p.current_road;
-      for (const r of view.current_roads) ctx.fillRect(r.x, r.y, cell, cell);
+    const shownRoads = showOpt && optimized ? optimized.roads : view.current_roads;
+    ctx.fillStyle = showOpt && optimized ? p.optimized_road : p.current_road;
+    for (const r of shownRoads) ctx.fillRect(r.x, r.y, cell, cell);
+    // two-lane tile cells (level 2) get an inner outline so they read as such
+    ctx.strokeStyle = p.border;
+    ctx.lineWidth = Math.max(1, cell / 6);
+    for (const r of shownRoads) {
+      if (r.level >= 2) ctx.strokeRect(r.x + cell / 4, r.y + cell / 4, cell / 2, cell / 2);
     }
 
     const buildings = showOpt && optimized ? optimized.buildings : view.buildings;

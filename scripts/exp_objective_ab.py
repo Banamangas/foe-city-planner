@@ -53,6 +53,10 @@ ARMS = {
     "on_k8":  {"objective_limit": "PL", "k_offset": 8},
     "both_pos": {"objective_limit": "PL", "objective_polish": 0.3, "exact_finish": True,
                  "probe_model": "position"},
+    # the game rules (chains composed, two-lane tile) are always on since
+    # 2026-11-11; this arm is BEST_PRESET verbatim (probe_limit 30 everywhere)
+    "preset": {"probe_limit": 30.0, "objective_limit": 30.0, "objective_polish": 0.3,
+               "exact_finish": True, "probe_model": "position"},
 }
 
 
@@ -83,7 +87,7 @@ def verify(src, lay) -> dict:
 
 def run_cell(arm, name, box, rep, outdir):
     lay = city(name)
-    pl = PROBE_LIMIT[name]
+    pl = ARMS[arm].get("probe_limit", PROBE_LIMIT[name])
     rec = {"arm": arm, "city": name, "rep": rep, "box": box, "probe_limit": pl,
            "k_start": pick_k_start(lay, "nonuniform") + ARMS[arm].get("k_offset", 0)}
     best = {"achieved": None, "layout": None, "k": None, "t": None}
@@ -102,7 +106,7 @@ def run_cell(arm, name, box, rep, outdir):
             pattern_family="nonuniform", quality_index_band=(3, 4),
             k_start=rec["k_start"], exact_repair=5.0,
             **{key: (pl if v == "PL" else v) for key, v in ARMS[arm].items()
-               if key != "k_offset"}
+               if key not in ("k_offset", "probe_limit")}
         ).run(on_improvement=on_imp)
         rec.update(ok=True, best=res.get("best_achieved"), verdict=res.get("verdict"),
                    best_k=best["k"], best_t=best["t"],
