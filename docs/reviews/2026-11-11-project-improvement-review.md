@@ -10,6 +10,7 @@ This is a static review, not a verified runtime audit. No tests, builds, benchma
 
 ## Reading guide
 
+- [Overnight follow-up review and next goals](2026-11-11-overnight-followup-review.md): review through `59da75b`; supersedes this initial roadmap's implementation order after new solver evidence and confirmed game rules.
 - [Speed and quality work plan](2026-11-11-speed-quality-work-plan.md): six actionable work packages with implementation approaches, experiment gates, and agent handoff instructions.
 - [Backend and optimizer review](2026-11-11-backend-review.md): defects, lifecycle, validation, persistence, and proposed verification.
 - [Frontend review](2026-11-11-frontend-review.md): stream handling, state transitions, import/export, usability, accessibility, and missing integration checks.
