@@ -2846,3 +2846,12 @@ made checking it cheap enough to do before building anything.**
   a contact edge, and two-lane became a tile variable in the position model. The class key
   had to grow from (w, l) to (w, l, contact, road_level). Size alone silently merged
   buildings with different placement rules (review 2026-11-11).
+
+## Phase A: a fix that only "uses the budget" can just spread it thinner (2026-11-11)
+
+The first k_max fix made the walk keep going, and it marched from 145 down to 97 with every
+level UNDERSAMPLED: more wall time, zero information. **Rule: a fix that "uses the
+remaining budget" must say where the budget goes. Bound the exploration window, and prefer
+finishing started work over opening new levels.** The coverage counters (65/200 probed,
+no SAT) then show the real blocker: consumer placement itself fails at 97% density.
+That is a modelling gap (fillers outside the model), not a scheduling one.
