@@ -3,7 +3,17 @@ import type { LoadResponse, BuildingSummary, Improvement, RoadView, BuildingView
 import { improvementToView } from "../api";
 
 type Optimized = { roads: RoadView[]; buildings: BuildingView[]; k: number; achieved: number };
-type Job = { id: string; state: "running" | "done" | "idle"; elapsed: number };
+/** Terminal report from the server's `done` event (webapp/app.py). */
+export type JobResult = {
+  verdict?: string; best_achieved?: number | null;
+  legality?: { status: string; violations: unknown[]; military?: string };
+  [key: string]: unknown;
+};
+export type Job = {
+  id: string; cityId: string;
+  state: "submitting" | "running" | "done" | "error";
+  elapsed: number; error?: string | null; result?: JobResult | null; stopped?: boolean;
+};
 type ViewMode = "current" | "optimized";
 
 type CityState = {
@@ -14,7 +24,9 @@ type CityState = {
   job: Job | null;
   viewMode: ViewMode;
   setCity: (resp: LoadResponse) => void;
-  applyImprovement: (imp: Improvement) => void;
+  /** `jobId`: drop the improvement unless it belongs to the current job of the
+   *  current city (a stream from a previous city/run must not leak in). */
+  applyImprovement: (imp: Improvement, jobId?: string) => void;
   clearOptimized: () => void;
   setJob: (job: Job | null) => void;
   setViewMode: (mode: ViewMode) => void;
@@ -37,9 +49,13 @@ export const useCityStore = create<CityState>((set, get) => ({
       job: null,
       viewMode: "current",
     }),
-  applyImprovement: (imp) => {
+  applyImprovement: (imp, jobId) => {
     const city = get().city;
     if (!city) return;
+    if (jobId !== undefined) {
+      const job = get().job;
+      if (!job || job.id !== jobId || job.cityId !== city.city_id) return;
+    }
     const mv = city.map_view;
     const { optimized_roads, buildings } = improvementToView(
       imp, get().summaryById, mv.origin, mv.cell, mv.palette,

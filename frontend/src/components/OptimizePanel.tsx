@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useCityStore } from "../stores/cityStore";
+import type { Job } from "../stores/cityStore";
 import { apiOptimize, apiOptions, apiStop, openStream } from "../api";
 import {
   applyPreset, budgetWarning, byGroup, cliPreview, initialValues, isModified,
@@ -80,6 +81,26 @@ function ScreenBanner({ screen }: { screen: CityScreen }) {
   );
 }
 
+/** Final report of a finished run: what came out and whether it is game-legal. */
+function RunReport({ job }: { job: Job }) {
+  const r = job.result;
+  const legality = r?.legality;
+  const best = r?.best_achieved;
+  return (
+    <div className="status">
+      {job.stopped ? "Stopped" : "Finished"} after {Math.round(job.elapsed)}s
+      {best != null ? ` · best ${best} roads` : " · no layout found"}
+      {r?.verdict && r.verdict !== "DONE" ? ` · ${r.verdict}` : ""}
+      {legality && (
+        <span className={legality.status === "valid" ? "" : "error"}>
+          {" · "}{legality.status === "valid" ? "game-legal" : `legality: ${legality.status}`}
+          {legality.military === "unconnected" ? " (two-lane buildings left unconnected)" : ""}
+        </span>
+      )}
+    </div>
+  );
+}
+
 export function OptimizePanel() {
   const city = useCityStore((s) => s.city);
   const job = useCityStore((s) => s.job);
@@ -89,6 +110,9 @@ export function OptimizePanel() {
   const [values, setValues] = useState<OptionValues>({});
   const [error, setError] = useState("");
   const esRef = useRef<EventSource | null>(null);
+  // The server-side run this panel owns. A ref, not store state: loading a new
+  // city clears the store's job BEFORE the cleanup below runs.
+  const activeJobRef = useRef<string | null>(null);
 
   // The parameter list is served, not hardcoded: adding a knob to
   // webapp/params.py makes it appear here with no frontend change.
@@ -98,7 +122,18 @@ export function OptimizePanel() {
       .catch((err) => setError(String(err)));
   }, []);
 
-  const running = job?.state === "running";
+  const running = job?.state === "running" || job?.state === "submitting";
+
+  // Leaving a city (or unmounting) closes its stream and stops its run, so no
+  // late event can write into the next city and the server slot is freed.
+  useEffect(() => {
+    return () => {
+      esRef.current?.close();
+      esRef.current = null;
+      if (activeJobRef.current) apiStop(activeJobRef.current).catch(() => {});
+      activeJobRef.current = null;
+    };
+  }, [city?.city_id]);
   const specs = spec?.options ?? [];
   const basic = specs.filter((s) => s.advanced === false);
   const advanced = specs.filter((s) => s.advanced !== false);
@@ -107,18 +142,41 @@ export function OptimizePanel() {
     setValues((prev) => ({ ...prev, [name]: v }));
 
   const start = async () => {
-    if (!city) return;
+    if (!city || running) return;   // no double submit
+    const cityId = city.city_id;
     setError("");
+    setJob({ id: "", cityId, state: "submitting", elapsed: 0 });
     try {
-      const { job_id } = await apiOptimize({ city_id: city.city_id, ...values });
-      setJob({ id: job_id, state: "running", elapsed: 0 });
+      const { job_id } = await apiOptimize({ city_id: cityId, ...values });
+      const current = () => {
+        const j = useCityStore.getState().job;
+        return j !== null && j.id === job_id && j.cityId === cityId;
+      };
+      if (useCityStore.getState().city?.city_id !== cityId) {
+        apiStop(job_id).catch(() => {});   // the user moved on while submitting
+        return;
+      }
+      esRef.current?.close();
+      activeJobRef.current = job_id;
+      setJob({ id: job_id, cityId, state: "running", elapsed: 0 });
       esRef.current = openStream(job_id, {
-        onImprovement: (imp) => applyImprovement(imp),
-        onHeartbeat: (st) => setJob({ id: job_id, state: "running", elapsed: st.elapsed ?? 0 }),
-        onDone: () => setJob({ id: job_id, state: "done", elapsed: 0 }),
+        onImprovement: (imp) => applyImprovement(imp, job_id),
+        onHeartbeat: (st) => {
+          if (current()) setJob({ id: job_id, cityId, state: "running", elapsed: st.elapsed ?? 0 });
+        },
+        onDone: (env) => {
+          if (activeJobRef.current === job_id) activeJobRef.current = null;
+          if (!current()) return;
+          setJob({
+            id: job_id, cityId, state: env?.state === "error" ? "error" : "done",
+            elapsed: env?.elapsed ?? 0, error: env?.error ?? null,
+            result: env?.result ?? null, stopped: env?.stopped ?? false,
+          });
+        },
       });
     } catch (err) {
-      setError(String(err));
+      setJob(null);
+      setError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -196,7 +254,15 @@ export function OptimizePanel() {
         <button onClick={start} disabled={running || !spec}>Optimize</button>
         <button onClick={stop} disabled={!running}>Stop</button>
       </div>
-      {running && <div className="status">Running… {Math.round(job!.elapsed)}s</div>}
+      {running && (
+        <div className="status">
+          {job!.state === "submitting" ? "Starting…" : `Running… ${Math.round(job!.elapsed)}s`}
+        </div>
+      )}
+      {job?.state === "error" && (
+        <div className="error">Run failed after {Math.round(job.elapsed)}s: {job.error}</div>
+      )}
+      {job?.state === "done" && <RunReport job={job} />}
       {error && <div className="error">{error}</div>}
     </div>
   );
