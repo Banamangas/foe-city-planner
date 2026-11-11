@@ -53,7 +53,7 @@ def test_run_probe_payload_uses_worker_global_not_embedded_layout(monkeypatch):
         monkeypatch.setattr(mod, "probe",
                             lambda pattern, region, consumers, *, probe_limit, probe_workers=1,
                             symmetry_breaking=False, hints=None,
-                            stub_priority=False, solver_overrides=None: ("UNSAT", None))
+                            stub_priority=False, solver_overrides=None, diag=None: ("UNSAT", None))
         result = mod._run_probe((pat, 1, 0))
         assert result["pat_index"] == 0
         assert result["k"] == 1
@@ -77,7 +77,7 @@ def test_worker_init_threads_solver_overrides_to_probe(monkeypatch):
     captured = []
     def fake_probe(pattern, region, consumers, *, probe_limit, probe_workers=1,
                    symmetry_breaking=False, hints=None, stub_priority=False,
-                   solver_overrides=None):
+                   solver_overrides=None, diag=None):
         captured.append(solver_overrides)
         return ("UNSAT", None)
     monkeypatch.setattr(mod, "probe", fake_probe)
@@ -107,7 +107,7 @@ def test_run_probe_seq_threads_solver_overrides(monkeypatch):
     captured = []
     def fake_probe(pattern, region, consumers, *, probe_limit, probe_workers=1,
                    symmetry_breaking=False, hints=None, stub_priority=False,
-                   solver_overrides=None):
+                   solver_overrides=None, diag=None):
         captured.append(solver_overrides)
         return ("UNSAT", None)
     monkeypatch.setattr(mod, "probe", fake_probe)
