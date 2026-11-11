@@ -1742,6 +1742,10 @@ overlap with darkzig) — `KeyError` on reconstruct, correctly rejected; their c
 unrelated to darkzig. Assets: `foeopt/exact_router.py` (5 tests), `scripts/exp_exact_router.py`.
 ## Roads-first placement objective — Stage 0 correlation study (2026-07-21)
 
+> **SUPERSEDED 2026-11-11** — P2 was degenerate (== k on every dense placement), so this study
+> measured nothing. The exact objective it should have tested beats every record; see the
+> 2026-11-11 CORRECTION entry at the end of this file.
+
 **Verdict: the oracle_gap is REAL, but no proxy captures it → do NOT advance to Stage 1
 with P1–P4.** Per the pre-committed Stage-0 gate (spec
 `docs/superpowers/specs/2026-07-21-roads-first-placement-objective-design.md` §5),
@@ -2441,6 +2445,9 @@ generation* it is effectively free (200 banded patterns in 0.6 s).
 
 ## The surrogate is a CLASSIFIER, not a gradient — so bandit/CEM/RL over the per-branch vector is dead (2026-07-31)
 
+> **Amended 2026-11-11** — the "residual is CP-SAT seed luck" reading is wrong: it was the spread of
+> a feasibility-only solver. An in-skeleton objective converts it into 4-7 roads (CORRECTION entry, end of file).
+
 Checked before building the guided search that the reopened Track F step 5 pointed at.
 **Within the productive band, nothing predicts `achieved`** (106 in-band SATs, all |rho| < 0.22):
 
@@ -2715,3 +2722,59 @@ n=1.
 **The screen was right, for what that is worth.** `road_pressure(FR17) = 0.627` returned
 UNCERTAIN -- outside the 0.40/0.43 range that worked and below the 0.89 that failed. FR17 does
 work, just not better than the old family. An honest "uncertain" for a genuinely middling case.
+
+## CORRECTION: the placement objective was closed on a degenerate proxy — it is the biggest lever since roads-first (2026-11-11)
+
+**What was believed.** The 2026-07-21 Stage-0 study found a real ~5-road "oracle gap" between
+placements on one skeleton, but concluded no proxy could capture it (P2 "subtree" rho −0.05)
+and closed the lever. Later entries built on that: "achieved is luck-of-the-solution",
+"the residual is CP-SAT seed noise, attack it with more seeds", and the RL/bandit closure
+("within the band nothing predicts achieved").
+
+**What was wrong.** P2 kept *every* skeleton cell any consumer touches, plus their paths.
+In a dense packing every skeleton cell is touched, so P2 == k for essentially every
+placement — measured **P2 = 105 = k** on the 94-record's own placement. A constant cannot
+correlate with anything; the study measured nothing. The right quantity is the *minimum*
+set of skeleton cells, closed under the path to the TH, such that each consumer borders at
+least one — a choice per consumer, not a union.
+
+**The fix is a cheap, exact CP-SAT objective** (`foeopt.roads_first.minimize_needed`):
+`needed[c]` booleans with `needed[c] => needed[parent(c)]`, each anchor option forces
+`OR(needed on its border)`, `Minimize(sum needed)`. O(k) extra booleans — not next-things
+#6's memory-catastrophic joint model. Cold it found nothing in 120 s on darkzig; **hinted
+from the feasibility probe's placement it improves immediately**, so it runs as a second
+phase after `probe()`.
+
+**Measured.**
+- On stored record skeletons (120 s x 12 threads, hinted from the record placement):
+  darkzig 97 -> **90**, 94 -> **91**, 99 -> 97, 98 -> 98; FR16 76 -> **71**. All verified
+  (exact_route OPTIMAL == route, valid, 0 rotated, full inventory). `docs/records/*objective*`.
+- End-to-end, shipped preset, 600 s boxes, strictly sequential, paired repeats:
+
+  | city | off | on (objective_limit=probe_limit) |
+  |---|---|---|
+  | darkzig | 99 / 99 | **94 / 94** |
+  | FR16 | 77 / 77 | **75 / 74** |
+  | FR17 | 115 / 115 | 115 / **109** (exact finish: **108**, new FR17 best) |
+
+  Never worse, better in 5/6 pairs; darkzig now ties its old all-time record in one user box.
+  Adopted in `BEST_PRESET`.
+
+**A defect the smoke test caught before the A/B:** probe + objective can exceed a 35% level
+slice, and slice expiry terminates the pool, killing every in-flight SAT — FR16 at a 60 s box
+found **nothing** with the objective on. Fixed by putting the slice deadline in the payload
+and clamping the objective to it (`time.monotonic` is system-wide on Linux). Same defect
+class as 2026-07-31: *every phase inside a box must take the remaining budget as input.*
+
+**Lessons.**
+1. **Before a null result closes a lever, check the metric is not constant on the
+   population.** One `len(set(values))` would have caught P2. This is the same rule as the
+   2026-07-30 OOD entry ("plot the statistic on the candidate pool") applied one step earlier.
+2. **When a study finds a real gap but no proxy, try the exact objective before giving up on
+   the gap.** The gap was the finding; the proxies were the hypothesis. The study kept the
+   wrong one.
+3. **A "noise" conclusion is only as good as the search that produced the noise.** "Seed luck"
+   was the variance of a solver asked a yes/no question. Asked to optimise, the variance became
+   a 4-7 road improvement.
+4. `route()` leaves a road on the table in 9/12 A/B layouts (exact_route one lower). Cheap to
+   collect: `exact_finish`.
