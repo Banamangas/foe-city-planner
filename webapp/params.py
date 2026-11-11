@@ -349,7 +349,7 @@ def _as_number(spec: dict, raw, cast):
         raise bad
     try:
         value = float(raw) if cast is int else cast(raw)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # 10**400 -> OverflowError
         raise bad
     # NaN passes both range comparisons below (every comparison is False), and
     # inf would reach the solver as a time budget.

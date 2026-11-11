@@ -12,7 +12,11 @@ export function ResultPanel() {
   const [msg, setMsg] = useState("");
 
   const refresh = () => {
-    if (city) apiLayouts(city.city_id).then(setHistory).catch(() => {});
+    if (!city) return;
+    const cityId = city.city_id;
+    apiLayouts(cityId)
+      .then((h) => { if (useCityStore.getState().city?.city_id === cityId) setHistory(h); })
+      .catch(() => {});
   };
   useEffect(() => { refresh(); }, [city]);
 
@@ -41,8 +45,10 @@ export function ResultPanel() {
   };
 
   const loadHistory = async (id: string) => {
+    const cityId = city.city_id;
     try {
       const rec = await apiLayout(id);
+      if (useCityStore.getState().city?.city_id !== cityId) return;  // stale
       if (rec?.layout) applyImprovement(rec.layout);
     } catch { /* ignore */ }
   };

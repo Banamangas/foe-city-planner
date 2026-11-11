@@ -41,12 +41,21 @@ describe("isModified / modifiedCount", () => {
 });
 
 describe("applyPreset", () => {
-  it("overwrites only the keys the preset names", () => {
+  it("applies the preset's keys", () => {
     const values = { ...initialValues(specs), patterns: "700" };
     const next = applyPreset(specs, values, { patterns: 20, time_box: 600.0 });
     expect(next.patterns).toBe("20");
     expect(next.time_box).toBe("600");
     expect(next.k_start).toBe("auto");
+  });
+
+  it("resets algorithmic knobs the preset does not name, keeps the time box", () => {
+    const values = { ...initialValues(specs), k_start: "120", stub_priority: true,
+                     time_box: "900" };
+    const next = applyPreset(specs, values, { patterns: 20 });
+    expect(next.k_start).toBe("auto");
+    expect(next.stub_priority).toBe(false);
+    expect(next.time_box).toBe("900");
   });
 });
 

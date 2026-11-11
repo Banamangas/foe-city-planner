@@ -1202,6 +1202,7 @@ _WORKER_MODEL: str = "item"
 # Seconds kept back for validate() after the objective solve, and the smallest
 # objective budget worth starting (hinted, it improves within seconds).
 OBJECTIVE_MARGIN_S = 3.0
+BOUNDARY_LEVELS = 4        # levels probed below the walk's lowest when nothing was feasible
 EXACT_FINISH_S = 10.0      # exact_route cap on the final layout
 EXACT_FINISH_MIN_S = 1.0  # below this, skip exact finish rather than start it
 OBJECTIVE_MIN_S = 2.0
@@ -1884,11 +1885,20 @@ class RoadsFirstSearch:
         if objective_reserve > 0:
             params.sat_recorder = _record_sat
 
+        def _walk_end():
+            """The walk leaves the objective-polish reserve free only once there
+            is something to polish. With no layout yet, it may use the reserve
+            (measured on the 97%-full city: 30% of the box sat idle after a
+            fruitless walk). The seed-polish reserve is never touched."""
+            if objective_reserve > 0 and latest["achieved"] is None:
+                return polish_deadline
+            return walk_deadline
+
         def _should_stop():
             """Walk phase: stops early enough to leave the polish reserve."""
             if should_stop is not None and should_stop():
                 return True
-            return time.monotonic() >= walk_deadline
+            return time.monotonic() >= _walk_end()
 
         def _stop_polish():
             """Polish phase: may use the reserve, but not exceed the real box.
@@ -1923,7 +1933,8 @@ class RoadsFirstSearch:
             if self.level_slice_frac is None:
                 params.slice_deadline = None
                 return
-            remaining = walk_deadline - time.monotonic()
+            params.deadline = _walk_end()
+            remaining = params.deadline - time.monotonic()
             params.slice_deadline = (time.monotonic()
                                      + max(self.probe_limit,
                                            remaining * self.level_slice_frac))
@@ -1976,6 +1987,53 @@ class RoadsFirstSearch:
                         on_status(kk, res[0], 0, 0)
             return {kk: results[kk] for kk in ks}
 
+        def _probe_ks(ks):
+            if self.concurrent_levels > 1:
+                return levels(ks)
+            return {kk: level(kk) for kk in ks}
+
+        def _boundary_search(k_top):
+            """The ascent ended without a feasible level. Before giving up:
+            (1) finish levels that merely ran out of slice (bounded by
+            _needs_probe), then (2) search DOWNWARD from the top level. At or
+            near k_max the skeleton fills almost every free cell, so the walk
+            had nowhere to climb (the 97%-full user city: k_start = k_max = 145,
+            the player's own city uses 142). Fewer roads leave spare cells
+            for packing, so feasibility is not monotone here. Returns the
+            lowest feasible k found, or None."""
+            retry = sorted(kk for kk in results if _needs_probe(kk))
+            if retry:
+                ok = [kk for kk, r in _probe_ks(retry).items() if r[0] == "FEASIBLE"]
+                if ok:
+                    return min(ok)
+            # Bounded window: 4 levels below the lowest tried. Far below the
+            # cap the skeleton is too short to serve every consumer, and
+            # marching on only spreads the budget thinner (measured: the user
+            # city went down to k=97 with every level unfinished).
+            lowest = min(results) if results else k_top
+            window = [kk for kk in (lowest - 4 * i for i in range(1, BOUNDARY_LEVELS + 1))
+                      if kk >= 1]
+            step = max(1, self.concurrent_levels)
+            for i in range(0, len(window), step):
+                if _should_stop():
+                    return None
+                ks = window[i:i + step]
+                boundary_info["probed"].extend(ks)
+                ok = [kk for kk, r in _probe_ks(ks).items() if r[0] == "FEASIBLE"]
+                if ok:
+                    return min(ok)
+            # Then spend what is left finishing unfinished levels, top first.
+            while not _should_stop():
+                retry = sorted((kk for kk in results if _needs_probe(kk)), reverse=True)
+                if not retry:
+                    return None
+                ok = [kk for kk, r in _probe_ks(retry[:step]).items() if r[0] == "FEASIBLE"]
+                if ok:
+                    return min(ok)
+            return None
+
+        boundary_info: dict = {"probed": []}
+
         try:
             if self.corpus_dir:
                 corpus = CorpusWriter(self.corpus_dir, layout)
@@ -2021,9 +2079,14 @@ class RoadsFirstSearch:
                             break
                         k += 4
                         st, _ = level(k)
+                if st != "FEASIBLE" and not _should_stop():
+                    found = _boundary_search(k)
+                    if found is not None:
+                        k, st = found, "FEASIBLE"
                 if st != "FEASIBLE":
                     return {"verdict": "FAMILY_TOO_WEAK", "walk_complete": not truncated,
                             "deadline_hit": _should_stop(), "results": results,
+                            "boundary_descent": boundary_info["probed"],
                             "filler_failures": summarise_fillers(filler_stats),
                             "level_coverage": level_coverage,
                             "undersampled_levels": sum(
@@ -2107,6 +2170,7 @@ class RoadsFirstSearch:
                     "best_achieved": best, "inconclusive_levels": unknowns,
                     "walk_complete": not truncated, "deadline_hit": _should_stop(),
                     "seed_polish": polish_info,
+                    "boundary_descent": boundary_info["probed"],
                     "objective_polish": objective_info,
                     "exact_finish": exact_info,
                     "filler_failures": summarise_fillers(filler_stats),

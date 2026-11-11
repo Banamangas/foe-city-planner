@@ -43,4 +43,18 @@ describe("cityStore", () => {
     useCityStore.getState().reset();
     expect(useCityStore.getState().city).toBeNull();
   });
+
+  it("drops improvements from a job that is not the current city's job", () => {
+    useCityStore.getState().setCity(resp);
+    const imp: Improvement = { k: 10, achieved: 7, roads: [[1, 1]], buildings: { E1: [2, 2, 2, 2] } };
+    useCityStore.getState().setJob({ id: "j2", cityId: "c1", state: "running", elapsed: 0 });
+    useCityStore.getState().applyImprovement(imp, "j1");          // stale job
+    expect(useCityStore.getState().optimized).toBeNull();
+    useCityStore.getState().setJob({ id: "j1", cityId: "other", state: "running", elapsed: 0 });
+    useCityStore.getState().applyImprovement(imp, "j1");          // other city
+    expect(useCityStore.getState().optimized).toBeNull();
+    useCityStore.getState().setJob({ id: "j1", cityId: "c1", state: "running", elapsed: 0 });
+    useCityStore.getState().applyImprovement(imp, "j1");
+    expect(useCityStore.getState().optimized?.achieved).toBe(7);
+  });
 });
