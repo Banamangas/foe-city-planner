@@ -19,6 +19,16 @@ export function initialValues(specs: OptionSpec[]): OptionValues {
   return Object.fromEntries(specs.map((s) => [s.name, specDefault(s)]));
 }
 
+/** Resource controls the user owns: a preset never silently changes them. */
+export const RESOURCE_KNOBS = new Set(["time_box", "workers", "probe_workers"]);
+
+/**
+ * Apply a preset as a COMPLETE profile: every algorithmic knob goes back to its
+ * default first, then the preset's values are applied. Otherwise an option the
+ * user had changed earlier (warm start, a manual k_start...) would survive and
+ * the run would be a hybrid that was never measured (review 2026-11-11).
+ * Resource controls (time box, worker counts) are kept unless the preset sets them.
+ */
 export function applyPreset(
   specs: OptionSpec[],
   values: OptionValues,
@@ -26,7 +36,10 @@ export function applyPreset(
 ): OptionValues {
   const next = { ...values };
   for (const spec of specs) {
-    if (!(spec.name in preset)) continue;
+    if (!(spec.name in preset)) {
+      if (!RESOURCE_KNOBS.has(spec.name)) next[spec.name] = specDefault(spec);
+      continue;
+    }
     const raw = preset[spec.name];
     next[spec.name] = spec.type === "bool" ? raw === true
       : raw === null ? "" : String(raw);
