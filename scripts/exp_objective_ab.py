@@ -44,6 +44,11 @@ ARMS = {
     "polish": {"objective_polish": 0.3, "exact_finish": True},
     "both":   {"objective_limit": "PL", "objective_polish": 0.3, "exact_finish": True},
     "onx":    {"objective_limit": "PL", "exact_finish": True},
+    # loose-k: start the walk above the auto k_start; the objective pulls down
+    "on_k4":  {"objective_limit": "PL", "k_offset": 4},
+    "on_k8":  {"objective_limit": "PL", "k_offset": 8},
+    "both_pos": {"objective_limit": "PL", "objective_polish": 0.3, "exact_finish": True,
+                 "probe_model": "position"},
 }
 
 
@@ -74,7 +79,7 @@ def run_cell(arm, name, box, rep, outdir):
     lay = city(name)
     pl = PROBE_LIMIT[name]
     rec = {"arm": arm, "city": name, "rep": rep, "box": box, "probe_limit": pl,
-           "k_start": pick_k_start(lay, "nonuniform")}
+           "k_start": pick_k_start(lay, "nonuniform") + ARMS[arm].get("k_offset", 0)}
     best = {"achieved": None, "layout": None, "k": None, "t": None}
     t0 = time.monotonic()
 
@@ -89,8 +94,9 @@ def run_cell(arm, name, box, rep, outdir):
             lay, time_box=box, patterns=200, probe_limit=pl,
             workers=6, probe_workers=2, th_anchors="full", concurrent_levels=4,
             pattern_family="nonuniform", quality_index_band=(3, 4),
-            k_start="auto", exact_repair=5.0,
-            **{key: (pl if v == "PL" else v) for key, v in ARMS[arm].items()}
+            k_start=rec["k_start"], exact_repair=5.0,
+            **{key: (pl if v == "PL" else v) for key, v in ARMS[arm].items()
+               if key != "k_offset"}
         ).run(on_improvement=on_imp)
         rec.update(ok=True, best=res.get("best_achieved"), verdict=res.get("verdict"),
                    best_k=best["k"], best_t=best["t"],

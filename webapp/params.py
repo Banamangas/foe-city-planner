@@ -69,6 +69,15 @@ OPTION_SPECS: list[dict] = [
                 "strictly better, fully valid layout; 0 = off.",
     },
     {
+        "name": "probe_model", "cli": "--probe-model", "type": "choice",
+        "default": "item", "choices": ["item", "position"], "advanced": True,
+        "group": "search", "label": "CP-SAT model",
+        "help": "item: one variable pair per building (historical). position: "
+                "one switch per (building size, spot), so identical buildings "
+                "are not told apart -- removes the symmetry that stalls the "
+                "solver on cities with many same-size buildings.",
+    },
+    {
         "name": "exact_finish", "cli": "--exact-finish", "type": "bool",
         "default": False, "advanced": True,
         "group": "budget", "label": "Exact road finish",

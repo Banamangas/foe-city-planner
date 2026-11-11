@@ -173,6 +173,9 @@ def main(argv=None):
     p.add_argument("--objective-polish", type=float, default=0.0, metavar="FRAC",
                    help="share of the box reserved after the walk to re-solve the "
                         "best SAT skeletons with the objective on all threads; 0 = off")
+    p.add_argument("--probe-model", choices=["item", "position"], default="item",
+                   help="CP-SAT encoding: per-building items (historical) or "
+                        "position-indexed, symmetry-free")
     p.add_argument("--exact-finish", action="store_true",
                    help="re-route the final layout with exact_route, keep if smaller")
     args = p.parse_args(argv)
@@ -253,6 +256,7 @@ def main(argv=None):
         objective_limit=args.objective_limit,
         objective_polish=args.objective_polish,
         exact_finish=args.exact_finish,
+        probe_model=args.probe_model,
     ).run(on_improvement=on_improvement, on_status=on_status)
     print(json.dumps({k: v for k, v in res.items() if k != "results"}, indent=1))
     per_level = {k: v[0] + (f" achieved={v[1]}" if v[1] is not None else "")
