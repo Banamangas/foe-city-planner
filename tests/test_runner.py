@@ -20,7 +20,7 @@ def test_layout_to_dict_serializes_layout():
     assert isinstance(d, dict)
     assert "roads" in d
     assert isinstance(d["roads"], list)
-    assert [0, 2] in d["roads"]
+    assert [0, 2, 1] in d["roads"]  # [x, y, level]
     assert "buildings" in d
     assert isinstance(d["buildings"], dict)
     for eid, coords in d["buildings"].items():

@@ -5,6 +5,7 @@ import threading
 import time
 import uuid
 
+from foeopt.legality import check as check_legality
 from foeopt.model import Layout
 from foeopt.roads_first import RoadsFirstSearch
 
@@ -36,7 +37,9 @@ def _parse_modes(spec: str):
 def layout_to_dict(layout: Layout) -> dict:
     """Serialize a validated Layout to the compact dict format for SSE/API."""
     return {
-        "roads": [list(r) for r in sorted(layout.roads.keys())],
+        # [x, y, level]: level 2 marks a two-lane tile cell (older readers
+        # that destructure [x, y] keep working).
+        "roads": [[x, y, lvl] for (x, y), lvl in sorted(layout.roads.items())],
         "buildings": {str(b.entity_id): [b.footprint.x, b.footprint.y,
                                          b.footprint.width, b.footprint.length]
                       for b in layout.buildings},
@@ -80,9 +83,17 @@ class JobManager:
                 "improvements": improvements,
             }
 
+        last_legality: dict = {}
+
         def on_improvement(best_layout, k, achieved):
+            # Every published layout carries its full game-legality verdict
+            # (two-lane tiles, chain links, inventory...) and the policy used.
+            leg = check_legality(best_layout, layout, military=military).as_dict()
+            leg["military"] = military
+            last_legality.clear()
+            last_legality.update(leg)
             improvements.put({
-                "k": k, "achieved": achieved,
+                "k": k, "achieved": achieved, "legality": leg,
                 **layout_to_dict(best_layout),
             })
 
@@ -129,6 +140,8 @@ class JobManager:
                 res = search.run(on_improvement=on_improvement,
                                  on_status=on_status,
                                  should_stop=should_stop)
+                if last_legality:
+                    res["legality"] = dict(last_legality)
                 state["state"] = "done"
                 state["result"] = res
             except Exception as exc:

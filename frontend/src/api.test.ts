@@ -32,9 +32,17 @@ describe("improvementToView", () => {
     const out = improvementToView(imp, byId, origin, cell, palette);
     // road at abs (4,6) → relative pixel ((4-3)*12,(6-5)*12) = (12,12)
     expect(out.optimized_roads[0]).toEqual({ x: 12, y: 12, level: 1 });
+
     // building E1 at abs (5,7) size 2x2 → rel px ((5-3)*12,(7-5)*12)=(24,24), w/h 24
     expect(out.buildings[0]).toMatchObject({
       x: 24, y: 24, w: 24, h: 24, name: "Armory", needs_road: true, townhall: false,
     });
+  });
+
+  it("keeps the road level when the server sends [x, y, level]", () => {
+    const out = improvementToView(
+      { k: 1, achieved: 1, roads: [[4, 6, 2]], buildings: {} } as never,
+      new Map(), [0, 0], 3, {} as never);
+    expect(out.optimized_roads[0].level).toBe(2);
   });
 });
