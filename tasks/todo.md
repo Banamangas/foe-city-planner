@@ -901,3 +901,65 @@ result `valid` under `foeopt/legality.check` with the count matching the saved n
 This is the first legal darkzig baseline. The legacy 87 broke both rules, so the two are not
 comparable. Also done: the review's shared-incumbent/deadline fix, a verifier that checks the
 saved network, the webapp legality verdict, and roads serialized with their levels.
+
+## 2026-11-11 (evening): plan after Codex's next-model-speed-quality review
+
+Source: `docs/superpowers/plans/2026-11-11-next-model-speed-quality.md`, plus the open items
+of the follow-up / app reviews. Its prerequisites (one incumbent, a shared deadline, a
+legality gate, a verifier that checks the saved network) are done and merged. Its "no
+tests / no heavy CPU" restriction was an instruction to Codex, not to this repo, so the
+measurements below get run.
+
+**Assessment of Codex's tasks**
+- T0 profiling: yes, and first. Since the position model, the time split is unknown
+  (probes went from 30 s to under a second), so T2A/T3 are guesses until measured.
+- T1 road witness: cheap, but expect a small gain. `exact_finish` already reroutes the
+  final layout optimally over all free cells, which is a superset of the witness. The
+  witness can only help BEFORE filler packing (a smaller network leaves more room).
+  T0 will log objective value against greedy route() to size it first.
+- T2A geometry reuse / T3 filler scan: only if T0 shows construction or packing is a
+  real share of the time.
+- T2B complete hints / bound: a cheap flag, but measure it alone.
+- **T4 rebased polish: the most promising quality lever.** On the legal darkzig 90 the
+  skeleton had k=115, so about 25 skeleton cells sit unused yet still block consumers.
+  Polishing on the accepted network frees them, from a known feasible start.
+- T5 optional-road neighbourhood: high potential, high risk. Only once T4 plateaus,
+  under Codex's caps.
+- **Missing from the Codex plan:** the cities that still FAIL (the user's 97%-full city
+  and FR24) need fillers inside the model plus the k_max boundary fix. For the user,
+  that is worth more than −2 roads on darkzig.
+
+**Plan (one change per commit, each A/B'd before it becomes a default)**
+
+Phase A: correctness and app (small, low risk)
+- [ ] App P1s: city/job identity (city A cannot update or save into B), job admission
+      control, final report and errors reach the UI, split upload keeps helper_data,
+      the best-preset button resets to defaults before applying, OverflowError in
+      numeric parsing.
+- [ ] Walk: k_start == k_max with an UNDERSAMPLED level keeps probing (bounded retries
+      and descent) instead of FAMILY_TOO_WEAK at 0.3x the box. Fake-level test.
+
+Phase B: measure (T0)
+- [ ] Per-phase timing: generation, anchors, model build, solve, route, fillers, repair,
+      objective, validate. Also time to first valid incumbent, objective value against
+      route() count, and a manifest (git rev, input hash, effective options, rules version).
+- [ ] Baseline: literal BEST_PRESET at 120 s and 600 s on darkzig, FR16, FR17, 2 reps,
+      plus user/FR24 at 600 s. Sequential.
+- [ ] Decide T2A/T3/T1 from the numbers.
+
+Phase C: quality (T4, with T1 as its building block)
+- [ ] T1: return the objective's selected roads; witness checker; evaluate witness and
+      greedy route as two candidates (greedy first, witness on capped remaining time).
+- [ ] T4: polish on the accepted network (pattern = actual roads + TH, max 2 solves inside
+      the objective-polish reserve; strict improvement after full legality). Two-lane
+      tiles and chain composites stay frozen at first.
+- [ ] A/B against the current preset, 4 paired reps, 120 s and 600 s.
+
+Phase D: dense cities (the user's city, FR24)
+- [ ] Fillers as position classes without road contact (behind a flag), first on toy and
+      exact cases, then the user city and FR24 at 600 s, against exact repair at equal budget.
+
+Phase E (only if C plateaus): T5 bounded optional-road spike under Codex's caps.
+
+Adoption rule as before: no validity regression, no city worse in any pair, failures
+counted, and long-run-only wins become a long-run profile rather than the default.
