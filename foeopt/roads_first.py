@@ -498,6 +498,7 @@ def prefilter(pattern: Pattern, region: set[Cell],
 
 from foeopt.chains import compose, expand, expand_buildings
 from foeopt.legality import MILITARY_POLICIES
+from foeopt.profiling import Profile
 from foeopt.packing import Grid, first_fit
 from foeopt.router import RouteError, route
 from foeopt.validate import canonical_dims, is_valid, rotated_buildings
@@ -1146,10 +1147,14 @@ def validate(layout_src: Layout, pattern: Pattern, positions: dict,
     if any(b.road_level >= 2 for b in placed if b.needs_road):
         fixed = {c: 2 for (tx, ty) in lane_tiles_of(positions)
                  for c in Footprint(tx, ty, 2, 2).cells()}
+    t_route = time.monotonic()
     try:
         roads = route(cand, fixed=fixed)
     except RouteError:
         return ("ROUTE_FAIL", None, 0)
+    finally:
+        if diag is not None:
+            diag["route_s"] = time.monotonic() - t_route
     cand.roads = roads
     if not is_valid(cand):
         return ("INVALID", None, 0)
@@ -1162,8 +1167,12 @@ def validate(layout_src: Layout, pattern: Pattern, positions: dict,
     free = region - occupied
     grid = Grid(w, h, {(x, y) for x in range(w) for y in range(h)} - free)
     n_before = len(cand.buildings)
+    t_fill = time.monotonic()
     unplaced = _place_fillers(grid, fillers, cand)
+    if diag is not None:
+        diag["fillers_s"] = time.monotonic() - t_fill
     if unplaced and exact_repair > 0:
+        t_rep = time.monotonic()
         hint = [(b, b.footprint.x, b.footprint.y)
                 for b in cand.buildings[n_before:]]
         placements, still = exact_pack(free, w, h, fillers, exact_repair,
@@ -1173,6 +1182,8 @@ def validate(layout_src: Layout, pattern: Pattern, positions: dict,
             del cand.buildings[n_before:]
             cand.buildings.extend(apply_placements(placements))
             unplaced = still
+        if diag is not None:
+            diag["repair_s"] = time.monotonic() - t_rep
     if diag is not None:
         diag["fillers_total"] = len(fillers)
         diag["fillers_placed"] = len(fillers) - len(unplaced)
@@ -1237,6 +1248,7 @@ def _run_probe(payload: tuple) -> dict:
     region = set(layout.region.cells)
     consumers = layout.road_needing()
     t0 = time.monotonic()
+    pdiag: dict = {}
     st, pos = probe(pat, region, consumers,
                    probe_limit=_WORKER_PROBE_LIMIT,
                    probe_workers=_WORKER_PROBE_WORKERS,
@@ -1244,23 +1256,34 @@ def _run_probe(payload: tuple) -> dict:
                    hints=_WORKER_HINTS,
                    stub_priority=_WORKER_STUB_PRIORITY,
                    solver_overrides=_WORKER_SOLVER_OVERRIDES,
+                   diag=pdiag,
                    # only when non-default: the item-model call stays identical
                    **({"model": _WORKER_MODEL} if _WORKER_MODEL != "item" else {}))
     secs = round(time.monotonic() - t0, 1)
+    # Phase timings travel back with the result (worker seconds; see profiling.py).
+    phases = {"probe_total": time.monotonic() - t0,
+              "probe_build": pdiag.get("cand_s", 0.0), "probe_solve": pdiag.get("solve_s", 0.0),
+              f"probe_{st.lower()}": time.monotonic() - t0}
     if st != "SAT":
         return {"k": k, "params": pat.params, "status": st,
                 "achieved": None, "secs": secs, "layout": None,
-                "pat_index": pat_index, "pos": None}
+                "pat_index": pat_index, "pos": None, "phases": phases}
     # Clamped to one probe's own limit so a rescue can at worst DOUBLE the cost
     # of the probe that produced it. The repair is charged per rescued layout,
     # not once per run, so an unclamped value would let N filler failures add
     # N x exact_repair seconds to the box -- the same defect class as the
     # seed_polish overrun (tasks/lessons.md 2026-07-30).
     vdiag: dict = {}
+    t_val = time.monotonic()
     vstat, vlay, achieved = validate(
         layout, pat, pos,
         exact_repair=min(_WORKER_EXACT_REPAIR, _WORKER_PROBE_LIMIT),
         exact_workers=_WORKER_PROBE_WORKERS, diag=vdiag)
+    phases["validate_total"] = time.monotonic() - t_val
+    for key in ("route_s", "fillers_s", "repair_s"):
+        if key in vdiag:
+            phases["validate_" + key[:-2]] = vdiag[key]
+    objective_cmp = None
     # Clamped to one probe's own limit, for the same reason as exact_repair
     # above (charged per SAT, an unclamped value lets N SATs add N x limit),
     # AND to the caller's deadline less a margin for validate(): a result that
@@ -1270,25 +1293,38 @@ def _run_probe(payload: tuple) -> dict:
         olimit = min(olimit, deadline - time.monotonic() - OBJECTIVE_MARGIN_S)
     if _WORKER_OBJECTIVE_LIMIT > 0 and olimit >= OBJECTIVE_MIN_S:
         odiag: dict = {}
+        t_obj = time.monotonic()
         opos = minimize_needed(pat, region, consumers, pos, limit=olimit,
                                workers=_WORKER_PROBE_WORKERS, diag=odiag,
                                model=_WORKER_MODEL)
+        obj_total = time.monotonic() - t_obj
+        phases["objective_total"] = obj_total
+        phases["objective_solve"] = odiag.get("objective_s", 0.0)
+        phases["objective_build"] = max(0.0, obj_total - odiag.get("objective_s", 0.0))
         if opos is not None:
+            t_val2 = time.monotonic()
             ostat, olay, oach = validate(
                 layout, pat, opos,
                 exact_repair=min(_WORKER_EXACT_REPAIR, _WORKER_PROBE_LIMIT),
                 exact_workers=_WORKER_PROBE_WORKERS)
+            phases["objective_validate"] = time.monotonic() - t_val2
+            if ostat == "OK":
+                objective_cmp = (odiag.get("objective"), oach,
+                                 achieved if vstat == "OK" else None)
             # Keep the better LEGAL layout; the feasibility one is never lost.
             if ostat == "OK" and (vstat != "OK" or oach < achieved):
                 vstat, vlay, achieved, pos = ostat, olay, oach, opos
         secs = round(time.monotonic() - t0, 1)
+    phases["worker_total"] = time.monotonic() - t0
     if vstat == "OK":
         return {"k": k, "params": pat.params, "status": "SAT",
                 "achieved": achieved, "secs": secs, "layout": vlay,
-                "pat_index": pat_index, "pos": pos}
+                "pat_index": pat_index, "pos": pos, "phases": phases,
+                "objective_cmp": objective_cmp}
     return {"k": k, "params": pat.params, "status": vstat,
             "achieved": None, "secs": secs, "layout": None, "filler": vdiag,
-            "pat_index": pat_index, "pos": pos}
+            "pat_index": pat_index, "pos": pos, "phases": phases,
+            "objective_cmp": objective_cmp}
 
 
 def _run_probe_seq(payload: tuple) -> dict:
@@ -1421,8 +1457,10 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
     # before failing as SAT_FILLER_FAIL. (Documented as shipped 2026-07-31 but
     # never passed on this, the production path, until 2026-11-11.)
     fillers = [b for b in layout.buildings if not b.needs_road and not b.is_townhall]
+    profile = getattr(params, "profile", None)
     state: dict[int, dict] = {}
     for k in ks:
+        t_gen = time.monotonic()
         gen_kwargs = {"th_mode": th_mode}
         if family == "lane":
             gen_kwargs["max_lane_len"] = getattr(params, "lane_cap", None)
@@ -1446,6 +1484,9 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
             extra = gen_fn(region, th.width, th.length, k, rng, params.patterns,
                            **{**gen_kwargs, "quality_index_band": None})
             pats = pats + [p for p in extra if p.roads not in seen_roads]
+        if profile is not None:
+            profile.add("generate", time.monotonic() - t_gen)
+        t_pre = time.monotonic()
         surviving = []
         for pat in pats:
             reason = prefilter(pat, region, consumers, fillers)
@@ -1454,6 +1495,8 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
                      "reason": reason, "secs": 0.0, "order": 0})
                 continue
             surviving.append(pat)
+        if profile is not None:
+            profile.add("prefilter", time.monotonic() - t_pre)
         if scorer is not None and surviving:
             scored = [(scorer(pat), pat) for pat in surviving]
             if score_threshold is not None:
@@ -1466,6 +1509,12 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
     def handle_result(k, result, pat):
         st = state[k]
         st["order"] += 1
+        if profile is not None:
+            profile.merge(result.get("phases"))
+            if result.get("objective_cmp"):
+                profile.objective_row(*result["objective_cmp"])
+            if result["status"] == "SAT":
+                profile.event("first_sat")
         status = result["status"]
         achieved = result["achieved"]
         row = {"k": k, "params": pat.params, "status": status,
@@ -1783,10 +1832,14 @@ class RoadsFirstSearch:
         # against the stale walk best and could publish 95 after 90.)
         latest: dict = {"layout": None, "k": None, "achieved": None}
         user_cb = on_improvement
+        profile = Profile()
+        self.profile = profile
 
         def on_improvement(vlay, k, achieved):  # noqa: F811 -- wraps the caller's
             if latest["achieved"] is not None and achieved >= latest["achieved"]:
                 return
+            profile.event("first_valid")
+            profile.events["last_improvement"] = round(time.monotonic() - profile.t0, 2)
             latest.update(layout=vlay, k=k, achieved=achieved)
             if user_cb is not None:
                 user_cb(vlay, k, achieved)
@@ -1855,6 +1908,7 @@ class RoadsFirstSearch:
             comb_modes=self.comb_modes,
             interleave_levels=self.interleave_levels,
         )
+        params.profile = profile
 
         results: dict[int, tuple[str, int | None]] = {}
 
@@ -2087,6 +2141,7 @@ class RoadsFirstSearch:
                     return {"verdict": "FAMILY_TOO_WEAK", "walk_complete": not truncated,
                             "deadline_hit": _should_stop(), "results": results,
                             "boundary_descent": boundary_info["probed"],
+                            "profile": profile.as_dict(self.workers),
                             "filler_failures": summarise_fillers(filler_stats),
                             "level_coverage": level_coverage,
                             "undersampled_levels": sum(
@@ -2145,20 +2200,24 @@ class RoadsFirstSearch:
 
             best = min((r[1] for r in results.values() if r[1] is not None), default=None)
             objective_info = None
+            profile.event("walk_end")
             if best is not None and objective_reserve > 0:
-                objective_info = self._apply_objective_polish(
-                    sat_cands, best, on_improvement, polish_deadline, should_stop)
+                with profile.timed("finish_objective_polish"):
+                    objective_info = self._apply_objective_polish(
+                        sat_cands, best, on_improvement, polish_deadline, should_stop)
                 if objective_info["after"] is not None and objective_info["after"] < best:
                     best = objective_info["after"]
             polish_info = None
             if best is not None and self.seed_polish > 0:
-                polish_info = self._apply_seed_polish(best_holder, on_improvement,
-                                                      should_stop=_stop_polish,
-                                                      incumbent=latest["achieved"])
+                with profile.timed("finish_seed_polish"):
+                    polish_info = self._apply_seed_polish(best_holder, on_improvement,
+                                                          should_stop=_stop_polish,
+                                                          incumbent=latest["achieved"])
             exact_info = None
             if self.exact_finish and latest["layout"] is not None:
-                exact_info = self._apply_exact_finish(latest, on_improvement,
-                                                      hard_deadline, should_stop)
+                with profile.timed("finish_exact"):
+                    exact_info = self._apply_exact_finish(latest, on_improvement,
+                                                          hard_deadline, should_stop)
             if latest["achieved"] is not None:
                 best = latest["achieved"] if best is None else min(best, latest["achieved"])
             # UNDERSAMPLED counts as unknown: the level was not finished, so it
@@ -2171,6 +2230,7 @@ class RoadsFirstSearch:
                     "walk_complete": not truncated, "deadline_hit": _should_stop(),
                     "seed_polish": polish_info,
                     "boundary_descent": boundary_info["probed"],
+                    "profile": profile.as_dict(self.workers),
                     "objective_polish": objective_info,
                     "exact_finish": exact_info,
                     "filler_failures": summarise_fillers(filler_stats),
