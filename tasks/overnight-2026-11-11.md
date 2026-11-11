@@ -1,5 +1,11 @@
 # Overnight 2026-11-11: what changed, what was measured
 
+> **Update (day, 2026-11-11):** the user confirmed two game rules (two-lane = 2x2 tiles all
+> the way to the TH; chains must keep their links). Under them **every darkzig figure below
+> is a legacy-model number**, not a playable layout. The first legal darkzig baseline is
+> **90** (reps 92/90/92), in `docs/records/darkzig-90-roads-legal-rules.json`. FR16 68 and
+> FR17 105 remain valid. See `tasks/todo.md` (last section).
+
 Branch `feat/placement-objective` (not merged, not pushed). Start with
 `tasks/analysis-2026-11-11.md` (the review) and the lessons entry
 "CORRECTION: the placement objective..." at the end of `tasks/lessons.md`.
