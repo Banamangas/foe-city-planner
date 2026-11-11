@@ -102,6 +102,8 @@ def load_layout_from_dict(data: dict, helper_data: dict | None = None) -> Layout
     receives the slim payload as JSON in the request body, not as a file path.
     """
     if "entities" in data:
+        # A cached split city carries its helper's catalog inline (webapp).
+        helper_data = helper_data or data.get("helper_data")
         if helper_data is None:
             raise ValueError(
                 "this city file is the split format; a helper file is required"
