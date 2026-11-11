@@ -848,3 +848,21 @@ The wrong-start arm is the point: robustness to a bad start is what this buys.
 
 Adopt only if: no city regresses at its default start, AND at least one
 wrong-start case improves.
+
+# Placement objective — 2026-11-11 (overnight, autonomous)
+
+Evidence: `tasks/analysis-2026-11-11.md`. A hinted objective (minimize the skeleton cells
+actually needed) beat every stored record in 120 s per skeleton (darkzig 90, FR16 71).
+The 2026-07-21 study that closed this lever used a degenerate proxy (P2 == k).
+
+- [ ] `probe(..., objective_limit=)`: after a SAT, re-solve the one-hot objective model hinted
+      from the SAT placement; return both placements; default 0 = byte-identical behaviour
+- [ ] `_run_probe`: validate both, keep the better LEGAL layout; clamp objective_limit to
+      probe_limit (budget-defect class, lessons 2026-07-31)
+- [ ] `RoadsFirstSearch(objective_limit=)` + webapp option + CLI flag (off by default)
+- [ ] pass `fillers=` to `prefilter` in production (shipped-but-dead check)
+- [ ] tests: needed-closure correctness on a toy, objective never worse than feasibility,
+      off == unchanged
+- [ ] A/B at equal 600 s boxes, strictly sequential: {darkzig, FR16, FR17} x {off, on} x 2
+- [ ] Regenerate + verify any record (exact_route, is_valid, rotated 0, all placed), docs/records
+- [ ] Adopt in BEST_PRESET only if: no city worse at either repeat, and >= 1 city better

@@ -18,6 +18,8 @@ parameter but a preset, served as SMOKE_PRESET below.
 """
 from __future__ import annotations
 
+import math
+
 OPTION_SPECS: list[dict] = [
     # ---- basic (rendered in the panel body, not behind the toggle) ----
     {
@@ -47,6 +49,40 @@ OPTION_SPECS: list[dict] = [
                 "answer so it can never do worse. Runs only on layouts that "
                 "would otherwise be discarded, and is clamped to the probe "
                 "limit so a rescue can at most double one probe; 0 = off.",
+    },
+    {
+        "name": "objective_limit", "cli": "--objective-limit", "type": "float",
+        "default": 0.0, "min": 0.0, "max": 300.0, "advanced": True,
+        "group": "budget", "label": "Placement objective (s, 0 = off)",
+        "help": "After each feasible probe, spend up to this many seconds "
+                "re-placing the road-needing buildings to minimise the road "
+                "cells they actually need, starting from the feasible answer "
+                "(so it can never do worse). Clamped to the probe limit; 0 = off.",
+    },
+    {
+        "name": "objective_polish", "cli": "--objective-polish", "type": "float",
+        "default": 0.0, "min": 0.0, "max": 0.9, "advanced": True,
+        "group": "budget", "label": "Objective polish (share of box, 0 = off)",
+        "help": "Reserve this share of the time box, after the search, to "
+                "re-place buildings on the best few skeletons found using every "
+                "solver thread, minimising the roads they need. Keeps only a "
+                "strictly better, fully valid layout; 0 = off.",
+    },
+    {
+        "name": "probe_model", "cli": "--probe-model", "type": "choice",
+        "default": "item", "choices": ["item", "position"], "advanced": True,
+        "group": "search", "label": "CP-SAT model",
+        "help": "item: one variable pair per building (historical). position: "
+                "one switch per (building size, spot), so identical buildings "
+                "are not told apart -- removes the symmetry that stalls the "
+                "solver on cities with many same-size buildings.",
+    },
+    {
+        "name": "exact_finish", "cli": "--exact-finish", "type": "bool",
+        "default": False, "advanced": True,
+        "group": "budget", "label": "Exact road finish",
+        "help": "Re-route the final layout with the exact minimum-roads router "
+                "(usually well under a second) and keep it if it uses fewer roads.",
     },
     # ---- search shape ----
     {
@@ -220,10 +256,11 @@ SMOKE_PRESET: dict = {
 # family -- unlike the lane family, where 30 s missed every known-feasible
 # pattern (tasks/lessons.md 2026-07-22).
 #
-# seed_polish is 0 here, NOT the 12 the research runs used, for the same reason:
-# _apply_seed_polish runs AFTER the walk and loops sequentially over seeds with no
-# deadline check, so it is bounded by its own parameter rather than the remaining
-# budget. Measured at a 120 s box: seed_polish=0 took 127 s (1.06x) and reached
+# seed_polish is 0 here, NOT the 12 the research runs used. It used to run after
+# the walk with no deadline check (bounded by its own parameter, not the box);
+# since 2026-07-31 it is budget-bounded (reserve + should_stop), but it still
+# does not pay inside a short box: a reserve that fits a seed starves the walk.
+# Measured at a 120 s box, before the fix: seed_polish=0 took 127 s (1.06x) and reached
 # 101 roads; seed_polish=12 took 281 s (2.34x) and reached 100 -- 154 extra
 # seconds for ONE road. It is a genuine lever for long runs (it produced the 94
 # and the 95) and remains available; it is simply a bad trade inside a user box.
@@ -235,7 +272,33 @@ SMOKE_PRESET: dict = {
 # approached on a normal city -- FR16 rescues took 0.11 s mean, 0.17 s worst --
 # and it is clamped to probe_limit regardless.
 #
-# What it does NOT do is improve the record: the rescued layouts tie the best
+# objective_limit is 30.0 (= probe_limit, the clamp) -- adopted 2026-11-11 from
+# a 12-cell A/B, equal 600 s boxes, strictly sequential, paired repeats:
+#     darkzig  off 99/99    on 94/94
+#     FR16     off 77/77    on 75/74
+#     FR17     off 115/115  on 115/109
+# Never worse in any pair, better in 5 of 6.
+#
+# objective_polish 0.3 + exact_finish -- adopted from a second 12-cell round
+# (same protocol). "on" = objective_limit only, shown after exact finish:
+#               on        polish    both (adopted)
+#     darkzig   93/93     90/90     91/91
+#     FR16      75/74     73/73     73/73
+#     FR17      114/108   114/107   108/108
+# Both arms never worse than "on"; "both" has the best worst case and sum.
+# Not measured below a 600 s box: at 60 s the reserve is 18 s of all-thread
+# objective, unmeasured against a longer walk.
+#
+# probe_model "position" -- adopted from a third 12-cell round (same protocol,
+# same preset otherwise): item vs position
+#     darkzig   90/93    88/87
+#     FR16      74/73    68/68
+#     FR17      106/108  105/105
+# Better in all 6 pairs, and every position run finished early (0.67-0.84x):
+# levels are now DECIDED (often proven UNSAT in < 1 s) instead of timing out. It re-places each SAT minimising the
+# skeleton cells it needs (minimize_needed), hinted from the feasible answer.
+#
+# What exact_repair does NOT do is improve the record: the rescued layouts tie the best
 # greedy result at k=88 (78 roads, 3 such layouts -> 5) and are worse at k=92.
 # It is a throughput lever -- ~16% more legal layouts per run for ~0.3% of the
 # budget -- not a quality one.
@@ -254,6 +317,10 @@ BEST_PRESET: dict = {
     "concurrent_levels": 4,
     "exact_repair": 5.0,
     "comb_modes": "alternate",
+    "objective_limit": 30.0,
+    "objective_polish": 0.3,
+    "exact_finish": True,
+    "probe_model": "position",
 }
 
 DEFAULTS: dict = {s["name"]: s["default"] for s in OPTION_SPECS}
@@ -265,10 +332,24 @@ class OptionError(ValueError):
 
 
 def _as_number(spec: dict, raw, cast):
+    kind = "an integer" if cast is int else "a number"
+    bad = OptionError(f"{spec['name']}: expected {kind}, got {raw!r}")
+    # bool is an int subclass: JSON true would otherwise become 1.
+    if isinstance(raw, bool):
+        raise bad
     try:
-        value = cast(raw)
+        value = float(raw) if cast is int else cast(raw)
     except (TypeError, ValueError):
-        raise OptionError(f"{spec['name']}: expected {'an integer' if cast is int else 'a number'}, got {raw!r}")
+        raise bad
+    # NaN passes both range comparisons below (every comparison is False), and
+    # inf would reach the solver as a time budget.
+    if not math.isfinite(value):
+        raise bad
+    if cast is int:
+        # int(2.7) silently truncates; a fractional "integer" is a client bug.
+        if value != int(value):
+            raise bad
+        value = int(value)
     lo, hi = spec.get("min"), spec.get("max")
     if lo is not None and value < lo:
         raise OptionError(f"{spec['name']}: must be >= {lo} (got {value})")

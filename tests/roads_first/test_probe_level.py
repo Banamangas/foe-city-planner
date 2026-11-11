@@ -192,7 +192,7 @@ def test_probe_levels_batch_pool_none_deadline_interrupts_correctly(monkeypatch)
     lay, c1, region = _batch_layout()
     region_set = set(region.cells)
 
-    monkeypatch.setattr(mod, "prefilter", lambda pat, region, consumers: None)
+    monkeypatch.setattr(mod, "prefilter", lambda pat, region, consumers, fillers=None: None)
     monkeypatch.setattr(mod, "generate_patterns",
                         lambda region, w, l, k, rng, n, **kw: [_fake_pattern(k, 0), _fake_pattern(k, 1)])
 
@@ -240,7 +240,7 @@ def test_probe_levels_batch_pool_none_interrupted_all_unsat_so_far_is_undersampl
     lay, c1, region = _batch_layout()
     region_set = set(region.cells)
 
-    monkeypatch.setattr(mod, "prefilter", lambda pat, region, consumers: None)
+    monkeypatch.setattr(mod, "prefilter", lambda pat, region, consumers, fillers=None: None)
     monkeypatch.setattr(mod, "generate_patterns",
                         lambda region, w, l, k, rng, n, **kw: [_fake_pattern(k, 0), _fake_pattern(k, 1)])
 
@@ -277,7 +277,7 @@ def test_probe_levels_batch_pool_dispatches_one_imap_unordered_call_across_all_k
     lay, c1, region = _batch_layout()
     region_set = set(region.cells)
 
-    monkeypatch.setattr(mod, "prefilter", lambda pat, region, consumers: None)
+    monkeypatch.setattr(mod, "prefilter", lambda pat, region, consumers, fillers=None: None)
     monkeypatch.setattr(mod, "generate_patterns",
                         lambda region, w, l, k, rng, n, **kw: [_fake_pattern(k, 0), _fake_pattern(k, 1)])
 
@@ -324,7 +324,7 @@ def test_probe_levels_batch_pool_deadline_does_not_refute_unprobed_levels(monkey
     lay, c1, region = _batch_layout()
     region_set = set(region.cells)
 
-    monkeypatch.setattr(mod, "prefilter", lambda pat, region, consumers: None)
+    monkeypatch.setattr(mod, "prefilter", lambda pat, region, consumers, fillers=None: None)
     monkeypatch.setattr(mod, "generate_patterns",
                         lambda region, w, l, k, rng, n, **kw: [_fake_pattern(k, 0)])
 

@@ -614,7 +614,8 @@ def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
           hints: dict[int, tuple[int, int]] | None = None,
           stub_priority: bool = False,
           solver_overrides: dict[str, object] | None = None,
-          diag: dict | None = None) -> tuple[str, dict | None]:
+          diag: dict | None = None,
+          model: str = "item") -> tuple[str, dict | None]:
     """`diag`, if given a dict, is filled with why this probe ended the way it
     did -- `reason` is one of:
       no_anchor  some consumer has zero road-adjacent anchors; returns UNSAT
@@ -626,6 +627,10 @@ def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
     though they mean completely different things about the pattern."""
     from ortools.sat.python import cp_model
 
+    if model == "position":
+        return _probe_position(pattern, region, consumers, probe_limit=probe_limit,
+                               probe_workers=probe_workers,
+                               solver_overrides=solver_overrides, diag=diag)
     t_start = time.monotonic()
     th_cells = set(pattern.th.cells())
     blocked = set(pattern.roads) | th_cells
@@ -693,6 +698,272 @@ def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
     if st == cp_model.INFEASIBLE:
         return ("UNSAT", None)
     return ("UNKNOWN", None)
+
+
+PROBE_MODELS = ("item", "position")
+
+
+def _size_classes(consumers: list[Building]) -> dict[tuple[int, int], list[Building]]:
+    out: dict[tuple[int, int], list[Building]] = {}
+    for b in consumers:
+        out.setdefault((b.footprint.width, b.footprint.length), []).append(b)
+    return out
+
+
+def _position_model(pattern: Pattern, region: set[Cell], consumers: list[Building],
+                    needed: dict | None = None, m=None):
+    """Position-indexed placement: one boolean per (size class, anchor), a count
+    per class, and at most one coverer per cell. Identical buildings have no
+    identity here, so the N! permutation symmetry of the item model is gone.
+
+    Measured 2026-11-11 on 11 FR17 skeletons (k=121, 52 identical 3x3s among 77
+    consumers): the item model returned UNKNOWN on 11/11 at 30 s x 12 threads;
+    this model decided all 11 in 0.1-0.3 s (6 UNSAT, 5 SAT). Same constraints --
+    road-adjacent anchor per building, no overlap -- so UNSAT is a proof.
+
+    With `needed` (skeleton-cell booleans), each anchor literal forces at least
+    one needed cell on its border, as in minimize_needed. Returns
+    (model, {size: [(xy, lit), ...]}, classes) or None if some class has fewer
+    anchors than members (trivially UNSAT)."""
+    blocked = set(pattern.roads) | set(pattern.th.cells())
+    classes = _size_classes(consumers)
+    cover: dict[Cell, list] = {}
+    lits: dict[tuple[int, int], list] = {}
+    for (w, l), members in classes.items():
+        opts = _anchor_candidates(members[0], region, blocked, pattern.roads)
+        row = []
+        for (x, y) in opts:
+            touch = None
+            if needed is not None:
+                touch = [needed[c] for c in Footprint(x, y, w, l).border_cells()
+                         if c in needed]
+                if not touch:
+                    continue
+            v = m.NewBoolVar(f"z{w}x{l}_{x}_{y}")
+            if touch is not None:
+                m.AddBoolOr(touch).OnlyEnforceIf(v)
+            row.append(((x, y), v))
+            for c in Footprint(x, y, w, l).cells():
+                cover.setdefault(c, []).append(v)
+        if len(row) < len(members):
+            return None
+        m.Add(sum(v for _, v in row) == len(members))
+        lits[(w, l)] = row
+    for vs in cover.values():
+        if len(vs) > 1:
+            m.AddAtMostOne(vs)
+    return m, lits, classes
+
+
+def _position_solution(solver, lits, classes) -> dict:
+    """Map chosen anchors back to entity ids. Members of a size class are
+    interchangeable, so the assignment within a class is arbitrary but
+    deterministic (sorted anchors, input order of buildings)."""
+    pos = {}
+    for size, members in classes.items():
+        chosen = sorted(xy for xy, v in lits[size] if solver.Value(v))
+        for b, (x, y) in zip(members, chosen):
+            pos[b.entity_id] = (x, y, size[0], size[1])
+    return pos
+
+
+def _probe_position(pattern, region, consumers, *, probe_limit, probe_workers=1,
+                    solver_overrides=None, diag=None):
+    from ortools.sat.python import cp_model
+    t0 = time.monotonic()
+    built = _position_model(pattern, region, consumers, m=cp_model.CpModel())
+    if built is None:
+        if diag is not None:
+            diag.update(reason="no_anchor", cand_s=round(time.monotonic() - t0, 3),
+                        solve_s=0.0, branches=0, conflicts=0)
+        return ("UNSAT", None)
+    m, lits, classes = built
+    if diag is not None:
+        diag.update(cand_s=round(time.monotonic() - t0, 3),
+                    opts_total=sum(len(r) for r in lits.values()))
+    solver = cp_model.CpSolver()
+    solver.parameters.num_search_workers = probe_workers
+    solver.parameters.random_seed = 0
+    solver.parameters.max_time_in_seconds = probe_limit
+    if solver_overrides:
+        for key, value in solver_overrides.items():
+            setattr(solver.parameters, key, value)
+    t1 = time.monotonic()
+    st = solver.Solve(m)
+    if diag is not None:
+        branches = solver.NumBranches()
+        diag.update(reason="presolve" if branches == 0 else "search",
+                    solve_s=round(time.monotonic() - t1, 3), branches=branches,
+                    conflicts=solver.NumConflicts(), solver_status=solver.status_name(st))
+    if st in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return ("SAT", _position_solution(solver, lits, classes))
+    if st == cp_model.INFEASIBLE:
+        return ("UNSAT", None)
+    return ("UNKNOWN", None)
+
+
+def skeleton_parents(pattern: Pattern) -> dict[Cell, Cell | None]:
+    """BFS parent of every skeleton cell on its path to the Townhall (roots --
+    cells touching the TH footprint -- map to None). Cells not reachable from
+    the TH are absent."""
+    roads = pattern.roads
+    th_cells = pattern.th.cells()
+    roots = sorted(c for c in roads
+                   if any((c[0] + dx, c[1] + dy) in th_cells for dx, dy in _ORTHO))
+    parent: dict[Cell, Cell | None] = {r: None for r in roots}
+    queue = list(roots)
+    i = 0
+    while i < len(queue):
+        c = queue[i]
+        i += 1
+        for dx, dy in _ORTHO:
+            nb = (c[0] + dx, c[1] + dy)
+            if nb in roads and nb not in parent:
+                parent[nb] = c
+                queue.append(nb)
+    return parent
+
+
+def needed_skeleton_cells(pattern: Pattern, positions: dict) -> int | None:
+    """Exact objective of `minimize_needed` for a FIXED placement: the fewest
+    skeleton cells, closed under the path to the TH, such that every consumer
+    borders at least one of them. Brute force over choices is exponential, so
+    this is only for tests on toy instances -- returns None above 12 consumers."""
+    parent = skeleton_parents(pattern)
+    touch = []
+    for (x, y, w, l) in positions.values():
+        t = [c for c in Footprint(x, y, w, l).border_cells() if c in parent]
+        if not t:
+            return None
+        touch.append(t)
+    if len(touch) > 12:
+        return None
+    best = None
+    for choice in itertools.product(*touch):
+        keep: set[Cell] = set()
+        for c in choice:
+            cur: Cell | None = c
+            while cur is not None and cur not in keep:
+                keep.add(cur)
+                cur = parent[cur]
+        if best is None or len(keep) < best:
+            best = len(keep)
+    return best
+
+
+def minimize_needed(pattern: Pattern, region: set[Cell], consumers: list[Building],
+                    positions: dict, *, limit: float, workers: int = 1,
+                    seed: int = 0, diag: dict | None = None,
+                    model: str = "item") -> dict | None:
+    """Re-place the consumers on `pattern` minimizing the skeleton cells they
+    actually NEED, hinted from a known-feasible `positions` (from `probe`).
+
+    Why: `probe` is pure feasibility, so the routed road count is whatever the
+    first satisfying placement happens to give -- up to 10 roads of spread on
+    one skeleton (lessons 2026-07-22). The objective here is exact for the
+    skeleton: `needed[c]` booleans closed under the BFS parent toward the TH,
+    and each anchor option forces >= 1 needed cell on its border. `route()`
+    searches all free cells, so it can only match or beat this count.
+
+    Cold, the one-hot model did not find a first solution in 120 s on darkzig;
+    hinted, it improves immediately (2026-11-11: every stored record beaten,
+    darkzig 94 -> 91 and 97 -> 90, FR16 76 -> 71). Hence two phases: the cheap
+    table-constraint `probe` finds feasibility, this pushes quality.
+
+    The 2026-07-21 study that closed this lever measured proxy P2, which kept
+    EVERY touched cell -- in a dense packing that is always k, so it could not
+    correlate. That is a different (degenerate) quantity from this objective.
+
+    Returns new positions, or None if the solver produced nothing (the caller
+    keeps the hint placement, so this can never lose a feasible result)."""
+    from ortools.sat.python import cp_model
+
+    parent = skeleton_parents(pattern)
+    blocked = set(pattern.roads) | set(pattern.th.cells())
+    m = cp_model.CpModel()
+    needed = {c: m.NewBoolVar(f"n{c[0]}_{c[1]}") for c in sorted(parent)}
+    for c, p in parent.items():
+        if p is not None:
+            m.AddImplication(needed[c], needed[p])
+    if model == "position":
+        return _minimize_needed_position(m, needed, pattern, region, consumers,
+                                         positions, limit, workers, seed, diag)
+    x0b, y0b, x1b, y1b = _bbox(region)
+    xiv, yiv, lits = [], [], []
+    for i, b in enumerate(consumers):
+        w, l = b.footprint.width, b.footprint.length
+        opts = _anchor_candidates(b, region, blocked, pattern.roads)
+        hint_xy = tuple(positions[b.entity_id][:2])
+        ol = []
+        for (x, y) in opts:
+            touch = [needed[c] for c in Footprint(x, y, w, l).border_cells()
+                     if c in needed]
+            if not touch:
+                continue  # borders only TH-unreachable skeleton cells
+            o = m.NewBoolVar(f"o{i}_{x}_{y}")
+            m.AddBoolOr(touch).OnlyEnforceIf(o)
+            m.AddHint(o, (x, y) == hint_xy)
+            ol.append(((x, y), o))
+        if not ol:
+            return None
+        m.AddExactlyOne([o for _, o in ol])
+        xv = m.NewIntVar(x0b, x1b, f"x{i}")
+        yv = m.NewIntVar(y0b, y1b, f"y{i}")
+        m.Add(xv == sum(xy[0] * o for xy, o in ol))
+        m.Add(yv == sum(xy[1] * o for xy, o in ol))
+        xiv.append(m.NewFixedSizeIntervalVar(xv, w, f"xi{i}"))
+        yiv.append(m.NewFixedSizeIntervalVar(yv, l, f"yi{i}"))
+        lits.append((b, ol))
+    m.AddNoOverlap2D(xiv, yiv)
+    m.Minimize(sum(needed.values()))
+    solver = cp_model.CpSolver()
+    solver.parameters.num_search_workers = workers
+    solver.parameters.random_seed = seed
+    solver.parameters.max_time_in_seconds = limit
+    t0 = time.monotonic()
+    st = solver.Solve(m)
+    ok = st in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+    if diag is not None:
+        diag.update(objective_status=solver.status_name(st),
+                    objective_s=round(time.monotonic() - t0, 3),
+                    objective=solver.ObjectiveValue() if ok else None,
+                    objective_bound=solver.BestObjectiveBound() if ok else None)
+    if not ok:
+        return None
+    out = {}
+    for b, ol in lits:
+        for xy, o in ol:
+            if solver.Value(o):
+                out[b.entity_id] = (xy[0], xy[1], b.footprint.width, b.footprint.length)
+                break
+    return out
+
+
+def _minimize_needed_position(m, needed, pattern, region, consumers, positions,
+                              limit, workers, seed, diag):
+    from ortools.sat.python import cp_model
+    built = _position_model(pattern, region, consumers, needed=needed, m=m)
+    if built is None:
+        return None
+    m, lits, classes = built
+    used = {(x, y, w, l) for (x, y, w, l) in positions.values()}
+    for (w, l), row in lits.items():
+        for (x, y), v in row:
+            m.AddHint(v, (x, y, w, l) in used)
+    m.Minimize(sum(needed.values()))
+    solver = cp_model.CpSolver()
+    solver.parameters.num_search_workers = workers
+    solver.parameters.random_seed = seed
+    solver.parameters.max_time_in_seconds = limit
+    t0 = time.monotonic()
+    st = solver.Solve(m)
+    ok = st in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+    if diag is not None:
+        diag.update(objective_status=solver.status_name(st),
+                    objective_s=round(time.monotonic() - t0, 3),
+                    objective=solver.ObjectiveValue() if ok else None,
+                    objective_bound=solver.BestObjectiveBound() if ok else None)
+    return _position_solution(solver, lits, classes) if ok else None
 
 
 def _place_fillers(grid: Grid, fillers: list[Building], cand: Layout) -> list[Building]:
@@ -820,16 +1091,27 @@ _WORKER_HINTS: dict[int, tuple[int, int]] | None = None
 _WORKER_STUB_PRIORITY: bool = False
 _WORKER_SOLVER_OVERRIDES: dict[str, object] | None = None
 _WORKER_EXACT_REPAIR: float = 0.0
+_WORKER_OBJECTIVE_LIMIT: float = 0.0
+# Below this many banded skeletons a level is topped up with unbanded ones.
+BAND_MIN_PATTERNS = 10
+_WORKER_MODEL: str = "item"
+# Seconds kept back for validate() after the objective solve, and the smallest
+# objective budget worth starting (hinted, it improves within seconds).
+OBJECTIVE_MARGIN_S = 3.0
+OBJECTIVE_MIN_S = 2.0
 
 
 def _worker_init(layout: Layout, probe_limit: float, probe_workers: int,
                  symmetry_breaking: bool = False, hints=None,
                  stub_priority: bool = False,
                  solver_overrides: dict[str, object] | None = None,
-                 exact_repair: float = 0.0) -> None:
+                 exact_repair: float = 0.0, objective_limit: float = 0.0,
+                 model: str = "item") -> None:
     global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS
     global _WORKER_SYMMETRY_BREAKING, _WORKER_HINTS, _WORKER_STUB_PRIORITY
-    global _WORKER_SOLVER_OVERRIDES, _WORKER_EXACT_REPAIR
+    global _WORKER_SOLVER_OVERRIDES, _WORKER_EXACT_REPAIR, _WORKER_OBJECTIVE_LIMIT
+    global _WORKER_MODEL
+    _WORKER_MODEL = model
     _WORKER_LAYOUT = layout
     _WORKER_PROBE_LIMIT = probe_limit
     _WORKER_PROBE_WORKERS = probe_workers
@@ -838,10 +1120,12 @@ def _worker_init(layout: Layout, probe_limit: float, probe_workers: int,
     _WORKER_STUB_PRIORITY = stub_priority
     _WORKER_SOLVER_OVERRIDES = solver_overrides
     _WORKER_EXACT_REPAIR = exact_repair
+    _WORKER_OBJECTIVE_LIMIT = objective_limit
 
 
 def _run_probe(payload: tuple) -> dict:
-    pat, k, pat_index = payload
+    pat, k, pat_index = payload[:3]
+    deadline = payload[3] if len(payload) > 3 else None
     layout = _WORKER_LAYOUT
     region = set(layout.region.cells)
     consumers = layout.road_needing()
@@ -852,7 +1136,9 @@ def _run_probe(payload: tuple) -> dict:
                    symmetry_breaking=_WORKER_SYMMETRY_BREAKING,
                    hints=_WORKER_HINTS,
                    stub_priority=_WORKER_STUB_PRIORITY,
-                   solver_overrides=_WORKER_SOLVER_OVERRIDES)
+                   solver_overrides=_WORKER_SOLVER_OVERRIDES,
+                   # only when non-default: the item-model call stays identical
+                   **({"model": _WORKER_MODEL} if _WORKER_MODEL != "item" else {}))
     secs = round(time.monotonic() - t0, 1)
     if st != "SAT":
         return {"k": k, "params": pat.params, "status": st,
@@ -868,6 +1154,27 @@ def _run_probe(payload: tuple) -> dict:
         layout, pat, pos,
         exact_repair=min(_WORKER_EXACT_REPAIR, _WORKER_PROBE_LIMIT),
         exact_workers=_WORKER_PROBE_WORKERS, diag=vdiag)
+    # Clamped to one probe's own limit, for the same reason as exact_repair
+    # above (charged per SAT, an unclamped value lets N SATs add N x limit),
+    # AND to the caller's deadline less a margin for validate(): a result that
+    # arrives after the deadline is thrown away with the pool.
+    olimit = min(_WORKER_OBJECTIVE_LIMIT, _WORKER_PROBE_LIMIT)
+    if deadline is not None:
+        olimit = min(olimit, deadline - time.monotonic() - OBJECTIVE_MARGIN_S)
+    if _WORKER_OBJECTIVE_LIMIT > 0 and olimit >= OBJECTIVE_MIN_S:
+        odiag: dict = {}
+        opos = minimize_needed(pat, region, consumers, pos, limit=olimit,
+                               workers=_WORKER_PROBE_WORKERS, diag=odiag,
+                               model=_WORKER_MODEL)
+        if opos is not None:
+            ostat, olay, oach = validate(
+                layout, pat, opos,
+                exact_repair=min(_WORKER_EXACT_REPAIR, _WORKER_PROBE_LIMIT),
+                exact_workers=_WORKER_PROBE_WORKERS)
+            # Keep the better LEGAL layout; the feasibility one is never lost.
+            if ostat == "OK" and (vstat != "OK" or oach < achieved):
+                vstat, vlay, achieved, pos = ostat, olay, oach, opos
+        secs = round(time.monotonic() - t0, 1)
     if vstat == "OK":
         return {"k": k, "params": pat.params, "status": "SAT",
                 "achieved": achieved, "secs": secs, "layout": vlay,
@@ -880,7 +1187,8 @@ def _run_probe(payload: tuple) -> dict:
 def _run_probe_seq(payload: tuple) -> dict:
     global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS
     global _WORKER_SYMMETRY_BREAKING, _WORKER_HINTS, _WORKER_STUB_PRIORITY
-    global _WORKER_SOLVER_OVERRIDES, _WORKER_EXACT_REPAIR
+    global _WORKER_SOLVER_OVERRIDES, _WORKER_EXACT_REPAIR, _WORKER_OBJECTIVE_LIMIT
+    global _WORKER_MODEL
     pat, k, layout, probe_limit, probe_workers, *rest = payload
     _WORKER_LAYOUT = layout
     _WORKER_PROBE_LIMIT = probe_limit
@@ -890,8 +1198,12 @@ def _run_probe_seq(payload: tuple) -> dict:
     _WORKER_STUB_PRIORITY = rest[2] if len(rest) > 2 else False
     _WORKER_SOLVER_OVERRIDES = rest[3] if len(rest) > 3 else None
     _WORKER_EXACT_REPAIR = rest[4] if len(rest) > 4 else 0.0
+    _WORKER_OBJECTIVE_LIMIT = rest[5] if len(rest) > 5 else 0.0
+    # Only forwarded when the objective is on: off stays byte-identical.
+    deadline = rest[6] if len(rest) > 6 and _WORKER_OBJECTIVE_LIMIT > 0 else None
+    _WORKER_MODEL = rest[7] if len(rest) > 7 else "item"
     try:
-        return _run_probe((pat, k, 0))
+        return _run_probe((pat, k, 0) if deadline is None else (pat, k, 0, deadline))
     finally:
         _WORKER_LAYOUT = None
 
@@ -997,6 +1309,11 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
     family = getattr(params, "pattern_family", "comb")
     gen_fn = _pattern_generator(family)
 
+    # Fillers occupy region cells too; without them the prefilter's area check
+    # passes patterns with no room for everything, which then burn a full probe
+    # before failing as SAT_FILLER_FAIL. (Documented as shipped 2026-07-31 but
+    # never passed on this, the production path, until 2026-11-11.)
+    fillers = [b for b in layout.buildings if not b.needs_road and not b.is_townhall]
     state: dict[int, dict] = {}
     for k in ks:
         gen_kwargs = {"th_mode": th_mode}
@@ -1010,9 +1327,21 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
             gen_kwargs["modes"] = params.comb_modes
         pats = gen_fn(region, th.width, th.length, k, rng, params.patterns,
                       **gen_kwargs)
+        if (family == "nonuniform" and gen_kwargs.get("quality_index_band") is not None
+                and len(pats) < BAND_MIN_PATTERNS):
+            # The band was calibrated on darkzig/FR16 and can be EMPTY elsewhere:
+            # on FR24 it yields 0 skeletons at every k >= 220, so every level
+            # was empty and the run ended FAMILY_TOO_WEAK in 4 s without one
+            # probe. Top up with unbanded skeletons. The threshold is below
+            # every measured city's banded count (FR17: 21-51 per level), so
+            # their behaviour is unchanged.
+            seen_roads = {p.roads for p in pats}
+            extra = gen_fn(region, th.width, th.length, k, rng, params.patterns,
+                           **{**gen_kwargs, "quality_index_band": None})
+            pats = pats + [p for p in extra if p.roads not in seen_roads]
         surviving = []
         for pat in pats:
-            reason = prefilter(pat, region, consumers)
+            reason = prefilter(pat, region, consumers, fillers)
             if reason is not None:
                 log({"k": k, "params": pat.params, "status": "PREFILTERED",
                      "reason": reason, "secs": 0.0, "order": 0})
@@ -1055,6 +1384,9 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
                           secs=result["secs"], pos=result.get("pos"))
         if status == "SAT":
             vlay = result["layout"]
+            sat_recorder = getattr(params, "sat_recorder", None)
+            if sat_recorder is not None:
+                sat_recorder(k, achieved, pat, result.get("pos"))
             if st["best_achieved"] is None or achieved < st["best_achieved"]:
                 st["best_achieved"] = achieved
                 if on_improvement is not None:
@@ -1075,7 +1407,10 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
                                          getattr(params, "hints", None),
                                          getattr(params, "stub_priority", False),
                                          None,
-                                         getattr(params, "exact_repair", 0.0)))
+                                         getattr(params, "exact_repair", 0.0),
+                                         getattr(params, "objective_limit", 0.0),
+                                         effective_deadline,
+                                         getattr(params, "probe_model", "item")))
                 if handle_result(k, result, pat):
                     interrupted = True
                     break
@@ -1101,6 +1436,13 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
             # Pre-2026-08-03 order, retained ONLY so the A/B can reproduce it.
             payloads = [(pat, k, idx) for k in ks
                         for idx, pat in enumerate(state[k]["surviving"])]
+        if getattr(params, "objective_limit", 0.0) > 0:
+            # The objective phase must know the deadline: probe + objective can
+            # exceed a level slice, and a slice expiry terminates the pool,
+            # killing every in-flight SAT with it (measured: FR16 at a 60 s box
+            # found NOTHING with the objective on). time.monotonic is
+            # system-wide on Linux, so it is comparable inside the workers.
+            payloads = [(*p, effective_deadline) for p in payloads]
         for result in pool.imap_unordered(_run_probe, payloads):
             k = result["k"]
             idx = result["pat_index"]
@@ -1144,8 +1486,35 @@ class RoadsFirstSearch:
                  exact_repair: float = 0.0,
                  comb_modes: tuple[str, ...] | None = None,
                  level_slice_frac: float | None = 0.35,
-                 interleave_levels: bool = True):
+                 interleave_levels: bool = True,
+                 objective_limit: float = 0.0,
+                 objective_polish: float = 0.0,
+                 objective_polish_top: int = 3,
+                 exact_finish: bool = False,
+                 probe_model: str = "item"):
         self.layout = layout
+        if probe_model not in PROBE_MODELS:
+            raise ValueError(f"probe_model must be one of {PROBE_MODELS}")
+        # "position": symmetry-free CP-SAT encoding (see _position_model). The
+        # item-model-only levers (symmetry_breaking, hints, stub_priority) are
+        # ignored under it.
+        self.probe_model = probe_model
+        # Re-route the final best layout with exact_route (min connected road
+        # cover for the fixed placement, typically < 0.1 s) and keep it when it
+        # is strictly smaller. route() is greedy: on 2026-11-11 A/B layouts it
+        # left one road on the table in both arms (99 -> 98, 94 -> 93).
+        self.exact_finish = exact_finish
+        # > 0: reserve this FRACTION of the box, after the walk, to re-solve the
+        # best `objective_polish_top` distinct SAT skeletons with minimize_needed
+        # using every solver thread (workers x probe_workers). The in-walk
+        # objective_limit gets one probe's threads and is clamped to probe_limit;
+        # the record-breaking runs used 120 s x 12 threads on one skeleton.
+        self.objective_polish = objective_polish
+        self.objective_polish_top = objective_polish_top
+        # > 0: after every SAT, spend up to this many seconds (clamped to
+        # probe_limit) minimizing the skeleton cells the placement needs. See
+        # minimize_needed. 0 = feasibility only, the historical behaviour.
+        self.objective_limit = objective_limit
         self.time_box = time_box
         self.patterns = patterns
         self.probe_limit = probe_limit
@@ -1183,6 +1552,55 @@ class RoadsFirstSearch:
         # that made a "concurrent" batch drain one level at a time.
         self.interleave_levels = interleave_levels
 
+    def _apply_exact_finish(self, latest: dict, on_improvement) -> dict:
+        """exact_route on the best layout; emit it only if strictly smaller and
+        still valid. Bounded at 10 s: the fixed-placement model is tiny."""
+        from foeopt.exact_router import exact_route
+        lay, before = latest["layout"], latest["achieved"]
+        res = exact_route(lay, time_limit=10.0)
+        after = before
+        if res.roads is not None and res.count is not None and res.count < before:
+            cand = Layout(lay.region, lay.buildings, lay.townhall, dict(res.roads))
+            if is_valid(cand) and len(cand.roads) == res.count:
+                after = res.count
+                on_improvement(cand, latest["k"], after)
+        return {"before": before, "after": after, "status": res.status,
+                "optimal": res.optimal}
+
+    def _apply_objective_polish(self, cands, best, on_improvement, end,
+                                should_stop=None) -> dict:
+        """Re-solve the top distinct SAT skeletons with minimize_needed, all
+        solver threads, splitting the time left before `end` evenly across the
+        candidates still to go. Keeps only fully validated strict improvements."""
+        region = set(self.layout.region.cells)
+        consumers = self.layout.road_needing()
+        threads = max(1, self.workers * self.probe_workers)
+        top = cands[:max(1, self.objective_polish_top)]
+        tried, after, per = 0, best, []
+        for i, (ach, k, pat, pos) in enumerate(top):
+            if should_stop is not None and should_stop():
+                break
+            limit = (end - time.monotonic() - OBJECTIVE_MARGIN_S) / (len(top) - i)
+            if limit < OBJECTIVE_MIN_S:
+                break
+            tried += 1
+            opos = minimize_needed(pat, region, consumers, pos, limit=limit,
+                                   workers=threads, model=self.probe_model)
+            got = None
+            if opos is not None:
+                vst, vlay, vach = validate(self.layout, pat, opos,
+                                           exact_repair=min(self.exact_repair, limit),
+                                           exact_workers=threads)
+                if vst == "OK":
+                    got = vach
+                    if after is None or vach < after:
+                        after = vach
+                        if on_improvement is not None:
+                            on_improvement(vlay, k, vach)
+            per.append({"k": k, "before": ach, "after": got, "limit_s": round(limit, 1)})
+        return {"before": best, "after": after, "tried": tried,
+                "candidates": len(cands), "per_skeleton": per}
+
     def _apply_seed_polish(self, best_holder: dict, on_improvement,
                            should_stop=None) -> dict | None:
         """Opt-in (seed_polish>0): re-solve the best skeleton under N CP-SAT
@@ -1216,6 +1634,15 @@ class RoadsFirstSearch:
                 "stopped_early": res.n_tried < self.seed_polish}
 
     def run(self, on_improvement=None, on_status=None, should_stop=None) -> dict:
+        latest: dict = {"layout": None, "k": None, "achieved": None}
+        if self.exact_finish:
+            user_cb = on_improvement
+
+            def on_improvement(vlay, k, achieved):  # noqa: F811 -- wraps the caller's
+                if latest["achieved"] is None or achieved < latest["achieved"]:
+                    latest.update(layout=vlay, k=k, achieved=achieved)
+                if user_cb is not None:
+                    user_cb(vlay, k, achieved)
         layout = self.layout
         region = set(layout.region.cells)
         consumers = layout.road_needing()
@@ -1235,8 +1662,14 @@ class RoadsFirstSearch:
             # (0.77x) with seeds_tried=0, strictly worse than not reserving.
             # The margin covers the walk's own probe-granularity overshoot.
             polish_reserve = want if want >= self.probe_limit * 1.2 else 0.0
+        objective_reserve = 0.0
+        if self.objective_polish > 0:
+            objective_reserve = self.time_box * self.objective_polish
+            if objective_reserve < OBJECTIVE_MIN_S + OBJECTIVE_MARGIN_S:
+                objective_reserve = 0.0  # cannot fit one useful solve
         deadline = time.monotonic() + self.time_box
-        walk_deadline = deadline - polish_reserve
+        walk_deadline = deadline - polish_reserve - objective_reserve
+        polish_deadline = deadline - polish_reserve  # objective polish ends here
         filler_stats = new_filler_stats()
         level_coverage: dict[int, dict] = {}
 
@@ -1246,7 +1679,8 @@ class RoadsFirstSearch:
                 initializer=_worker_init,
                 initargs=(layout, self.probe_limit, self.probe_workers,
                          self.symmetry_breaking, self.hints, self.stub_priority,
-                         None, self.exact_repair))
+                         None, self.exact_repair, self.objective_limit,
+                         self.probe_model))
 
         pool = _new_pool() if self.workers > 1 else None
 
@@ -1266,6 +1700,8 @@ class RoadsFirstSearch:
             lane_pitches=self.lane_pitches,
             quality_index_band=self.quality_index_band,
             exact_repair=self.exact_repair,
+            objective_limit=self.objective_limit,
+            probe_model=self.probe_model,
             comb_modes=self.comb_modes,
             interleave_levels=self.interleave_levels,
         )
@@ -1284,6 +1720,20 @@ class RoadsFirstSearch:
 
         if self.seed_polish > 0:
             params.best_recorder = _record_best
+
+        # Every SAT, for objective polish: the best feasibility count is a poor
+        # predictor of the best count after the objective, so keep several.
+        sat_cands: list[tuple[int, int, Pattern, dict]] = []
+
+        def _record_sat(k, achieved, pat, pos):
+            if pos is None or any(c[2].roads == pat.roads for c in sat_cands):
+                return
+            sat_cands.append((achieved, k, pat, pos))
+            sat_cands.sort(key=lambda c: (c[0], c[1]))
+            del sat_cands[max(1, self.objective_polish_top) * 3:]
+
+        if objective_reserve > 0:
+            params.sat_recorder = _record_sat
 
         def _should_stop():
             """Walk phase: stops early enough to leave the polish reserve."""
@@ -1482,12 +1932,23 @@ class RoadsFirstSearch:
                     lo = mid
 
             best = min((r[1] for r in results.values() if r[1] is not None), default=None)
+            objective_info = None
+            if best is not None and objective_reserve > 0:
+                objective_info = self._apply_objective_polish(
+                    sat_cands, best, on_improvement, polish_deadline, should_stop)
+                if objective_info["after"] is not None and objective_info["after"] < best:
+                    best = objective_info["after"]
             polish_info = None
             if best is not None and self.seed_polish > 0:
                 polish_info = self._apply_seed_polish(best_holder, on_improvement,
                                                       should_stop=_stop_polish)
                 if polish_info is not None and polish_info["improved"]:
                     best = polish_info["after"]
+            exact_info = None
+            if self.exact_finish and latest["layout"] is not None:
+                exact_info = self._apply_exact_finish(latest, on_improvement)
+                if exact_info["after"] < best:
+                    best = exact_info["after"]
             # UNDERSAMPLED counts as unknown: the level was not finished, so it
             # is no more a refutation than an undecided probe is.
             unknowns = sum(1 for r in results.values()
@@ -1497,6 +1958,8 @@ class RoadsFirstSearch:
                     "best_achieved": best, "inconclusive_levels": unknowns,
                     "walk_complete": not truncated, "deadline_hit": _should_stop(),
                     "seed_polish": polish_info,
+                    "objective_polish": objective_info,
+                    "exact_finish": exact_info,
                     "filler_failures": summarise_fillers(filler_stats),
                     "level_coverage": level_coverage,
                     "undersampled_levels": sum(
