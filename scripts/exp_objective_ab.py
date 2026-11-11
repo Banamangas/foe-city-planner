@@ -24,6 +24,7 @@ import traceback
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from foeopt.bounds import pick_k_start
 from foeopt.exact_router import exact_route
+from foeopt.legality import check
 from foeopt.loader import load_layout
 from foeopt.roads_first import RoadsFirstSearch
 from foeopt.router import route
@@ -38,6 +39,7 @@ CITIES = {
 }
 PROBE_LIMIT = {"darkzig": 30.0, "FR16": 30.0, "FR17": 90.0, "FR24": 90.0, "user": 90.0}
 _CACHE: dict = {}
+MILITARY = "connect"
 
 # arm -> RoadsFirstSearch kwargs; "PL" is replaced by the city's probe_limit.
 ARMS = {
@@ -68,7 +70,9 @@ def verify(src, lay) -> dict:
     r = route(lay)
     er = exact_route(lay, time_limit=60)
     chk = type(lay)(lay.region, lay.buildings, lay.townhall, r)
-    return {"route": len(r), "exact": er.count, "exact_optimal": er.optimal,
+    rep = check(lay, src, military=MILITARY)  # the delivered network, full rules
+    return {"legality": rep.status, "violations": rep.violations,
+            "roads_delivered": len(lay.roads), "route": len(r), "exact": er.count, "exact_optimal": er.optimal,
             "valid": is_valid(chk),
             "rotated": len(rotated_buildings(lay, canonical_dims(src))),
             "inventory_ok": ids == ids_src,
@@ -105,12 +109,18 @@ def run_cell(arm, name, box, rep, outdir):
                    levels={str(k): v[0] for k, v in res.get("results", {}).items()},
                    objective_polish=res.get("objective_polish"),
                    exact_finish=res.get("exact_finish"))
+        rec["search_s"] = round(time.monotonic() - t0, 1)  # before verification work
         if best["layout"] is not None:
             rec["verify"] = verify(lay, best["layout"])
+            v = rec["verify"]
+            # a result that fails the gate or disagrees with its count is NOT a result
+            rec["accepted"] = (v["legality"] == "valid"
+                               and v["roads_delivered"] == best["achieved"])
             fn = outdir / f"{name}-{arm}-r{rep}-a{best['achieved']}.json"
             fn.write_text(json.dumps({
                 "city": name, "arm": arm, "achieved": best["achieved"], "k": best["k"],
-                "roads": sorted(route(best["layout"])),
+                # the ACCEPTED network (with levels), not a fresh reroute
+                "roads": sorted([x, y, lvl] for (x, y), lvl in best["layout"].roads.items()),
                 "buildings": {b.entity_id: [b.footprint.x, b.footprint.y,
                                             b.footprint.width, b.footprint.length]
                               for b in best["layout"].buildings}}))
