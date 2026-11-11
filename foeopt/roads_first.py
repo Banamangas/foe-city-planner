@@ -1092,6 +1092,8 @@ _WORKER_STUB_PRIORITY: bool = False
 _WORKER_SOLVER_OVERRIDES: dict[str, object] | None = None
 _WORKER_EXACT_REPAIR: float = 0.0
 _WORKER_OBJECTIVE_LIMIT: float = 0.0
+# Below this many banded skeletons a level is topped up with unbanded ones.
+BAND_MIN_PATTERNS = 10
 _WORKER_MODEL: str = "item"
 # Seconds kept back for validate() after the objective solve, and the smallest
 # objective budget worth starting (hinted, it improves within seconds).
@@ -1325,6 +1327,18 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
             gen_kwargs["modes"] = params.comb_modes
         pats = gen_fn(region, th.width, th.length, k, rng, params.patterns,
                       **gen_kwargs)
+        if (family == "nonuniform" and gen_kwargs.get("quality_index_band") is not None
+                and len(pats) < BAND_MIN_PATTERNS):
+            # The band was calibrated on darkzig/FR16 and can be EMPTY elsewhere:
+            # on FR24 it yields 0 skeletons at every k >= 220, so every level
+            # was empty and the run ended FAMILY_TOO_WEAK in 4 s without one
+            # probe. Top up with unbanded skeletons. The threshold is below
+            # every measured city's banded count (FR17: 21-51 per level), so
+            # their behaviour is unchanged.
+            seen_roads = {p.roads for p in pats}
+            extra = gen_fn(region, th.width, th.length, k, rng, params.patterns,
+                           **{**gen_kwargs, "quality_index_band": None})
+            pats = pats + [p for p in extra if p.roads not in seen_roads]
         surviving = []
         for pat in pats:
             reason = prefilter(pat, region, consumers, fillers)

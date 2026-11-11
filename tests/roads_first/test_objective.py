@@ -309,3 +309,29 @@ def test_exact_finish_runs_the_real_router_on_a_toy():
     info = search._apply_exact_finish({"layout": lay, "k": 5, "achieved": len(lay.roads)},
                                       lambda *a: None)
     assert info["after"] <= len(lay.roads) and info["optimal"]
+
+
+def test_empty_quality_band_is_topped_up_with_unbanded_patterns(monkeypatch):
+    """FR24: the band yields zero skeletons, which used to end the run in seconds
+    with no probe at all. A level must still get patterns to probe."""
+    calls = []
+
+    def fake_gen(region, tw, tl, k, rng, n, th_mode="coarse", quality_index_band=None, **kw):
+        calls.append(quality_index_band)
+        if quality_index_band is not None:
+            return []
+        return [rf.Pattern(th=Footprint(0, 1, 2, 2), roads=frozenset({(2, 1)}), params={"k": k})]
+
+    monkeypatch.setattr(rf, "generate_nonuniform_patterns", fake_gen)
+    seen = []
+    monkeypatch.setattr(rf, "prefilter", lambda p, r, c, f=None: seen.append(p) or "area")
+    from types import SimpleNamespace
+    import time
+    lay, _ = _corridor_layout(1)
+    params = SimpleNamespace(patterns=5, probe_limit=1.0, probe_workers=1,
+                             deadline=time.monotonic() + 5, th_anchors="coarse",
+                             pattern_family="nonuniform", quality_index_band=(3, 4))
+    rf._probe_levels_batch(lay, set(lay.region.cells), lay.road_needing(), [3],
+                           random.Random(0), params, lambda r: None)
+    assert calls == [(3, 4), None]
+    assert len(seen) == 1
