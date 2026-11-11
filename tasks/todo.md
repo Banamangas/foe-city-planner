@@ -878,18 +878,26 @@ Rules (also in memory `foe-game-rules-roads-chains`):
   needs a road. The serpent statue chain has its link *behind* (y-2).
 
 Every darkzig record breaks both rules. FR16/17/24 and the user city have no level-2 consumers
-and no detectable chains (FR exports have no catalog).
+and no chains (the FR exports DO carry the catalog, so this is real, not undetected).
 
 Plan (check in before building):
-- [ ] **Validator first.** `is_valid` / verify fail on (a) a level-2 consumer without a
+- [x] **Validator first.** `is_valid` / verify fail on (a) a level-2 consumer without a
       2x2-tile two-lane path to the TH, and (b) a chain not at its linkPositions. Re-score
       every record and mark the darkzig ones as non-compliant.
-- [ ] **Chains as composite blocks.** In the loader, merge each linked chain into one rigid
+- [x] **Chains as composite blocks.** In the loader, merge each linked chain into one rigid
       composite footprint: road border only on the parts that need a road, and parts
       unpacked on output. The position model treats a composite as one more size class
       with a custom border. No new solver machinery is needed.
-- [ ] **Two-lane path.** Pick the military building's spot and a 2-wide road corridor to
+- [x] **Two-lane path.** Pick the military building's spot and a 2-wide road corridor to
       the TH as part of the skeleton: one skeleton branch is drawn 2 wide, and the level-2
       building's anchors are restricted to that branch. The router emits the 2x2 tiles.
       Option `military: connect | unconnected`. With unconnected, it is treated as a filler.
-- [ ] A/B darkzig with the rules on, then publish the new compliant baseline record.
+- [x] A/B darkzig with the rules on, then publish the new compliant baseline record.
+
+### Review (2026-11-11)
+darkzig, BEST_PRESET verbatim, 600 s, 3 sequential reps, all rules on: **92 / 90 / 92**, every
+result `valid` under `foeopt/legality.check` with the count matching the saved network. Record:
+`docs/records/darkzig-90-roads-legal-rules.json` (tile at (35,44) touching the TH, chain intact).
+This is the first legal darkzig baseline. The legacy 87 broke both rules, so the two are not
+comparable. Also done: the review's shared-incumbent/deadline fix, a verifier that checks the
+saved network, the webapp legality verdict, and roads serialized with their levels.
