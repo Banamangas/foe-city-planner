@@ -2816,3 +2816,14 @@ proof (agreement test over random small instances).
   Two open issues: the walk should keep descending/probing instead of stopping, and at 3
   cells of slack fillers must be inside the CP-SAT model (the position encoding makes that
   cheap to add: fillers are just more size classes with no road requirement).
+
+## Depth-matched skeleton gaps: REFUTED (2026-11-11)
+
+The review hypothesised that `NONUNIFORM_GAPS=(10,18)` wastes strips on depth-3-dominated
+cities (ideal pitch 7). It was untestable under the item model (everything UNKNOWN); the
+position model made it a one-minute test. 20 skeletons per cell, position probes at 10 s:
+FR24 k=210/230/250 -> 0 legal layouts for 10-18, 6-8 and 7-10 alike; FR17 k=105/113/121 ->
+the only legal layout came from the DEFAULT 10-18 (111). Not a lever at this sample size.
+(Run overlapped one A/B cell at nice; affects that cell's timing, not these verdicts, which
+are mostly proven UNSAT.) **The reasoning was plausible and wrong; the fast model is what
+made checking it cheap enough to do before building anything.**
