@@ -57,6 +57,12 @@ ARMS = {
     # 2026-11-11; this arm is BEST_PRESET verbatim (probe_limit 30 everywhere)
     "preset": {"probe_limit": 30.0, "objective_limit": 30.0, "objective_polish": 0.3,
                "exact_finish": True, "probe_model": "position"},
+    # Phase B follow-up: shorter probe limits. objective_limit and exact_repair
+    # are clamped to probe_limit in the worker, so they shrink with it.
+    "pl10": {"probe_limit": 10.0, "objective_limit": 10.0, "objective_polish": 0.3,
+             "exact_finish": True, "probe_model": "position"},
+    "pl5": {"probe_limit": 5.0, "objective_limit": 5.0, "objective_polish": 0.3,
+            "exact_finish": True, "probe_model": "position"},
 }
 
 
