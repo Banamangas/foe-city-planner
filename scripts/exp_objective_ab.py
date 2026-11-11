@@ -142,6 +142,8 @@ def run_cell(arm, name, box, rep, outdir):
     try:
         res = RoadsFirstSearch(lay, **kwargs).run(on_improvement=on_imp)
         rec["profile"] = res.get("profile")
+        rec["deepen"] = res.get("deepen")
+        rec["results"] = {k: v[0] for k, v in (res.get("results") or {}).items()}
         rec.update(ok=True, best=res.get("best_achieved"), verdict=res.get("verdict"),
                    best_k=best["k"], best_t=best["t"],
                    levels={str(k): v[0] for k, v in res.get("results", {}).items()},
