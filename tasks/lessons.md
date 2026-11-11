@@ -2778,3 +2778,41 @@ class as 2026-07-31: *every phase inside a box must take the remaining budget as
    a 4-7 road improvement.
 4. `route()` leaves a road on the table in 9/12 A/B layouts (exact_route one lower). Cheap to
    collect: `exact_finish`.
+
+## The item model's symmetry was the "big/3x3-heavy city" wall: position indexing decides in 0.2 s what timed out at 30 s (2026-11-11)
+
+**Diagnosis (from the review).** `probe()` gave every consumer its own (x, y) pair +
+NoOverlap2D. FR17 has 52 identical 3x3s among 77 consumers, FR24 81 of 146: N identical
+items = N! equivalent assignments, which wrecks both proving and finding. The 2026-07-16
+symmetry-breaking attempt (reified lex ordering) was a weak patch on the same encoding, so
+its negative result did not transfer.
+
+**Fix.** Index by POSITION: one boolean per (size class, anchor), a count per class, at most
+one coverer per cell. No identity, no permutation symmetry. Same constraints, so UNSAT is a
+proof (agreement test over random small instances).
+
+**Measured.**
+- FR17 k=121, 11 band skeletons, 30 s x 12 threads: item **11/11 UNKNOWN**; position decided
+  **all 11 in 0.1-0.3 s** (6 UNSAT, 5 SAT, legal layouts at 113-115).
+- End to end, BEST_PRESET otherwise identical, 600 s, paired:
+  darkzig 90/93 -> **88/87**, FR16 74/73 -> **68/68**, FR17 106/108 -> **105/105**; every
+  position run finished early (0.67-0.84x) because levels get DECIDED. Adopted.
+
+**Lessons.**
+1. **"Bigger / more optimized cities fail" was partly an encoding artefact,** not geometry:
+   the same skeletons are easy under a symmetry-free model. Before blaming the instance,
+   check whether the formulation has a symmetry the instance amplifies.
+2. **A closed lever's negative result transfers only to the same mechanism.** "Symmetry
+   breaking made it worse" was about reified lex constraints, not about symmetry.
+
+## Two more city-specific dead ends found by running the preset on unmeasured cities (2026-11-11)
+
+- **FR24: the quality band is empty at k >= 220** (0 skeletons per level), so the run ended
+  FAMILY_TOO_WEAK in 4 s without a single probe. A filter calibrated on two cities can be the
+  whole failure on a third. Fixed: top up with unbanded skeletons below 10 per level
+  (below every measured city's count, so measured behaviour is unchanged).
+- **The user's 97%-full city:** auto k_start = 145 = k_max (all the slack), so the walk had
+  nowhere to climb, the one level ended UNDERSAMPLED and the run gave up at 0.3x of the box.
+  Two open issues: the walk should keep descending/probing instead of stopping, and at 3
+  cells of slack fillers must be inside the CP-SAT model (the position encoding makes that
+  cheap to add: fillers are just more size classes with no road requirement).
