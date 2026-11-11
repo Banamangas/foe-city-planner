@@ -59,6 +59,20 @@ class Building:
     # Catalog chain linkPositions: rectangles (dx0, dy0, dx1, dy1), inclusive,
     # relative to this building's top-left, where the next chain member sits.
     link_positions: tuple[tuple[int, int, int, int], ...] = ()
+    # Composite (a linked chain placed as one rigid block, see foeopt.chains):
+    # `members` are (building, dx, dy) offsets from the block's top-left, and
+    # `contact` the block-relative cells where a road counts as touching it
+    # (only the road-needing member's edge). None/() for ordinary buildings.
+    members: tuple = ()
+    contact: frozenset[tuple[int, int]] | None = None
+
+
+def contact_cells(b: "Building", x: int, y: int) -> frozenset[tuple[int, int]]:
+    """Cells where a road touches `b` if `b` is anchored at (x, y): its whole
+    border, or only the composite's declared contact edge."""
+    if b.contact is None:
+        return _footprint_border(x, y, b.footprint.width, b.footprint.length)
+    return frozenset((x + dx, y + dy) for dx, dy in b.contact)
 
 
 @dataclass(frozen=True)

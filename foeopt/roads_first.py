@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
-from foeopt.model import Building, Footprint, Layout, Region
+from foeopt.model import Building, Footprint, Layout, Region, contact_cells
 from foeopt.bounds import pick_k_start
 from foeopt.corpus import CorpusWriter
 from foeopt.exact_packing import apply_placements, exact_pack
@@ -496,6 +496,7 @@ def prefilter(pattern: Pattern, region: set[Cell],
     return None
 
 
+from foeopt.chains import compose, expand, expand_buildings
 from foeopt.packing import Grid, first_fit
 from foeopt.router import RouteError, route
 from foeopt.validate import canonical_dims, is_valid, rotated_buildings
@@ -530,7 +531,7 @@ def _anchor_candidates(b: Building, region: set[Cell], blocked: set[Cell],
             cells = fp.cells()
             if not (cells <= region) or (cells & blocked):
                 continue
-            if any(c in roads for c in fp.border_cells()):
+            if any(c in roads for c in contact_cells(b, x, y)):
                 out.append((x, y))
     return out
 
@@ -541,9 +542,9 @@ def _add_symmetry_breaking(m, cand, xs, ys) -> None:
     explores every permutation of them as distinct symmetric solutions. Chain
     a lexicographic (x, y) <= ordering across each size-group to collapse
     that permutation symmetry to one representative assignment."""
-    groups: dict[tuple[int, int], list[int]] = {}
+    groups: dict[tuple, list[int]] = {}
     for i, (b, _) in enumerate(cand):
-        groups.setdefault((b.footprint.width, b.footprint.length), []).append(i)
+        groups.setdefault(_class_key(b), []).append(i)
     for members in groups.values():
         for a, b_idx in zip(members, members[1:]):
             lt = m.NewBoolVar(f"symlt{a}_{b_idx}")
@@ -598,7 +599,7 @@ def _stub_priority_hints(pattern: Pattern,
                 continue
             w, l = b.footprint.width, b.footprint.length
             for (x, y) in opts:
-                if c in Footprint(x, y, w, l).border_cells():
+                if c in contact_cells(b, x, y):
                     touching.append((w * l, i, (x, y)))
                     break
         touching.sort(key=lambda t: t[0], reverse=True)
@@ -703,10 +704,17 @@ def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
 PROBE_MODELS = ("item", "position")
 
 
-def _size_classes(consumers: list[Building]) -> dict[tuple[int, int], list[Building]]:
-    out: dict[tuple[int, int], list[Building]] = {}
+def _class_key(b: Building) -> tuple:
+    """Buildings are interchangeable in the placement model only if EVERY
+    placement-relevant property matches: size, road-contact edge (composite
+    chains) and road level. Size alone is not enough (review 2026-11-11)."""
+    return (b.footprint.width, b.footprint.length, b.contact, b.road_level)
+
+
+def _size_classes(consumers: list[Building]) -> dict[tuple, list[Building]]:
+    out: dict[tuple, list[Building]] = {}
     for b in consumers:
-        out.setdefault((b.footprint.width, b.footprint.length), []).append(b)
+        out.setdefault(_class_key(b), []).append(b)
     return out
 
 
@@ -729,13 +737,14 @@ def _position_model(pattern: Pattern, region: set[Cell], consumers: list[Buildin
     classes = _size_classes(consumers)
     cover: dict[Cell, list] = {}
     lits: dict[tuple[int, int], list] = {}
-    for (w, l), members in classes.items():
+    for key, members in classes.items():
+        w, l = key[0], key[1]
         opts = _anchor_candidates(members[0], region, blocked, pattern.roads)
         row = []
         for (x, y) in opts:
             touch = None
             if needed is not None:
-                touch = [needed[c] for c in Footprint(x, y, w, l).border_cells()
+                touch = [needed[c] for c in contact_cells(members[0], x, y)
                          if c in needed]
                 if not touch:
                     continue
@@ -748,7 +757,7 @@ def _position_model(pattern: Pattern, region: set[Cell], consumers: list[Buildin
         if len(row) < len(members):
             return None
         m.Add(sum(v for _, v in row) == len(members))
-        lits[(w, l)] = row
+        lits[key] = row
     for vs in cover.values():
         if len(vs) > 1:
             m.AddAtMostOne(vs)
@@ -896,8 +905,7 @@ def minimize_needed(pattern: Pattern, region: set[Cell], consumers: list[Buildin
         hint_xy = tuple(positions[b.entity_id][:2])
         ol = []
         for (x, y) in opts:
-            touch = [needed[c] for c in Footprint(x, y, w, l).border_cells()
-                     if c in needed]
+            touch = [needed[c] for c in contact_cells(b, x, y) if c in needed]
             if not touch:
                 continue  # borders only TH-unreachable skeleton cells
             o = m.NewBoolVar(f"o{i}_{x}_{y}")
@@ -947,7 +955,8 @@ def _minimize_needed_position(m, needed, pattern, region, consumers, positions,
         return None
     m, lits, classes = built
     used = {(x, y, w, l) for (x, y, w, l) in positions.values()}
-    for (w, l), row in lits.items():
+    for key, row in lits.items():
+        w, l = key[0], key[1]
         for (x, y), v in row:
             m.AddHint(v, (x, y, w, l) in used)
     m.Minimize(sum(needed.values()))
@@ -1041,6 +1050,9 @@ def validate(layout_src: Layout, pattern: Pattern, positions: dict,
     for b in consumers:
         x, y, w, l = positions[b.entity_id]
         placed.append(replace(b, footprint=Footprint(x, y, w, l)))
+    # Composite chains become their real members before routing: the router
+    # and validators only ever see real buildings (foeopt/chains.py).
+    placed = expand_buildings(placed)
     th = replace(layout_src.townhall, footprint=pattern.th)
     cand = Layout(layout_src.region, [th, *placed], th, {})
     try:
@@ -1077,7 +1089,8 @@ def validate(layout_src: Layout, pattern: Pattern, positions: dict,
         diag["repair_ran"] = bool(exact_repair > 0)
     if unplaced:
         return ("SAT_FILLER_FAIL", None, len(roads))
-    bad = rotated_buildings(cand, canonical_dims(layout_src))
+    cand.buildings = expand_buildings(cand.buildings)
+    bad = rotated_buildings(cand, canonical_dims(expand(layout_src)))
     if bad:
         return ("SAT_ROTATED", None, len(roads))
     return ("OK", cand, len(roads))
@@ -1493,8 +1506,13 @@ class RoadsFirstSearch:
                  objective_polish: float = 0.0,
                  objective_polish_top: int = 3,
                  exact_finish: bool = False,
-                 probe_model: str = "item"):
-        self.layout = layout
+                 probe_model: str = "item",
+                 keep_chains: bool = True):
+        # Linked chains are placed as rigid composites so their links survive
+        # (user-confirmed rule, 2026-11-11); every emitted layout is expanded
+        # back to real buildings inside validate().
+        self.source_layout = layout
+        self.layout = compose(layout) if keep_chains else layout
         if probe_model not in PROBE_MODELS:
             raise ValueError(f"probe_model must be one of {PROBE_MODELS}")
         # "position": symmetry-free CP-SAT encoding (see _position_model). The
