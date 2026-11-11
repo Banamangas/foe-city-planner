@@ -28,7 +28,11 @@ class ExactResult:
     optimal: bool                  # status == OPTIMAL (roads is the proven minimum)
 
 
-def exact_route(layout: Layout, *, time_limit: float = 300.0, seed: int = 0) -> ExactResult:
+def exact_route(layout: Layout, *, time_limit: float = 300.0, seed: int = 0,
+                fixed: dict[Cell, int] | None = None) -> ExactResult:
+    """`fixed` road cells (two-lane tiles) are forced into the network with
+    their level; a road_level-2 building is then covered only by a fixed
+    level-2 cell, never by a post-assigned 1x1 "two-lane" cell."""
     from ortools.sat.python import cp_model
 
     t0 = time.monotonic()
@@ -46,7 +50,14 @@ def exact_route(layout: Layout, *, time_limit: float = 300.0, seed: int = 0) -> 
     if not th_roots:
         return ExactResult("NO_ROOT", None, None, round(time.monotonic() - t0, 2), False)
 
+    fixed = dict(fixed or {})
     consumers = layout.road_needing()
+    if fixed:
+        lane_ok = all(any(fixed.get(c, 0) >= b.road_level for c in b.footprint.border_cells())
+                      for b in consumers if b.road_level >= 2)
+        if not lane_ok or not set(fixed) <= free:
+            return ExactResult("UNCOVERABLE", None, None, round(time.monotonic() - t0, 2), False)
+        consumers = [b for b in consumers if b.road_level < 2]
     cover: list[list[Cell]] = []
     for b in consumers:
         opts = [c for c in b.footprint.border_cells() if c in free]
@@ -61,6 +72,8 @@ def exact_route(layout: Layout, *, time_limit: float = 300.0, seed: int = 0) -> 
 
     for opts in cover:
         m.AddBoolOr([r[c] for c in opts])          # each consumer covered by >=1 road
+    for c in fixed:
+        m.Add(r[c] == 1)                           # two-lane tiles stay
 
     # single-commodity flow: every selected cell must receive 1 unit routed from a
     # selected Townhall-root through selected cells -> one component reaching the TH.
@@ -96,6 +109,7 @@ def exact_route(layout: Layout, *, time_limit: float = 300.0, seed: int = 0) -> 
         return ExactResult(name, None, None, wall, False)
 
     roads: dict[Cell, int] = {c: 1 for c in free_list if solver.Value(r[c]) == 1}
+    roads.update(fixed)
     for b, opts in zip(consumers, cover):        # post-assign levels for validity
         for c in opts:
             if c in roads:

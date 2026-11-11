@@ -335,3 +335,57 @@ def test_empty_quality_band_is_topped_up_with_unbanded_patterns(monkeypatch):
                            random.Random(0), params, lambda r: None)
     assert calls == [(3, 4), None]
     assert len(seen) == 1
+
+
+def test_finishing_phases_share_one_incumbent(monkeypatch):
+    """Review 2026-11-11: walk 100 -> objective polish 90 -> seed polish 95 must
+    publish 100, 90 only and return 90 (seed polish used to compare against the
+    stale walk best and publish 95 after 90)."""
+    import foeopt.seed_search as ss
+    lay, pat = _corridor_layout(1)
+
+    def fake_level(layout, region, consumers, k, rng, params, log, pool=None, **kw):
+        if k == 5:
+            if getattr(params, "best_recorder", None):
+                params.best_recorder(k, 100, pat, lay)
+            if getattr(params, "sat_recorder", None):
+                params.sat_recorder(k, 100, pat, {})
+            kw["on_improvement"](lay, k, 100)
+            return ("FEASIBLE", 100)
+        return ("INFEASIBLE", None)
+
+    def fake_obj(self, cands, best, on_imp, end, should_stop=None):
+        on_imp(lay, 5, 90)
+        return {"before": best, "after": 90}
+
+    monkeypatch.setattr(rf, "_probe_level", fake_level)
+    monkeypatch.setattr(rf.RoadsFirstSearch, "_apply_objective_polish", fake_obj)
+    monkeypatch.setattr(ss, "seed_minimize_roads",
+                        lambda *a, **k: ss.SeedMinResult(95, lay, 3, 1, 1))
+    for exact in (False, True):
+        if exact:
+            monkeypatch.setattr("foeopt.exact_router.exact_route",
+                                lambda *a, **k: (_ for _ in ()).throw(AssertionError))
+            monkeypatch.setattr(rf.RoadsFirstSearch, "_apply_exact_finish",
+                                lambda self, latest, cb, d=None, s=None:
+                                {"before": latest["achieved"], "after": latest["achieved"]})
+        seen = []
+        res = rf.RoadsFirstSearch(lay, time_box=100, workers=1, k_start=5,
+                                  objective_polish=0.3, seed_polish=1, probe_limit=1,
+                                  exact_finish=exact).run(
+            on_improvement=lambda l, k, a: seen.append(a))
+        assert seen == [100, 90], (exact, seen)
+        assert res["best_achieved"] == 90
+        assert not res["seed_polish"]["improved"]
+
+
+def test_exact_finish_is_not_started_when_stopped_or_out_of_time(monkeypatch):
+    import time
+    lay, _ = _corridor_layout(1)
+    monkeypatch.setattr("foeopt.exact_router.exact_route",
+                        lambda *a, **k: pytest.fail("exact_route must not start"))
+    search = rf.RoadsFirstSearch(lay, time_box=5, workers=1, exact_finish=True)
+    latest = {"layout": lay, "k": 5, "achieved": 3}
+    assert search._apply_exact_finish(latest, None, time.monotonic() + 0.2)["status"] == "SKIPPED"
+    assert search._apply_exact_finish(latest, None, time.monotonic() + 60,
+                                      lambda: True)["status"] == "SKIPPED"

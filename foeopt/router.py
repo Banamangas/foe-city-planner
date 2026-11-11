@@ -130,7 +130,8 @@ def _articulation_points(
 
 
 def route(
-    layout: Layout, *, free: set[tuple[int, int]] | None = None
+    layout: Layout, *, free: set[tuple[int, int]] | None = None,
+    fixed: dict[tuple[int, int], int] | None = None,
 ) -> dict[tuple[int, int], int]:
     """Greedy SPH Steiner road tree for `layout`, pruned to the minimal set.
 
@@ -138,7 +139,13 @@ def route(
     MUST equal free_cells(layout); callers that mutate one building at a time can
     maintain it by an O(footprint) delta instead of paying the O(all-buildings)
     rebuild here. route() treats it read-only, so the same output is produced as
-    when free is None (asserted by the incremental-scoring oracle in tests)."""
+    when free is None (asserted by the incremental-scoring oracle in tests).
+
+    `fixed` are road cells that must be kept with their level (the two-lane 2x2
+    tiles chosen by the placement). They seed the tree and are never pruned. When
+    `fixed` is given, a road_level-2 building must touch a fixed level-2 cell:
+    the router never fakes two-lane access with a 1x1 level-2 cell. Without
+    `fixed`, the legacy behaviour applies, and the legality gate rejects it."""
     if layout.townhall is None:
         raise RouteError("layout has no townhall")
 
@@ -151,6 +158,9 @@ def route(
     # set of free cells adjacent to the Townhall footprint").
     tree: set[tuple[int, int]] = set(th_roots)
     levels: dict[tuple[int, int], int] = {cell: 1 for cell in th_roots}
+    if fixed:
+        tree |= set(fixed)
+        levels.update(fixed)
 
     thx, thy = layout.townhall.footprint.x, layout.townhall.footprint.y
     consumers = sorted(
@@ -161,6 +171,11 @@ def route(
     )
 
     for b in consumers:
+        if fixed is not None and b.road_level >= 2:
+            lane = [c for c in b.footprint.border_cells() if fixed.get(c, 0) >= b.road_level]
+            if not lane:
+                raise RouteError(f"no two-lane tile touches {b.name} ({b.entity_id})")
+            continue
         targets = b.footprint.border_cells() & candidates
         if not targets:
             raise RouteError(f"no free border cell for {b.name} ({b.entity_id})")
@@ -179,12 +194,13 @@ def route(
         levels[connector] = max(levels.get(connector, 1), b.road_level)
 
     roads = dict(levels)
-    return _prune(layout, roads)
+    return _prune(layout, roads, keep=set(fixed or ()))
 
 
 def _prune(
     layout: Layout,
     roads: dict[tuple[int, int], int],
+    keep: set[tuple[int, int]] = frozenset(),
 ) -> dict[tuple[int, int], int]:
     """Remove redundant road cells, keeping every consumer connected & covered.
 
@@ -220,7 +236,7 @@ def _prune(
         art = _articulation_points(roads, th_border)
         conn = connected(roads)
         for cell in sorted(roads, reverse=True):
-            if cell in art:
+            if cell in art or cell in keep:
                 continue  # removing it would disconnect another road from the Townhall
             # Non-articulation: every other road stays connected. The cell itself
             # disappears, so each consumer bordering it must keep another covered road.
