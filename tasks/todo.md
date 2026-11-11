@@ -932,12 +932,18 @@ measurements below get run.
 **Plan (one change per commit, each A/B'd before it becomes a default)**
 
 Phase A: correctness and app (small, low risk)
-- [ ] App P1s: city/job identity (city A cannot update or save into B), job admission
+- [x] App P1s: city/job identity (city A cannot update or save into B), job admission
       control, final report and errors reach the UI, split upload keeps helper_data,
       the best-preset button resets to defaults before applying, OverflowError in
       numeric parsing.
-- [ ] Walk: k_start == k_max with an UNDERSAMPLED level keeps probing (bounded retries
+- [x] Walk: k_start == k_max with an UNDERSAMPLED level keeps probing (bounded retries
       and descent) instead of FAMILY_TOO_WEAK at 0.3x the box. Fake-level test.
+
+Phase A result: done on `fix/phase-a`. Live server check: a second submit gets 409, an
+unknown stream 404, every improvement carries its legality verdict and two-lane cells,
+and the final envelope is `done`/98/valid. User city: wall 90 s -> 241 s of a 300 s box,
+still no layout (at k=145, 65/200 skeletons probed, none placed the road-needing
+buildings). That moves Phase D ahead of C for this city.
 
 Phase B: measure (T0)
 - [ ] Per-phase timing: generation, anchors, model build, solve, route, fillers, repair,
