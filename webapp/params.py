@@ -70,12 +70,22 @@ OPTION_SPECS: list[dict] = [
     },
     {
         "name": "probe_model", "cli": "--probe-model", "type": "choice",
-        "default": "item", "choices": ["item", "position"], "advanced": True,
+        "default": "position", "choices": ["item", "position"], "advanced": True,
         "group": "search", "label": "CP-SAT model",
-        "help": "item: one variable pair per building (historical). position: "
-                "one switch per (building size, spot), so identical buildings "
-                "are not told apart -- removes the symmetry that stalls the "
-                "solver on cities with many same-size buildings.",
+        "help": "position (default): one switch per (building size, spot), so "
+                "identical buildings are not told apart -- removes the symmetry "
+                "that stalls the solver on cities with many same-size buildings, "
+                "and the only model that places two-lane road tiles. item: one "
+                "variable pair per building (historical).",
+    },
+    {
+        "name": "military", "cli": "--military", "type": "choice",
+        "default": "connect", "choices": ["connect", "unconnected"], "advanced": True,
+        "group": "search", "label": "Two-lane buildings",
+        "help": "connect (default): a building that needs a two-lane road gets a "
+                "2x2 two-lane tile touching the Town Hall, as the game requires. "
+                "unconnected: leave it off the road (it is packed like a "
+                "decoration) -- your explicit choice, shown in the result.",
     },
     {
         "name": "exact_finish", "cli": "--exact-finish", "type": "bool",

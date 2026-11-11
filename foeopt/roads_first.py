@@ -497,6 +497,7 @@ def prefilter(pattern: Pattern, region: set[Cell],
 
 
 from foeopt.chains import compose, expand, expand_buildings
+from foeopt.legality import MILITARY_POLICIES
 from foeopt.packing import Grid, first_fit
 from foeopt.router import RouteError, route
 from foeopt.validate import canonical_dims, is_valid, rotated_buildings
@@ -532,6 +533,23 @@ def _anchor_candidates(b: Building, region: set[Cell], blocked: set[Cell],
             if not (cells <= region) or (cells & blocked):
                 continue
             if any(c in roads for c in contact_cells(b, x, y)):
+                out.append((x, y))
+    return out
+
+
+def _lane_anchor_candidates(b: Building, region: set[Cell], blocked: set[Cell],
+                            lane_cells: set[Cell]) -> list[tuple[int, int]]:
+    """Anchors for a two-lane building: its contact edge must reach a candidate
+    two-lane tile cell (the tile, not the skeleton, connects it to the TH)."""
+    out = []
+    w, l = b.footprint.width, b.footprint.length
+    x0, y0, x1, y1 = _bbox(region)
+    for y in range(y0, y1 - l + 2):
+        for x in range(x0, x1 - w + 2):
+            cells = Footprint(x, y, w, l).cells()
+            if not (cells <= region) or (cells & blocked):
+                continue
+            if contact_cells(b, x, y) & lane_cells:
                 out.append((x, y))
     return out
 
@@ -718,6 +736,34 @@ def _size_classes(consumers: list[Building]) -> dict[tuple, list[Building]]:
     return out
 
 
+# Two-lane roads (user-confirmed 2026-11-11): 2x2 tiles, and a road_level-2
+# building needs an all-two-lane path to the TH. Modelled here as the layout the
+# player uses: ONE tile touching the TH, with the building touching that tile.
+# Longer two-lane paths are not modelled (no such skeleton -> UNSAT).
+LANE_KEY = (2, 2, "two-lane tile", 2)   # lits key; [0], [1] are the tile size
+LANE_PREFIX = "lane2:"                  # positions key prefix for chosen tiles
+
+
+def _lane_tiles(pattern: Pattern, region: set[Cell]) -> list[tuple[int, int]]:
+    """Top-left anchors of 2x2 tiles inside the region, off the TH, with at
+    least one cell on the TH border. Tiles may overlap skeleton road cells
+    (those just become two-lane)."""
+    th = pattern.th
+    th_cells, th_border = th.cells(), th.border_cells()
+    out = []
+    for tx in range(th.x - 2, th.x + th.width + 1):
+        for ty in range(th.y - 2, th.y + th.length + 1):
+            cells = Footprint(tx, ty, 2, 2).cells()
+            if cells <= region and not (cells & th_cells) and (cells & th_border):
+                out.append((tx, ty))
+    return out
+
+
+def lane_tiles_of(positions: dict) -> list[tuple[int, int]]:
+    return [tuple(v[:2]) for k, v in positions.items()
+            if isinstance(k, str) and k.startswith(LANE_PREFIX)]
+
+
 def _position_model(pattern: Pattern, region: set[Cell], consumers: list[Building],
                     needed: dict | None = None, m=None):
     """Position-indexed placement: one boolean per (size class, anchor), a count
@@ -736,13 +782,44 @@ def _position_model(pattern: Pattern, region: set[Cell], consumers: list[Buildin
     blocked = set(pattern.roads) | set(pattern.th.cells())
     classes = _size_classes(consumers)
     cover: dict[Cell, list] = {}
-    lits: dict[tuple[int, int], list] = {}
+    lits: dict[tuple, list] = {}
+    tiles: list = []                       # [((tx, ty), literal, tile cells)]
+    if any(key[3] >= 2 for key in classes):
+        for (tx, ty) in _lane_tiles(pattern, region):
+            cells = Footprint(tx, ty, 2, 2).cells()
+            u = m.NewBoolVar(f"lane_{tx}_{ty}")
+            tiles.append(((tx, ty), u, cells))
+            for c in cells - blocked:      # tile cells off the skeleton occupy space
+                cover.setdefault(c, []).append(u)
+        if not tiles:
+            return None
+        lits[LANE_KEY] = [(xy, u) for xy, u, _ in tiles]
+    tile_users: dict = {}
     for key, members in classes.items():
         w, l = key[0], key[1]
-        opts = _anchor_candidates(members[0], region, blocked, pattern.roads)
+        lane = key[3] >= 2
+        if lane:
+            lane_cells = set().union(*(cells for _, _, cells in tiles))
+            opts = _lane_anchor_candidates(members[0], region, blocked, lane_cells)
+        else:
+            opts = _anchor_candidates(members[0], region, blocked, pattern.roads)
         row = []
         for (x, y) in opts:
             touch = None
+            if lane:
+                ctc = contact_cells(members[0], x, y)
+                users = [(xy, u) for xy, u, cells in tiles if cells & ctc
+                         and not (cells & Footprint(x, y, w, l).cells())]
+                if not users:
+                    continue
+                v = m.NewBoolVar(f"z{w}x{l}L_{x}_{y}")
+                m.AddBoolOr([u for _, u in users]).OnlyEnforceIf(v)
+                for xy, _ in users:
+                    tile_users.setdefault(xy, []).append(v)
+                row.append(((x, y), v))
+                for c in Footprint(x, y, w, l).cells():
+                    cover.setdefault(c, []).append(v)
+                continue
             if needed is not None:
                 touch = [needed[c] for c in contact_cells(members[0], x, y)
                          if c in needed]
@@ -758,6 +835,8 @@ def _position_model(pattern: Pattern, region: set[Cell], consumers: list[Buildin
             return None
         m.Add(sum(v for _, v in row) == len(members))
         lits[key] = row
+    for xy, u, _ in tiles:                 # a tile exists only to serve a building
+        m.AddBoolOr(tile_users.get(xy, [])).OnlyEnforceIf(u)
     for vs in cover.values():
         if len(vs) > 1:
             m.AddAtMostOne(vs)
@@ -773,6 +852,9 @@ def _position_solution(solver, lits, classes) -> dict:
         chosen = sorted(xy for xy, v in lits[size] if solver.Value(v))
         for b, (x, y) in zip(members, chosen):
             pos[b.entity_id] = (x, y, size[0], size[1])
+    for i, (tx, ty) in enumerate(sorted(xy for xy, v in lits.get(LANE_KEY, ())
+                                        if solver.Value(v))):
+        pos[f"{LANE_PREFIX}{i}"] = (tx, ty, 2, 2)
     return pos
 
 
@@ -959,7 +1041,10 @@ def _minimize_needed_position(m, needed, pattern, region, consumers, positions,
         w, l = key[0], key[1]
         for (x, y), v in row:
             m.AddHint(v, (x, y, w, l) in used)
-    m.Minimize(sum(needed.values()))
+    # a two-lane tile's cells off the skeleton are extra road
+    tile_cost = [len(Footprint(x, y, 2, 2).cells() - set(pattern.roads)) * u
+                 for (x, y), u in lits.get(LANE_KEY, ())]
+    m.Minimize(sum(needed.values()) + sum(tile_cost))
     solver = cp_model.CpSolver()
     solver.parameters.num_search_workers = workers
     solver.parameters.random_seed = seed
@@ -1055,8 +1140,14 @@ def validate(layout_src: Layout, pattern: Pattern, positions: dict,
     placed = expand_buildings(placed)
     th = replace(layout_src.townhall, footprint=pattern.th)
     cand = Layout(layout_src.region, [th, *placed], th, {})
+    # Two-lane buildings: the placement's chosen 2x2 tiles are fixed level-2
+    # roads; with none chosen, route() refuses rather than fake a 1x1 tile.
+    fixed = None
+    if any(b.road_level >= 2 for b in placed if b.needs_road):
+        fixed = {c: 2 for (tx, ty) in lane_tiles_of(positions)
+                 for c in Footprint(tx, ty, 2, 2).cells()}
     try:
-        roads = route(cand)
+        roads = route(cand, fixed=fixed)
     except RouteError:
         return ("ROUTE_FAIL", None, 0)
     cand.roads = roads
@@ -1506,12 +1597,29 @@ class RoadsFirstSearch:
                  objective_polish: float = 0.0,
                  objective_polish_top: int = 3,
                  exact_finish: bool = False,
-                 probe_model: str = "item",
-                 keep_chains: bool = True):
+                 probe_model: str = "position",
+                 keep_chains: bool = True,
+                 military: str = "connect"):
         # Linked chains are placed as rigid composites so their links survive
         # (user-confirmed rule, 2026-11-11); every emitted layout is expanded
         # back to real buildings inside validate().
+        if military not in MILITARY_POLICIES:
+            raise ValueError(f"military must be one of {MILITARY_POLICIES}")
+        self.military = military
         self.source_layout = layout
+        if military == "unconnected":
+            # Explicit per-run choice: two-lane buildings are left off the road
+            # and packed like any building that needs none.
+            layout = Layout(layout.region,
+                            [replace(b, needs_road=False)
+                             if b.needs_road and b.road_level >= 2 else b
+                             for b in layout.buildings],
+                            layout.townhall, dict(layout.roads))
+        elif probe_model != "position" and any(
+                b.road_level >= 2 for b in layout.road_needing()):
+            raise ValueError("a two-lane building with military='connect' needs "
+                             "probe_model='position' (the item model has no "
+                             "two-lane tiles); or pass military='unconnected'")
         self.layout = compose(layout) if keep_chains else layout
         if probe_model not in PROBE_MODELS:
             raise ValueError(f"probe_model must be one of {PROBE_MODELS}")
@@ -1585,7 +1693,8 @@ class RoadsFirstSearch:
         if (should_stop is not None and should_stop()) or limit < EXACT_FINISH_MIN_S:
             return {"before": before, "after": before, "status": "SKIPPED",
                     "optimal": False}
-        res = exact_route(lay, time_limit=limit)
+        lane = {c: lvl for c, lvl in lay.roads.items() if lvl >= 2}
+        res = exact_route(lay, time_limit=limit, **({"fixed": lane} if lane else {}))
         after = before
         if res.roads is not None and res.count is not None and res.count < before:
             cand = Layout(lay.region, lay.buildings, lay.townhall, dict(res.roads))
