@@ -389,3 +389,29 @@ def test_exact_finish_is_not_started_when_stopped_or_out_of_time(monkeypatch):
     assert search._apply_exact_finish(latest, None, time.monotonic() + 0.2)["status"] == "SKIPPED"
     assert search._apply_exact_finish(latest, None, time.monotonic() + 60,
                                       lambda: True)["status"] == "SKIPPED"
+
+
+def test_walk_at_k_max_retries_and_searches_downward(monkeypatch):
+    """Review 2026-11-11 (P1): with k_start == k_max an unfinished start level
+    ended the run FAMILY_TOO_WEAK at once. Now the level is retried, then the
+    walk searches downward (at the cap, fewer roads leave room to pack)."""
+    lay, pat = _corridor_layout(1)
+    k_max = len(lay.region.cells) - sum(b.footprint.width * b.footprint.length
+                                        for b in lay.buildings)
+    calls = []
+
+    def fake_level(layout, region, consumers, k, rng, params, log, pool=None, **kw):
+        calls.append(k)
+        if k == k_max - 8:
+            kw["on_improvement"](lay, k, 7)
+            return ("FEASIBLE", 7)
+        if k == k_max and calls.count(k) == 1:
+            return ("UNDERSAMPLED", None)
+        return ("INFEASIBLE", None)
+
+    monkeypatch.setattr(rf, "_probe_level", fake_level)
+    res = rf.RoadsFirstSearch(lay, time_box=30, workers=1, k_start=k_max).run()
+    assert calls[:2] == [k_max, k_max]          # retried, not abandoned
+    assert k_max - 8 in calls and res["verdict"] == "DONE"
+    assert res["best_achieved"] == 7
+    assert res["boundary_descent"][:2] == [k_max - 4, k_max - 8]
