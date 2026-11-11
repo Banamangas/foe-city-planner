@@ -1,5 +1,6 @@
 """minimize_needed: the in-skeleton placement objective (2026-11-11)."""
 import random
+import time
 
 import pytest
 
@@ -420,3 +421,37 @@ def test_walk_at_k_max_retries_and_searches_downward(monkeypatch):
     assert k_max - 8 in calls and res["verdict"] == "DONE"
     assert res["best_achieved"] == 7
     assert res["boundary_descent"][:2] == [k_max - 4, k_max - 8]
+
+
+def test_deepening_reprobes_unknown_levels_with_a_growing_limit(monkeypatch):
+    """Phase C ("use the leftover box"): when the walk settles on unknown levels
+    with time left, re-probe them nearest-first with a longer limit instead of
+    stopping. Here k=17 only resolves (FEASIBLE) at a 30 s limit."""
+    lay, pat = _corridor_layout(1)
+    seen = []
+
+    def fake_batch(layout, region, consumers, ks, rng, params, log, pool=None, **kw):
+        time.sleep(0.01)
+        out = {}
+        for k in ks:
+            seen.append((k, params.probe_limit))
+            if k >= 20 or (k == 18 and params.probe_limit >= 30):
+                kw["on_improvement"](lay, k, k)
+                out[k] = ("FEASIBLE", k)
+            else:
+                out[k] = ("INCONCLUSIVE", None)
+        return out
+
+    monkeypatch.setattr(rf, "_probe_levels_batch", fake_batch)
+    kw = dict(time_box=3, workers=1, k_start=20, probe_limit=10, objective_polish=0)
+    off = rf.RoadsFirstSearch(lay, **kw).run()
+    assert off["best_achieved"] == 20 and off["deepen"] is None
+    seen.clear()
+    res = rf.RoadsFirstSearch(lay, deepen=True, **kw).run()
+    assert res["best_achieved"] == 18
+    d = res["deepen"]
+    assert d["start_hi"] == 20 and d["end_hi"] == 18
+    assert d["rounds"][0] == {"limit": 30, "status": {19: "INCONCLUSIVE",
+                                                      18: "FEASIBLE", 16: "INCONCLUSIVE"}}
+    assert d["rounds"][1]["limit"] == 90 and 17 in d["rounds"][1]["status"]
+    assert (18, 30) in seen and res["profile"]["wall_s"] >= 2   # used the box

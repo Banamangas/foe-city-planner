@@ -1213,6 +1213,8 @@ _WORKER_MODEL: str = "item"
 # Seconds kept back for validate() after the objective solve, and the smallest
 # objective budget worth starting (hinted, it improves within seconds).
 OBJECTIVE_MARGIN_S = 3.0
+DEEPEN_FACTOR = 3          # probe/objective limit multiplier per deepening round
+DEEPEN_MAX_S = 90.0        # ...capped here (the old per-city long limit)
 BOUNDARY_LEVELS = 4        # levels probed below the walk's lowest when nothing was feasible
 EXACT_FINISH_S = 10.0      # exact_route cap on the final layout
 EXACT_FINISH_MIN_S = 1.0  # below this, skip exact finish rather than start it
@@ -1649,13 +1651,15 @@ class RoadsFirstSearch:
                  exact_finish: bool = False,
                  probe_model: str = "position",
                  keep_chains: bool = True,
-                 military: str = "connect"):
+                 military: str = "connect",
+                 deepen: bool = False):
         # Linked chains are placed as rigid composites so their links survive
         # (user-confirmed rule, 2026-11-11); every emitted layout is expanded
         # back to real buildings inside validate().
         if military not in MILITARY_POLICIES:
             raise ValueError(f"military must be one of {MILITARY_POLICIES}")
         self.military = military
+        self.deepen = deepen
         self.source_layout = layout
         if military == "unconnected":
             # Explicit per-run choice: two-lane buildings are left off the road
@@ -1876,13 +1880,15 @@ class RoadsFirstSearch:
         filler_stats = new_filler_stats()
         level_coverage: dict[int, dict] = {}
 
+        pool_limit = {"probe": self.probe_limit, "objective": self.objective_limit}
+
         def _new_pool():
             return multiprocessing.Pool(
                 self.workers,
                 initializer=_worker_init,
-                initargs=(layout, self.probe_limit, self.probe_workers,
+                initargs=(layout, pool_limit["probe"], self.probe_workers,
                          self.symmetry_breaking, self.hints, self.stub_priority,
-                         None, self.exact_repair, self.objective_limit,
+                         None, self.exact_repair, pool_limit["objective"],
                          self.probe_model))
 
         pool = _new_pool() if self.workers > 1 else None
@@ -2088,6 +2094,80 @@ class RoadsFirstSearch:
 
         boundary_info: dict = {"probed": []}
 
+        def _deepen(hi):
+            """Spend the walk's leftover time instead of stopping (Phase B: FR16/FR17
+            ended at 0.3-0.65x of the box; at probe_limit 10, FR17 stopped at 175 s
+            with levels 105-114 merely INCONCLUSIVE). Each round re-probes the
+            unresolved levels below the best feasible k, nearest first, on FRESH
+            skeletons (the rng stream continues), with the probe and objective
+            limits multiplied by DEEPEN_FACTOR (capped at DEEPEN_MAX_S). A level
+            that turns feasible becomes the new bound. Stops at the walk deadline,
+            so the objective-polish reserve is untouched."""
+            nonlocal pool
+            if hi is None or results.get(hi, ("", None))[0] != "FEASIBLE":
+                return None
+            info = {"rounds": [], "start_hi": hi}
+            limit = self.probe_limit
+            step = max(1, self.concurrent_levels)
+            while not _should_stop():
+                # one round = one sweep over every unresolved level below hi
+                unknown = sorted((kk for kk, r in results.items()
+                                  if kk < hi and r[0] in ("INCONCLUSIVE", "UNDERSAMPLED")),
+                                 reverse=True)
+                if hi > 1 and hi - 1 not in results:
+                    unknown.insert(0, hi - 1)      # a new bound opens an unprobed level
+                todo = unknown or ([hi - 1] if hi > 1 else [])
+                if not todo:
+                    break
+                new_limit = min(limit * DEEPEN_FACTOR, max(DEEPEN_MAX_S, self.probe_limit))
+                if new_limit != limit:
+                    # worker limits are baked in at pool init: rebuild once per step
+                    limit = new_limit
+                    pool_limit["probe"] = limit
+                    pool_limit["objective"] = limit if self.objective_limit > 0 else 0.0
+                    params.probe_limit = limit
+                    params.objective_limit = pool_limit["objective"]
+                    if pool is not None:
+                        pool.terminate()
+                        pool = _new_pool()
+                status = {}
+                for i in range(0, len(todo), step):
+                    ks = [kk for kk in todo[i:i + step] if kk < hi]
+                    if not ks:
+                        continue
+                    if _should_stop():
+                        break
+                    _set_slice()
+                    batch = _probe_levels_batch(layout, region, consumers, ks, rng,
+                                                params, lambda r: None, pool=pool,
+                                                on_improvement=on_improvement,
+                                                corpus=corpus, scorer=self.scorer,
+                                                score_threshold=self.score_threshold,
+                                                filler_stats=filler_stats,
+                                                coverage=level_coverage, runtime=runtime)
+                    _restore_pool()
+                    for kk, res in batch.items():
+                        if results.get(kk, ("", None))[0] != "FEASIBLE":
+                            results[kk] = res
+                        status[kk] = res[0]
+                        if on_status is not None:
+                            on_status(kk, res[0], 0, 0)
+                    ok = [kk for kk in ks if batch[kk][0] == "FEASIBLE"]
+                    if ok:
+                        hi = min(ok)
+                info["rounds"].append({"limit": limit, "status": status})
+            info["end_hi"] = hi
+            if limit != self.probe_limit:
+                # later phases size their stops by self.probe_limit: restore it
+                pool_limit["probe"], pool_limit["objective"] = (self.probe_limit,
+                                                                self.objective_limit)
+                params.probe_limit, params.objective_limit = (self.probe_limit,
+                                                              self.objective_limit)
+                if pool is not None:
+                    pool.terminate()
+                    pool = _new_pool()
+            return info
+
         try:
             if self.corpus_dir:
                 corpus = CorpusWriter(self.corpus_dir, layout)
@@ -2198,6 +2278,9 @@ class RoadsFirstSearch:
                 else:
                     lo = mid
 
+            deepen_info = None
+            if self.deepen and not _should_stop():
+                deepen_info = _deepen(hi)
             best = min((r[1] for r in results.values() if r[1] is not None), default=None)
             objective_info = None
             profile.event("walk_end")
@@ -2230,6 +2313,7 @@ class RoadsFirstSearch:
                     "walk_complete": not truncated, "deadline_hit": _should_stop(),
                     "seed_polish": polish_info,
                     "boundary_descent": boundary_info["probed"],
+                    "deepen": deepen_info,
                     "profile": profile.as_dict(self.workers),
                     "objective_polish": objective_info,
                     "exact_finish": exact_info,

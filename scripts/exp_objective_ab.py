@@ -63,6 +63,10 @@ ARMS = {
              "exact_finish": True, "probe_model": "position"},
     "pl5": {"probe_limit": 5.0, "objective_limit": 5.0, "objective_polish": 0.3,
             "exact_finish": True, "probe_model": "position"},
+    # Phase C: fast 10 s first pass, then re-probe unknown levels below the best
+    # with 30 s, then 90 s, until the box is spent ("use the leftover box")
+    "deep10": {"probe_limit": 10.0, "objective_limit": 10.0, "objective_polish": 0.3,
+               "exact_finish": True, "probe_model": "position", "deepen": True},
 }
 
 
