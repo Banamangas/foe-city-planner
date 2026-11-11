@@ -249,20 +249,25 @@ def test_objective_polish_skips_when_no_time_left():
 
 
 def test_objective_polish_reserve_shortens_the_walk(monkeypatch):
-    """The walk must stop early enough to leave the reserve: its deadline is
-    box x (1 - objective_polish)."""
+    """Once a layout exists, the walk must stop early enough to leave the
+    reserve: its deadline is box x (1 - objective_polish)."""
     import time
     captured = {}
+    lay, _ = _corridor_layout(1)
 
     def fake_level(layout, region, consumers, k, rng, params, log, pool=None, **kw):
-        captured["walk_left"] = params.deadline - time.monotonic()
-        captured["recorder"] = getattr(params, "sat_recorder", None)
+        if "first" not in captured:
+            captured["first"] = params.deadline - time.monotonic()
+            captured["recorder"] = getattr(params, "sat_recorder", None)
+            kw["on_improvement"](lay, k, 9)
+            return ("FEASIBLE", 9)
+        captured.setdefault("walk_left", params.deadline - time.monotonic())
         return ("INFEASIBLE", None)
 
     monkeypatch.setattr(rf, "_probe_level", fake_level)
-    lay, _ = _corridor_layout(1)
     rf.RoadsFirstSearch(lay, time_box=100, workers=1, k_start=5,
                         objective_polish=0.3).run()
+    assert captured["first"] > 95          # nothing to polish yet: reserve usable
     assert 65 < captured["walk_left"] <= 70
     assert captured["recorder"] is not None
 
