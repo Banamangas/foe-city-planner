@@ -280,3 +280,32 @@ def test_objective_polish_off_changes_nothing(monkeypatch):
     lay, _ = _corridor_layout(1)
     rf.RoadsFirstSearch(lay, time_box=100, workers=1, k_start=5).run()
     assert captured["walk_left"] > 99 and captured["recorder"] is None
+
+
+def test_exact_finish_keeps_only_a_strictly_smaller_valid_network(monkeypatch):
+    pytest.importorskip("ortools")
+    from foeopt.exact_router import ExactResult
+    lay, _ = _corridor_layout(1)
+    lay.roads = {(2, 1): 1}  # placeholder; validity is checked on the new roads
+    search = rf.RoadsFirstSearch(lay, time_box=5, workers=1, exact_finish=True)
+    seen = []
+    latest = {"layout": lay, "k": 5, "achieved": 3}
+    # a smaller but INVALID network must be rejected
+    monkeypatch.setattr("foeopt.exact_router.exact_route",
+                        lambda l, time_limit: ExactResult("OPTIMAL", 1, {(9, 9): 1}, 0.0, True))
+    info = search._apply_exact_finish(latest, lambda l, k, a: seen.append(a))
+    assert info["after"] == 3 and seen == []
+
+
+def test_exact_finish_runs_the_real_router_on_a_toy():
+    pytest.importorskip("ortools")
+    from foeopt.router import route
+    region, pat = _corridor()
+    th = _b(1, 2, 2, needs=False, th=True, x=0, y=1)
+    cons = [_b(10, 1, 1, x=5, y=1)]
+    lay = Layout(Region(frozenset(region)), [th, *cons], th, {})
+    lay.roads = route(lay)
+    search = rf.RoadsFirstSearch(lay, time_box=5, workers=1, exact_finish=True)
+    info = search._apply_exact_finish({"layout": lay, "k": 5, "achieved": len(lay.roads)},
+                                      lambda *a: None)
+    assert info["after"] <= len(lay.roads) and info["optimal"]

@@ -68,6 +68,13 @@ OPTION_SPECS: list[dict] = [
                 "solver thread, minimising the roads they need. Keeps only a "
                 "strictly better, fully valid layout; 0 = off.",
     },
+    {
+        "name": "exact_finish", "cli": "--exact-finish", "type": "bool",
+        "default": False, "advanced": True,
+        "group": "budget", "label": "Exact road finish",
+        "help": "Re-route the final layout with the exact minimum-roads router "
+                "(usually well under a second) and keep it if it uses fewer roads.",
+    },
     # ---- search shape ----
     {
         "name": "patterns", "cli": "--patterns", "type": "int",
