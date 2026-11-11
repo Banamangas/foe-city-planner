@@ -2176,5 +2176,42 @@
    "buildings": "224/224",
    "unsatisfied": 0
   }
+ },
+ "legality": {
+  "status": "invalid",
+  "version": 1,
+  "violations": [
+   {
+    "rule": "two_lane_path",
+    "entities": [
+     12802
+    ]
+   },
+   {
+    "rule": "chain_broken",
+    "links": [
+     [
+      1920,
+      2495
+     ],
+     [
+      2495,
+      2719
+     ],
+     [
+      2719,
+      3875
+     ],
+     [
+      4175,
+      4341
+     ]
+    ]
+   }
+  ],
+  "unknown": [],
+  "checked": "2026-11-11",
+  "military": "connect",
+  "note": "legacy model: breaks the user-confirmed two-lane and chain rules; kept as an experiment, not a playable record"
  }
 }

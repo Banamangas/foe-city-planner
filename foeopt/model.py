@@ -56,6 +56,9 @@ class Building:
     set_id: str | None
     chain_id: str | None
     name: str
+    # Catalog chain linkPositions: rectangles (dx0, dy0, dx1, dy1), inclusive,
+    # relative to this building's top-left, where the next chain member sits.
+    link_positions: tuple[tuple[int, int, int, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -75,6 +78,9 @@ class Layout:
     buildings: list[Building]
     townhall: Building | None
     roads: dict[tuple[int, int], int] = field(default_factory=dict)
+    # Whether catalog metadata (chains, road levels) was available at load time.
+    # Only meaningful on a loaded (reference) layout; copies keep the default.
+    catalog_known: bool = True
 
     def occupied_cells(self) -> set[tuple[int, int]]:
         occ: set[tuple[int, int]] = set()

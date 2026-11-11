@@ -2190,5 +2190,34 @@
    "out_of_region": 0
   },
   "note": "distinct skeleton AND placement from docs/records/darkzig-97-roads-lane-k106.json"
+ },
+ "legality": {
+  "status": "invalid",
+  "version": 1,
+  "violations": [
+   {
+    "rule": "two_lane_path",
+    "entities": [
+     12802
+    ]
+   },
+   {
+    "rule": "chain_broken",
+    "links": [
+     [
+      1920,
+      2495
+     ],
+     [
+      4341,
+      4599
+     ]
+    ]
+   }
+  ],
+  "unknown": [],
+  "checked": "2026-11-11",
+  "military": "connect",
+  "note": "legacy model: breaks the user-confirmed two-lane and chain rules; kept as an experiment, not a playable record"
  }
 }

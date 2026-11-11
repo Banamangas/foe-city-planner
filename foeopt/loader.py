@@ -83,13 +83,16 @@ def _build_combined(data: dict) -> Layout:
             is_townhall=is_th,
             set_id=catalog.set_id(cid),
             chain_id=catalog.chain_id(cid),
+            link_positions=catalog.link_positions(cid),
             name=e.get("name") or catalog.name(cid),
         )
         buildings.append(building)
         if is_th:
             townhall = building
 
-    return Layout(region=region, buildings=buildings, townhall=townhall, roads=roads)
+    layout = Layout(region=region, buildings=buildings, townhall=townhall, roads=roads)
+    layout.catalog_known = catalog.known
+    return layout
 
 
 def load_layout_from_dict(data: dict, helper_data: dict | None = None) -> Layout:

@@ -45,5 +45,20 @@ class Catalog:
     def chain_id(self, cityentity_id: str) -> str | None:
         return _ability_value(self._def(cityentity_id), "chainId")
 
+    def link_positions(self, cityentity_id: str) -> tuple[tuple[int, int, int, int], ...]:
+        """Chain linkPositions as inclusive (dx0, dy0, dx1, dy1) rectangles
+        relative to the building's top-left; FoE omits zero coordinates."""
+        rects = _ability_value(self._def(cityentity_id), "linkPositions") or []
+        out = []
+        for r in rects:
+            tl, br = r.get("topLeftPoint") or {}, r.get("bottomRightPoint") or {}
+            out.append((tl.get("x", 0), tl.get("y", 0), br.get("x", 0), br.get("y", 0)))
+        return tuple(out)
+
+    @property
+    def known(self) -> bool:
+        """True when catalog definitions were supplied (chains are detectable)."""
+        return bool(self._defs)
+
     def name(self, cityentity_id: str) -> str:
         return self._def(cityentity_id).get("name", cityentity_id)

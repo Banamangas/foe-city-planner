@@ -1212,5 +1212,14 @@
   },
   "efficiency_vs_sigma2_88": "116%",
   "n_distinct_76_layouts": 6
+ },
+ "legality": {
+  "status": "valid",
+  "version": 1,
+  "violations": [],
+  "unknown": [],
+  "checked": "2026-11-11",
+  "military": "connect",
+  "note": "valid under the confirmed rules"
  }
 }
