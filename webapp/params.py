@@ -287,7 +287,15 @@ SMOKE_PRESET: dict = {
 #     FR17      114/108   114/107   108/108
 # Both arms never worse than "on"; "both" has the best worst case and sum.
 # Not measured below a 600 s box: at 60 s the reserve is 18 s of all-thread
-# objective, unmeasured against a longer walk. It re-places each SAT minimising the
+# objective, unmeasured against a longer walk.
+#
+# probe_model "position" -- adopted from a third 12-cell round (same protocol,
+# same preset otherwise): item vs position
+#     darkzig   90/93    88/87
+#     FR16      74/73    68/68
+#     FR17      106/108  105/105
+# Better in all 6 pairs, and every position run finished early (0.67-0.84x):
+# levels are now DECIDED (often proven UNSAT in < 1 s) instead of timing out. It re-places each SAT minimising the
 # skeleton cells it needs (minimize_needed), hinted from the feasible answer.
 #
 # What exact_repair does NOT do is improve the record: the rescued layouts tie the best
@@ -312,6 +320,7 @@ BEST_PRESET: dict = {
     "objective_limit": 30.0,
     "objective_polish": 0.3,
     "exact_finish": True,
+    "probe_model": "position",
 }
 
 DEFAULTS: dict = {s["name"]: s["default"] for s in OPTION_SPECS}
