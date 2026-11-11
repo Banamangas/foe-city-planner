@@ -1327,8 +1327,14 @@ class RoadsFirstSearch:
                  interleave_levels: bool = True,
                  objective_limit: float = 0.0,
                  objective_polish: float = 0.0,
-                 objective_polish_top: int = 3):
+                 objective_polish_top: int = 3,
+                 exact_finish: bool = False):
         self.layout = layout
+        # Re-route the final best layout with exact_route (min connected road
+        # cover for the fixed placement, typically < 0.1 s) and keep it when it
+        # is strictly smaller. route() is greedy: on 2026-11-11 A/B layouts it
+        # left one road on the table in both arms (99 -> 98, 94 -> 93).
+        self.exact_finish = exact_finish
         # > 0: reserve this FRACTION of the box, after the walk, to re-solve the
         # best `objective_polish_top` distinct SAT skeletons with minimize_needed
         # using every solver thread (workers x probe_workers). The in-walk
@@ -1376,6 +1382,21 @@ class RoadsFirstSearch:
         # Measurement knob only: False restores the level-grouped payload order
         # that made a "concurrent" batch drain one level at a time.
         self.interleave_levels = interleave_levels
+
+    def _apply_exact_finish(self, latest: dict, on_improvement) -> dict:
+        """exact_route on the best layout; emit it only if strictly smaller and
+        still valid. Bounded at 10 s: the fixed-placement model is tiny."""
+        from foeopt.exact_router import exact_route
+        lay, before = latest["layout"], latest["achieved"]
+        res = exact_route(lay, time_limit=10.0)
+        after = before
+        if res.roads is not None and res.count is not None and res.count < before:
+            cand = Layout(lay.region, lay.buildings, lay.townhall, dict(res.roads))
+            if is_valid(cand) and len(cand.roads) == res.count:
+                after = res.count
+                on_improvement(cand, latest["k"], after)
+        return {"before": before, "after": after, "status": res.status,
+                "optimal": res.optimal}
 
     def _apply_objective_polish(self, cands, best, on_improvement, end,
                                 should_stop=None) -> dict:
@@ -1444,6 +1465,15 @@ class RoadsFirstSearch:
                 "stopped_early": res.n_tried < self.seed_polish}
 
     def run(self, on_improvement=None, on_status=None, should_stop=None) -> dict:
+        latest: dict = {"layout": None, "k": None, "achieved": None}
+        if self.exact_finish:
+            user_cb = on_improvement
+
+            def on_improvement(vlay, k, achieved):  # noqa: F811 -- wraps the caller's
+                if latest["achieved"] is None or achieved < latest["achieved"]:
+                    latest.update(layout=vlay, k=k, achieved=achieved)
+                if user_cb is not None:
+                    user_cb(vlay, k, achieved)
         layout = self.layout
         region = set(layout.region.cells)
         consumers = layout.road_needing()
@@ -1743,6 +1773,11 @@ class RoadsFirstSearch:
                                                       should_stop=_stop_polish)
                 if polish_info is not None and polish_info["improved"]:
                     best = polish_info["after"]
+            exact_info = None
+            if self.exact_finish and latest["layout"] is not None:
+                exact_info = self._apply_exact_finish(latest, on_improvement)
+                if exact_info["after"] < best:
+                    best = exact_info["after"]
             # UNDERSAMPLED counts as unknown: the level was not finished, so it
             # is no more a refutation than an undecided probe is.
             unknowns = sum(1 for r in results.values()
@@ -1753,6 +1788,7 @@ class RoadsFirstSearch:
                     "walk_complete": not truncated, "deadline_hit": _should_stop(),
                     "seed_polish": polish_info,
                     "objective_polish": objective_info,
+                    "exact_finish": exact_info,
                     "filler_failures": summarise_fillers(filler_stats),
                     "level_coverage": level_coverage,
                     "undersampled_levels": sum(
