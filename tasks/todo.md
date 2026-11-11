@@ -969,3 +969,28 @@ Phase E (only if C plateaus): T5 bounded optional-road spike under Codex's caps.
 
 Adoption rule as before: no validity regression, no city worse in any pair, failures
 counted, and long-run-only wins become a long-run profile rather than the default.
+
+## 2026-11-11 (night): "use the leftover box" deepening -- PAUSED (user restart)
+
+Branch `feat/deepening` (from `exp/probe-limit`, not merged, not pushed).
+`deepen=True` (off by default; A/B arm `deep10` = probe_limit 10 + deepen):
+after the k-walk settles, each round re-solves the best-roads level and the
+bound, then sweeps INCONCLUSIVE/UNDERSAMPLED levels below (plus a newly opened
+k-1) on fresh skeletons, limit x3 per round (10 -> 30 -> 90 s cap).
+
+| FR17 600 s | result | note |
+|---|---|---|
+| preset | 103, 103 | the bar (rule: never worse in any pair) |
+| v1 a2baaac | 105, 105 | slice sized by base 10 s limit -> every 90 s round UNDERSAMPLED |
+| v2 c661699 | 104, 104 | slice fixed + re-solve best/bound; still improving at walk end, ended 0.70x |
+| v3 5191759 | 104, 105 | borrows the objective-polish reserve (keeps 30 s); box now used (0.94x) but no gain -> more time alone does not reach 103 |
+
+v1 at 120 s was never worse than the preset (darkzig 91,90 vs 94,94; FR16 68;
+FR17 106,103 vs 106,106); v1 at 600 s darkzig 91,90 (preset 91,92), FR16 68.
+Data: `scripts/_deepen_ab.jsonl` (v1), `_deepen_ab_v2.jsonl`, `_deepen_ab_v3.jsonl`.
+
+Next when resuming:
+- [x] v3 did NOT reach 103 (104, 105). Deepening is not adopted; keep it off by default.
+- [ ] Next idea: give the re-solve of the best level a longer objective limit than the
+      probe limit, or re-solve the best level's recorded SAT candidates (objective polish
+      seeds) with 90 s instead of fresh skeletons.
