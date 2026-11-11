@@ -37,6 +37,15 @@ CITIES = {
 PROBE_LIMIT = {"darkzig": 30.0, "FR16": 30.0, "FR17": 90.0}
 _CACHE: dict = {}
 
+# arm -> RoadsFirstSearch kwargs; "PL" is replaced by the city's probe_limit.
+ARMS = {
+    "off":    {},
+    "on":     {"objective_limit": "PL"},
+    "polish": {"objective_polish": 0.3, "exact_finish": True},
+    "both":   {"objective_limit": "PL", "objective_polish": 0.3, "exact_finish": True},
+    "onx":    {"objective_limit": "PL", "exact_finish": True},
+}
+
 
 def city(name):
     if name not in _CACHE:
@@ -81,10 +90,13 @@ def run_cell(arm, name, box, rep, outdir):
             workers=6, probe_workers=2, th_anchors="full", concurrent_levels=4,
             pattern_family="nonuniform", quality_index_band=(3, 4),
             k_start="auto", exact_repair=5.0,
-            objective_limit=(pl if arm == "on" else 0.0)).run(on_improvement=on_imp)
+            **{key: (pl if v == "PL" else v) for key, v in ARMS[arm].items()}
+        ).run(on_improvement=on_imp)
         rec.update(ok=True, best=res.get("best_achieved"), verdict=res.get("verdict"),
                    best_k=best["k"], best_t=best["t"],
-                   levels={str(k): v[0] for k, v in res.get("results", {}).items()})
+                   levels={str(k): v[0] for k, v in res.get("results", {}).items()},
+                   objective_polish=res.get("objective_polish"),
+                   exact_finish=res.get("exact_finish"))
         if best["layout"] is not None:
             rec["verify"] = verify(lay, best["layout"])
             fn = outdir / f"{name}-{arm}-r{rep}-a{best['achieved']}.json"
@@ -108,11 +120,12 @@ def main(argv=None):
     p.add_argument("--box", type=float, default=600.0)
     p.add_argument("--reps", type=int, default=2)
     p.add_argument("--cities", default="darkzig,FR16,FR17")
+    p.add_argument("--arms", default="off,on")
     args = p.parse_args(argv)
     outdir = pathlib.Path("output/objective-ab")
     outdir.mkdir(parents=True, exist_ok=True)
     cells = [(arm, c, rep) for rep in range(args.reps)
-             for c in args.cities.split(",") for arm in ("off", "on")]
+             for c in args.cities.split(",") for arm in args.arms.split(",")]
     print(f"{len(cells)} cells x {args.box}s = {len(cells)*args.box/60:.0f} min. SEQUENTIAL.",
           flush=True)
     t0 = time.monotonic()

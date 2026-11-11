@@ -263,7 +263,15 @@ SMOKE_PRESET: dict = {
 # approached on a normal city -- FR16 rescues took 0.11 s mean, 0.17 s worst --
 # and it is clamped to probe_limit regardless.
 #
-# What it does NOT do is improve the record: the rescued layouts tie the best
+# objective_limit is 30.0 (= probe_limit, the clamp) -- adopted 2026-11-11 from
+# a 12-cell A/B, equal 600 s boxes, strictly sequential, paired repeats:
+#     darkzig  off 99/99    on 94/94
+#     FR16     off 77/77    on 75/74
+#     FR17     off 115/115  on 115/109
+# Never worse in any pair, better in 5 of 6. It re-places each SAT minimising the
+# skeleton cells it needs (minimize_needed), hinted from the feasible answer.
+#
+# What exact_repair does NOT do is improve the record: the rescued layouts tie the best
 # greedy result at k=88 (78 roads, 3 such layouts -> 5) and are worse at k=92.
 # It is a throughput lever -- ~16% more legal layouts per run for ~0.3% of the
 # budget -- not a quality one.
@@ -282,6 +290,7 @@ BEST_PRESET: dict = {
     "concurrent_levels": 4,
     "exact_repair": 5.0,
     "comb_modes": "alternate",
+    "objective_limit": 30.0,
 }
 
 DEFAULTS: dict = {s["name"]: s["default"] for s in OPTION_SPECS}
