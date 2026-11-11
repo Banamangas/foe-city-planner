@@ -1215,6 +1215,7 @@ _WORKER_MODEL: str = "item"
 OBJECTIVE_MARGIN_S = 3.0
 DEEPEN_FACTOR = 3          # probe/objective limit multiplier per deepening round
 DEEPEN_MAX_S = 90.0        # ...capped here (the old per-city long limit)
+DEEPEN_POLISH_KEEP_S = 30.0  # objective-polish time kept back when deepening
 BOUNDARY_LEVELS = 4        # levels probed below the walk's lowest when nothing was feasible
 EXACT_FINISH_S = 10.0      # exact_route cap on the final layout
 EXACT_FINISH_MIN_S = 1.0  # below this, skip exact finish rather than start it
@@ -2103,9 +2104,14 @@ class RoadsFirstSearch:
             limits multiplied by DEEPEN_FACTOR (capped at DEEPEN_MAX_S). A level
             that turns feasible becomes the new bound. Stops at the walk deadline,
             so the objective-polish reserve is untouched."""
-            nonlocal pool
+            nonlocal pool, walk_deadline
             if hi is None or results.get(hi, ("", None))[0] != "FEASIBLE":
                 return None
+            # Objective polish converges almost at once (Phase B: ~0% of worker
+            # time) while deepening was still improving FR17 at the walk end:
+            # lend it the reserve, keeping DEEPEN_POLISH_KEEP_S for the polish.
+            walk_deadline = max(walk_deadline,
+                                polish_deadline - min(objective_reserve, DEEPEN_POLISH_KEEP_S))
             info = {"rounds": [], "start_hi": hi}
             limit = self.probe_limit
             step = max(1, self.concurrent_levels)
