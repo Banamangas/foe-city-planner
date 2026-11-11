@@ -46,7 +46,19 @@ def layout_to_dict(layout: Layout) -> dict:
     }
 
 
+class JobBusy(RuntimeError):
+    """Another optimisation is still running (one active job at a time)."""
+
+    def __init__(self, job_id: str):
+        super().__init__(f"an optimisation is already running ({job_id}); stop it first")
+        self.job_id = job_id
+
+
 class JobManager:
+    # Admission control: every run already uses workers x probe_workers solver
+    # threads, so a second concurrent run would only halve both. One at a time.
+    MAX_ACTIVE = 1
+
     def __init__(self) -> None:
         self._jobs: dict[str, dict] = {}
         self._lock = threading.Lock()
@@ -74,9 +86,13 @@ class JobManager:
         job_id = uuid.uuid4().hex
         stop_event = threading.Event()
         improvements: queue.Queue = queue.Queue()
-        state = {"state": "running", "start": time.monotonic(),
+        state = {"state": "running", "start": time.monotonic(), "end": None,
                  "result": None, "error": None}
         with self._lock:
+            active = [jid for jid, j in self._jobs.items()
+                      if j["state"]["state"] == "running"]
+            if len(active) >= self.MAX_ACTIVE:
+                raise JobBusy(active[0])
             self._jobs[job_id] = {
                 "state": state,
                 "stop_event": stop_event,
@@ -142,14 +158,31 @@ class JobManager:
                                  should_stop=should_stop)
                 if last_legality:
                     res["legality"] = dict(last_legality)
-                state["state"] = "done"
-                state["result"] = res
+                self._finish(state, "done", result=res)
             except Exception as exc:
-                state["state"] = "error"
-                state["error"] = str(exc)
+                self._finish(state, "error", error=f"{type(exc).__name__}: {exc}")
 
         threading.Thread(target=worker, daemon=True).start()
         return job_id
+
+    def _finish(self, state: dict, final: str, result=None, error=None) -> None:
+        """Publish the terminal state atomically: readers holding the lock see
+        either 'running' or the complete (state, result, error, end) snapshot,
+        never 'done' with a result still missing."""
+        with self._lock:
+            state.update(result=result, error=error, end=time.monotonic(), state=final)
+
+    def snapshot(self, job_id: str) -> dict | None:
+        """One coherent view of a job, or None if unknown."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return None
+            st = job["state"]
+            end = st["end"] if st["end"] is not None else time.monotonic()
+            return {"state": st["state"], "elapsed": round(end - st["start"], 1),
+                    "error": st["error"], "result": st["result"],
+                    "stopped": job["stop_event"].is_set()}
 
     def pop_improvement(self, job_id: str, timeout: float = 0.1) -> dict | None:
         with self._lock:
@@ -162,27 +195,18 @@ class JobManager:
             return None
 
     def status(self, job_id: str) -> dict:
-        with self._lock:
-            job = self._jobs.get(job_id)
-        if job is None:
+        snap = self.snapshot(job_id)
+        if snap is None:
             return {"state": "error", "elapsed": 0, "error": "unknown job"}
-        return {"state": job["state"]["state"],
-                "elapsed": round(time.monotonic() - job["state"]["start"], 1),
-                "error": job["state"]["error"]}
+        return {k: snap[k] for k in ("state", "elapsed", "error")}
 
     def result(self, job_id: str) -> dict | None:
-        with self._lock:
-            job = self._jobs.get(job_id)
-        if job is None:
-            return None
-        return job["state"]["result"]
+        snap = self.snapshot(job_id)
+        return None if snap is None else snap["result"]
 
     def is_done(self, job_id: str) -> bool:
-        with self._lock:
-            job = self._jobs.get(job_id)
-        if job is None:
-            return True
-        return job["state"]["state"] in ("done", "error")
+        snap = self.snapshot(job_id)
+        return snap is None or snap["state"] in ("done", "error")
 
     def exists(self, job_id: str) -> bool:
         with self._lock:

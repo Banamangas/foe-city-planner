@@ -17,7 +17,7 @@ from foeopt.bounds import screen_city
 from webapp.params import (
     BEST_PRESET, GROUP_LABELS, OPTION_SPECS, SMOKE_PRESET, OptionError, parse_options,
 )
-from webapp.runner import JobManager
+from webapp.runner import JobBusy, JobManager
 
 _DIST = os.path.join(os.path.dirname(__file__), "dist")
 
@@ -45,7 +45,14 @@ def create_app(db_path: str | None = None) -> Flask:
         file_storage.save(path)
         return path
 
-    def _parse_and_cache(data: dict) -> dict:
+    def _parse_and_cache(data, helper_data: dict | None = None) -> dict:
+        if not isinstance(data, dict):
+            raise ValueError("expected a JSON object")
+        if helper_data is not None and "entities" in data:
+            # Split export: keep the helper's catalog INSIDE the cached payload
+            # so later loads (optimize, export, re-import) still resolve sizes,
+            # road levels and chains. Only CityEntities is needed.
+            data = {**data, "helper_data": {"CityEntities": helper_data.get("CityEntities", {})}}
         layout = load_layout_from_dict(data)
         payload = json.dumps(data).encode()
         city_id = _city_hash(payload)
@@ -99,7 +106,7 @@ def create_app(db_path: str | None = None) -> Flask:
                 if p:
                     os.unlink(p)
         try:
-            return jsonify(_parse_and_cache(data))
+            return jsonify(_parse_and_cache(data, helper_data))
         except Exception as exc:
             return jsonify(error=f"could not parse city: {exc}"), 400
 
@@ -115,7 +122,9 @@ def create_app(db_path: str | None = None) -> Flask:
 
     @app.post("/api/optimize")
     def api_optimize():
-        data = request.get_json(silent=True) or {}
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify(error="expected a JSON object"), 400
         city_id = data.get("city_id")
         if not city_id:
             return jsonify(error="city_id is required"), 400
@@ -127,12 +136,18 @@ def create_app(db_path: str | None = None) -> Flask:
         except OptionError as exc:
             return jsonify(error=str(exc)), 400
         layout = load_layout_from_dict(city["payload"])
-        job_id = jobs.submit(layout, **options)
+        try:
+            job_id = jobs.submit(layout, **options)
+        except JobBusy as exc:
+            return jsonify(error=str(exc), active_job_id=exc.job_id), 409
         # Echo the resolved options so the client can show exactly what ran.
         return jsonify(job_id=job_id, options=options)
 
     @app.get("/api/stream/<job_id>")
     def api_stream(job_id):
+        if not jobs.exists(job_id):
+            return jsonify(error="unknown job"), 404
+
         def generate():
             while not jobs.is_done(job_id):
                 imp = jobs.pop_improvement(job_id, timeout=0.2)
@@ -146,8 +161,10 @@ def create_app(db_path: str | None = None) -> Flask:
                 if imp is None:
                     break
                 yield f"event: improvement\ndata: {json.dumps(imp)}\n\n"
-            final = jobs.result(job_id)
-            yield f"event: done\ndata: {json.dumps(final)}\n\n"
+            # Terminal envelope: state (done | error), result, error, elapsed,
+            # stopped -- one coherent snapshot, so an error is never a bare null.
+            final = jobs.snapshot(job_id)
+            yield f"event: done\ndata: {json.dumps(final, default=str)}\n\n"
         return Response(generate(), mimetype="text/event-stream")
 
     @app.post("/api/stop/<job_id>")
@@ -203,15 +220,23 @@ def create_app(db_path: str | None = None) -> Flask:
 
     @app.post("/api/layouts")
     def api_layouts_save():
-        data = request.get_json(silent=True) or {}
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify(error="expected a JSON object"), 400
         city_id = data.get("city_id")
         if not city_id:
             return jsonify(error="city_id is required"), 400
-        layout_id = uuid.uuid4().hex[:12]
-        k = int(data.get("k", 0))
-        achieved = int(data.get("achieved", 0))
+        if cache.get_city(city_id) is None:
+            return jsonify(error="city not found"), 400
+        try:
+            k, achieved, roads_count = (int(data.get(f, 0))
+                                        for f in ("k", "achieved", "roads_count"))
+        except (TypeError, ValueError, OverflowError):
+            return jsonify(error="k, achieved and roads_count must be integers"), 400
         layout_json = data.get("layout_json", {})
-        roads_count = int(data.get("roads_count", 0))
+        if not isinstance(layout_json, dict):
+            return jsonify(error="layout_json must be an object"), 400
+        layout_id = uuid.uuid4().hex[:12]
         cache.store_layout(layout_id, city_id, k, achieved, layout_json, roads_count)
         return jsonify(id=layout_id)
 
