@@ -58,7 +58,8 @@ class JobManager:
                warm_start_budget: float = 30.0,
                quality_index_band: str = "off", lane_pitches: str = "off",
                exact_repair: float = 0.0, comb_modes: str = "alternate",
-               objective_limit: float = 0.0) -> str:
+               objective_limit: float = 0.0,
+               objective_polish: float = 0.0) -> str:
         """Start a RoadsFirstSearch in a background thread and return its id.
 
         Keyword names match webapp.params.OPTION_SPECS one for one, so the
@@ -117,6 +118,7 @@ class JobManager:
                     exact_repair=exact_repair,
                     comb_modes=_parse_modes(comb_modes),
                     objective_limit=objective_limit,
+                    objective_polish=objective_polish,
                 )
                 res = search.run(on_improvement=on_improvement,
                                  on_status=on_status,

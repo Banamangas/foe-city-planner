@@ -1223,6 +1223,9 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
                           secs=result["secs"], pos=result.get("pos"))
         if status == "SAT":
             vlay = result["layout"]
+            sat_recorder = getattr(params, "sat_recorder", None)
+            if sat_recorder is not None:
+                sat_recorder(k, achieved, pat, result.get("pos"))
             if st["best_achieved"] is None or achieved < st["best_achieved"]:
                 st["best_achieved"] = achieved
                 if on_improvement is not None:
@@ -1322,8 +1325,17 @@ class RoadsFirstSearch:
                  comb_modes: tuple[str, ...] | None = None,
                  level_slice_frac: float | None = 0.35,
                  interleave_levels: bool = True,
-                 objective_limit: float = 0.0):
+                 objective_limit: float = 0.0,
+                 objective_polish: float = 0.0,
+                 objective_polish_top: int = 3):
         self.layout = layout
+        # > 0: reserve this FRACTION of the box, after the walk, to re-solve the
+        # best `objective_polish_top` distinct SAT skeletons with minimize_needed
+        # using every solver thread (workers x probe_workers). The in-walk
+        # objective_limit gets one probe's threads and is clamped to probe_limit;
+        # the record-breaking runs used 120 s x 12 threads on one skeleton.
+        self.objective_polish = objective_polish
+        self.objective_polish_top = objective_polish_top
         # > 0: after every SAT, spend up to this many seconds (clamped to
         # probe_limit) minimizing the skeleton cells the placement needs. See
         # minimize_needed. 0 = feasibility only, the historical behaviour.
@@ -1364,6 +1376,40 @@ class RoadsFirstSearch:
         # Measurement knob only: False restores the level-grouped payload order
         # that made a "concurrent" batch drain one level at a time.
         self.interleave_levels = interleave_levels
+
+    def _apply_objective_polish(self, cands, best, on_improvement, end,
+                                should_stop=None) -> dict:
+        """Re-solve the top distinct SAT skeletons with minimize_needed, all
+        solver threads, splitting the time left before `end` evenly across the
+        candidates still to go. Keeps only fully validated strict improvements."""
+        region = set(self.layout.region.cells)
+        consumers = self.layout.road_needing()
+        threads = max(1, self.workers * self.probe_workers)
+        top = cands[:max(1, self.objective_polish_top)]
+        tried, after, per = 0, best, []
+        for i, (ach, k, pat, pos) in enumerate(top):
+            if should_stop is not None and should_stop():
+                break
+            limit = (end - time.monotonic() - OBJECTIVE_MARGIN_S) / (len(top) - i)
+            if limit < OBJECTIVE_MIN_S:
+                break
+            tried += 1
+            opos = minimize_needed(pat, region, consumers, pos, limit=limit,
+                                   workers=threads)
+            got = None
+            if opos is not None:
+                vst, vlay, vach = validate(self.layout, pat, opos,
+                                           exact_repair=min(self.exact_repair, limit),
+                                           exact_workers=threads)
+                if vst == "OK":
+                    got = vach
+                    if after is None or vach < after:
+                        after = vach
+                        if on_improvement is not None:
+                            on_improvement(vlay, k, vach)
+            per.append({"k": k, "before": ach, "after": got, "limit_s": round(limit, 1)})
+        return {"before": best, "after": after, "tried": tried,
+                "candidates": len(cands), "per_skeleton": per}
 
     def _apply_seed_polish(self, best_holder: dict, on_improvement,
                            should_stop=None) -> dict | None:
@@ -1417,8 +1463,14 @@ class RoadsFirstSearch:
             # (0.77x) with seeds_tried=0, strictly worse than not reserving.
             # The margin covers the walk's own probe-granularity overshoot.
             polish_reserve = want if want >= self.probe_limit * 1.2 else 0.0
+        objective_reserve = 0.0
+        if self.objective_polish > 0:
+            objective_reserve = self.time_box * self.objective_polish
+            if objective_reserve < OBJECTIVE_MIN_S + OBJECTIVE_MARGIN_S:
+                objective_reserve = 0.0  # cannot fit one useful solve
         deadline = time.monotonic() + self.time_box
-        walk_deadline = deadline - polish_reserve
+        walk_deadline = deadline - polish_reserve - objective_reserve
+        polish_deadline = deadline - polish_reserve  # objective polish ends here
         filler_stats = new_filler_stats()
         level_coverage: dict[int, dict] = {}
 
@@ -1467,6 +1519,20 @@ class RoadsFirstSearch:
 
         if self.seed_polish > 0:
             params.best_recorder = _record_best
+
+        # Every SAT, for objective polish: the best feasibility count is a poor
+        # predictor of the best count after the objective, so keep several.
+        sat_cands: list[tuple[int, int, Pattern, dict]] = []
+
+        def _record_sat(k, achieved, pat, pos):
+            if pos is None or any(c[2].roads == pat.roads for c in sat_cands):
+                return
+            sat_cands.append((achieved, k, pat, pos))
+            sat_cands.sort(key=lambda c: (c[0], c[1]))
+            del sat_cands[max(1, self.objective_polish_top) * 3:]
+
+        if objective_reserve > 0:
+            params.sat_recorder = _record_sat
 
         def _should_stop():
             """Walk phase: stops early enough to leave the polish reserve."""
@@ -1665,6 +1731,12 @@ class RoadsFirstSearch:
                     lo = mid
 
             best = min((r[1] for r in results.values() if r[1] is not None), default=None)
+            objective_info = None
+            if best is not None and objective_reserve > 0:
+                objective_info = self._apply_objective_polish(
+                    sat_cands, best, on_improvement, polish_deadline, should_stop)
+                if objective_info["after"] is not None and objective_info["after"] < best:
+                    best = objective_info["after"]
             polish_info = None
             if best is not None and self.seed_polish > 0:
                 polish_info = self._apply_seed_polish(best_holder, on_improvement,
@@ -1680,6 +1752,7 @@ class RoadsFirstSearch:
                     "best_achieved": best, "inconclusive_levels": unknowns,
                     "walk_complete": not truncated, "deadline_hit": _should_stop(),
                     "seed_polish": polish_info,
+                    "objective_polish": objective_info,
                     "filler_failures": summarise_fillers(filler_stats),
                     "level_coverage": level_coverage,
                     "undersampled_levels": sum(

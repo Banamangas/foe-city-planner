@@ -199,3 +199,84 @@ def test_objective_limit_is_clamped_to_remaining_budget(monkeypatch):
     rf._run_probe_seq((pat, 10, lay, 30.0, 1, False, None, False, None, 0.0,
                        30.0, time.monotonic() + 10.0))
     assert 0 < seen["limit"] <= 10.0 - rf.OBJECTIVE_MARGIN_S
+
+
+def _corridor_layout(n=4):
+    region, pat = _corridor()
+    th = _b(1, 2, 2, needs=False, th=True, x=0, y=1)
+    consumers = [_b(10 + i, 1, 1, x=2 + i, y=1) for i in range(n)]
+    return Layout(Region(frozenset(region)), [th, *consumers], th, {}), pat
+
+
+def test_objective_polish_improves_a_bad_sat_and_reports_it():
+    pytest.importorskip("ortools")
+    import time
+    lay, pat = _corridor_layout()
+    far = {10: (11, 1, 1, 1), 11: (10, 1, 1, 1), 12: (11, 3, 1, 1), 13: (10, 3, 1, 1)}
+    search = rf.RoadsFirstSearch(lay, time_box=30, workers=1, probe_workers=1,
+                                 objective_polish=0.5, objective_polish_top=2)
+    seen = []
+    info = search._apply_objective_polish([(11, 10, pat, far)], 11,
+                                          lambda l, k, a: seen.append(a),
+                                          time.monotonic() + 15)
+    assert info["tried"] == 1
+    assert info["after"] is not None and info["after"] <= 3
+    assert seen == [info["after"]]
+
+
+def test_objective_polish_never_reports_worse():
+    """A candidate that cannot beat the incumbent changes nothing."""
+    pytest.importorskip("ortools")
+    import time
+    lay, pat = _corridor_layout()
+    far = {10: (11, 1, 1, 1), 11: (10, 1, 1, 1), 12: (11, 3, 1, 1), 13: (10, 3, 1, 1)}
+    search = rf.RoadsFirstSearch(lay, time_box=30, workers=1, probe_workers=1,
+                                 objective_polish=0.5)
+    seen = []
+    info = search._apply_objective_polish([(11, 10, pat, far)], 1,
+                                          lambda l, k, a: seen.append(a),
+                                          time.monotonic() + 15)
+    assert info["after"] == 1 and seen == []
+
+
+def test_objective_polish_skips_when_no_time_left():
+    lay, pat = _corridor_layout()
+    import time
+    search = rf.RoadsFirstSearch(lay, time_box=30, workers=1, objective_polish=0.5)
+    info = search._apply_objective_polish([(11, 10, pat, {})], 11, None,
+                                          time.monotonic() + 1.0)
+    assert info["tried"] == 0 and info["after"] == 11
+
+
+def test_objective_polish_reserve_shortens_the_walk(monkeypatch):
+    """The walk must stop early enough to leave the reserve: its deadline is
+    box x (1 - objective_polish)."""
+    import time
+    captured = {}
+
+    def fake_level(layout, region, consumers, k, rng, params, log, pool=None, **kw):
+        captured["walk_left"] = params.deadline - time.monotonic()
+        captured["recorder"] = getattr(params, "sat_recorder", None)
+        return ("INFEASIBLE", None)
+
+    monkeypatch.setattr(rf, "_probe_level", fake_level)
+    lay, _ = _corridor_layout(1)
+    rf.RoadsFirstSearch(lay, time_box=100, workers=1, k_start=5,
+                        objective_polish=0.3).run()
+    assert 65 < captured["walk_left"] <= 70
+    assert captured["recorder"] is not None
+
+
+def test_objective_polish_off_changes_nothing(monkeypatch):
+    import time
+    captured = {}
+
+    def fake_level(layout, region, consumers, k, rng, params, log, pool=None, **kw):
+        captured["walk_left"] = params.deadline - time.monotonic()
+        captured["recorder"] = getattr(params, "sat_recorder", None)
+        return ("INFEASIBLE", None)
+
+    monkeypatch.setattr(rf, "_probe_level", fake_level)
+    lay, _ = _corridor_layout(1)
+    rf.RoadsFirstSearch(lay, time_box=100, workers=1, k_start=5).run()
+    assert captured["walk_left"] > 99 and captured["recorder"] is None

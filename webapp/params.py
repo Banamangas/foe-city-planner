@@ -59,6 +59,15 @@ OPTION_SPECS: list[dict] = [
                 "cells they actually need, starting from the feasible answer "
                 "(so it can never do worse). Clamped to the probe limit; 0 = off.",
     },
+    {
+        "name": "objective_polish", "cli": "--objective-polish", "type": "float",
+        "default": 0.0, "min": 0.0, "max": 0.9, "advanced": True,
+        "group": "budget", "label": "Objective polish (share of box, 0 = off)",
+        "help": "Reserve this share of the time box, after the search, to "
+                "re-place buildings on the best few skeletons found using every "
+                "solver thread, minimising the roads they need. Keeps only a "
+                "strictly better, fully valid layout; 0 = off.",
+    },
     # ---- search shape ----
     {
         "name": "patterns", "cli": "--patterns", "type": "int",
