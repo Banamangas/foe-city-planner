@@ -1098,6 +1098,8 @@ _WORKER_MODEL: str = "item"
 # Seconds kept back for validate() after the objective solve, and the smallest
 # objective budget worth starting (hinted, it improves within seconds).
 OBJECTIVE_MARGIN_S = 3.0
+EXACT_FINISH_S = 10.0      # exact_route cap on the final layout
+EXACT_FINISH_MIN_S = 1.0  # below this, skip exact finish rather than start it
 OBJECTIVE_MIN_S = 2.0
 
 
@@ -1552,12 +1554,20 @@ class RoadsFirstSearch:
         # that made a "concurrent" batch drain one level at a time.
         self.interleave_levels = interleave_levels
 
-    def _apply_exact_finish(self, latest: dict, on_improvement) -> dict:
+    def _apply_exact_finish(self, latest: dict, on_improvement,
+                            deadline: float | None = None, should_stop=None) -> dict:
         """exact_route on the best layout; emit it only if strictly smaller and
-        still valid. Bounded at 10 s: the fixed-placement model is tiny."""
+        still valid. Capped at EXACT_FINISH_S and at the time left before
+        `deadline`; skipped (never started) when stopped or out of time."""
         from foeopt.exact_router import exact_route
         lay, before = latest["layout"], latest["achieved"]
-        res = exact_route(lay, time_limit=10.0)
+        limit = EXACT_FINISH_S
+        if deadline is not None:
+            limit = min(limit, deadline - time.monotonic())
+        if (should_stop is not None and should_stop()) or limit < EXACT_FINISH_MIN_S:
+            return {"before": before, "after": before, "status": "SKIPPED",
+                    "optimal": False}
+        res = exact_route(lay, time_limit=limit)
         after = before
         if res.roads is not None and res.count is not None and res.count < before:
             cand = Layout(lay.region, lay.buildings, lay.townhall, dict(res.roads))
@@ -1602,7 +1612,7 @@ class RoadsFirstSearch:
                 "candidates": len(cands), "per_skeleton": per}
 
     def _apply_seed_polish(self, best_holder: dict, on_improvement,
-                           should_stop=None) -> dict | None:
+                           should_stop=None, incumbent: int | None = None) -> dict | None:
         """Opt-in (seed_polish>0): re-solve the best skeleton under N CP-SAT
         seeds and keep a strictly-lower legal road count. probe() has no
         objective, so the placement it returns -- and thus route()'s count --
@@ -1623,7 +1633,11 @@ class RoadsFirstSearch:
                                   probe_limit=self.probe_limit,
                                   probe_workers=self.probe_workers,
                                   should_stop=should_stop)
+        # Compare against the GLOBAL incumbent (objective polish may already
+        # have beaten the walk's best skeleton), not just that skeleton's count.
         baseline = best_holder.get("achieved")
+        if incumbent is not None and (baseline is None or incumbent < baseline):
+            baseline = incumbent
         improved = (res.achieved is not None and baseline is not None
                     and res.achieved < baseline)
         if improved and on_improvement is not None:
@@ -1634,15 +1648,20 @@ class RoadsFirstSearch:
                 "stopped_early": res.n_tried < self.seed_polish}
 
     def run(self, on_improvement=None, on_status=None, should_stop=None) -> dict:
+        # ONE incumbent for every phase (walk, objective polish, seed polish,
+        # exact finish): a layout reaches the caller only if it strictly beats
+        # everything published before, so emitted counts never go up and the
+        # returned best is the last emitted layout. (Before: seed polish compared
+        # against the stale walk best and could publish 95 after 90.)
         latest: dict = {"layout": None, "k": None, "achieved": None}
-        if self.exact_finish:
-            user_cb = on_improvement
+        user_cb = on_improvement
 
-            def on_improvement(vlay, k, achieved):  # noqa: F811 -- wraps the caller's
-                if latest["achieved"] is None or achieved < latest["achieved"]:
-                    latest.update(layout=vlay, k=k, achieved=achieved)
-                if user_cb is not None:
-                    user_cb(vlay, k, achieved)
+        def on_improvement(vlay, k, achieved):  # noqa: F811 -- wraps the caller's
+            if latest["achieved"] is not None and achieved >= latest["achieved"]:
+                return
+            latest.update(layout=vlay, k=k, achieved=achieved)
+            if user_cb is not None:
+                user_cb(vlay, k, achieved)
         layout = self.layout
         region = set(layout.region.cells)
         consumers = layout.road_needing()
@@ -1667,9 +1686,12 @@ class RoadsFirstSearch:
             objective_reserve = self.time_box * self.objective_polish
             if objective_reserve < OBJECTIVE_MIN_S + OBJECTIVE_MARGIN_S:
                 objective_reserve = 0.0  # cannot fit one useful solve
-        deadline = time.monotonic() + self.time_box
+        # exact_finish runs last, inside the box: reserve its (small) solve.
+        exact_reserve = min(EXACT_FINISH_S, self.time_box * 0.05) if self.exact_finish else 0.0
+        deadline = time.monotonic() + self.time_box - exact_reserve
         walk_deadline = deadline - polish_reserve - objective_reserve
         polish_deadline = deadline - polish_reserve  # objective polish ends here
+        hard_deadline = deadline + exact_reserve
         filler_stats = new_filler_stats()
         level_coverage: dict[int, dict] = {}
 
@@ -1941,14 +1963,14 @@ class RoadsFirstSearch:
             polish_info = None
             if best is not None and self.seed_polish > 0:
                 polish_info = self._apply_seed_polish(best_holder, on_improvement,
-                                                      should_stop=_stop_polish)
-                if polish_info is not None and polish_info["improved"]:
-                    best = polish_info["after"]
+                                                      should_stop=_stop_polish,
+                                                      incumbent=latest["achieved"])
             exact_info = None
             if self.exact_finish and latest["layout"] is not None:
-                exact_info = self._apply_exact_finish(latest, on_improvement)
-                if exact_info["after"] < best:
-                    best = exact_info["after"]
+                exact_info = self._apply_exact_finish(latest, on_improvement,
+                                                      hard_deadline, should_stop)
+            if latest["achieved"] is not None:
+                best = latest["achieved"] if best is None else min(best, latest["achieved"])
             # UNDERSAMPLED counts as unknown: the level was not finished, so it
             # is no more a refutation than an undecided probe is.
             unknowns = sum(1 for r in results.values()
