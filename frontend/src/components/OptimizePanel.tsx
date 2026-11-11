@@ -136,7 +136,7 @@ export function OptimizePanel() {
       {spec?.presets?.best && (
         <div className="row">
           <button disabled={running} className="preset-best"
-            title="The configuration that holds this project's records on both measured cities (darkzig 94 roads, FR16 76) — non-uniform skeletons filtered to the productive quality band, with seed polish."
+            title="Best measured configuration: at a 10-minute box it reached darkzig 87-88, FR16 68, FR17 105 roads. Non-uniform skeletons in the productive quality band, the symmetry-free position model, a placement objective on every feasible skeleton plus an end-of-run objective polish, exact filler repair and an exact road finish. Seed polish is off: it does not pay inside a short box."
             onClick={() => setValues(applyPreset(specs, values, spec.presets.best))}>
             Use best-known settings
           </button>

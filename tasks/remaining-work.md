@@ -619,3 +619,31 @@ runs; changing the surrounding lifetime breaks it silently.**
   (FR16 81 vs 77, FR17 130 vs 115). It converts catastrophic failure into
   graceful degradation, which is a different and lesser claim than "the walk no
   longer needs a good start".
+
+
+---
+
+## 12. Placement objective — DONE 2026-11-11, adopted in BEST_PRESET
+
+`minimize_needed` (exact in-skeleton objective, hinted from the feasibility placement) +
+`objective_limit` (in-walk, clamped to probe_limit AND the slice deadline). A/B at 600 s:
+darkzig 99 -> 94, FR16 77 -> 75/74, FR17 115 -> 115/109; never worse. Records: darkzig 90,
+FR16 71, FR17 108. Also shipped (opt-in): `objective_polish` (end-of-run, all threads) and
+`exact_finish`; prefilter now receives fillers on the production path. Full reasoning:
+`tasks/lessons.md` 2026-11-11, `tasks/analysis-2026-11-11.md`.
+
+Open follow-ups, by expected value:
+- [ ] **Loose-k controller.** With an objective, the k-walk's job (find the tightest feasible
+      k) matters less: a loose k is easy to satisfy and the objective pulls the count down.
+      Test k_start = auto + 4/8 with the objective on.
+- [x] **Position-indexed, symmetry-free model** -- DONE 2026-11-11, adopted (6/6 pairs better).
+- [ ] **Fillers inside the position model** (size classes without a road requirement): the
+      route to the user's 97%-full city, where greedy filler packing cannot work.
+- [ ] **Use the leftover box.** Position runs finish at 0.67-0.84x: the walk ends on proven
+      UNSAT levels. Spend the rest on more skeletons at the best k / longer polish.
+- [ ] **k_start == k_max dead end** (user city): walk gives up at 0.3x after one
+      UNDERSAMPLED level instead of continuing.
+- [ ] **Depth-aware skeleton gaps** (FR17/FR24 are depth-3 dominated; NONUNIFORM_GAPS=(10,18)
+      can never produce pitch 7). Needs >= 90 s probes or the new model to measure.
+- [ ] **Two-lane road modelling** (2x2 tiles; rule to confirm with the user) and chain
+      adjacency (darkzig's 7 Road-to-Victory pieces).

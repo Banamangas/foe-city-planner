@@ -80,6 +80,12 @@ def test_bools_accept_json_and_string_forms():
     ({"pattern_family": "spiral"}, "must be one of"),
     ({"k_start": "later"}, "expected an integer"),
     ({"symmetry_breaking": "yes"}, "expected a boolean"),
+    ({"time_box": float("nan")}, "expected a number"),
+    ({"time_box": float("inf")}, "expected a number"),
+    ({"time_box": "nan"}, "expected a number"),
+    ({"patterns": True}, "expected an integer"),
+    ({"patterns": 2.7}, "expected an integer"),
+    ({"patterns": "2.5"}, "expected an integer"),
 ])
 def test_out_of_range_and_mistyped_values_raise(body, needle):
     with pytest.raises(OptionError) as exc:
@@ -229,3 +235,8 @@ def test_warm_start_budget_is_capped_by_the_time_box(monkeypatch):
                         warm_start_budget=7.0)
     assert calls[0]["budget_seconds"] < 7.0, "budget must be capped for a tiny box"
     assert calls[0]["budget_seconds"] <= max(1.0, 0.1 * 0.5)
+
+
+def test_integral_floats_and_strings_still_coerce_to_int():
+    assert parse_options({"patterns": 200.0})["patterns"] == 200
+    assert parse_options({"patterns": "200"})["patterns"] == 200

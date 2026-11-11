@@ -1742,6 +1742,10 @@ overlap with darkzig) — `KeyError` on reconstruct, correctly rejected; their c
 unrelated to darkzig. Assets: `foeopt/exact_router.py` (5 tests), `scripts/exp_exact_router.py`.
 ## Roads-first placement objective — Stage 0 correlation study (2026-07-21)
 
+> **SUPERSEDED 2026-11-11** — P2 was degenerate (== k on every dense placement), so this study
+> measured nothing. The exact objective it should have tested beats every record; see the
+> 2026-11-11 CORRECTION entry at the end of this file.
+
 **Verdict: the oracle_gap is REAL, but no proxy captures it → do NOT advance to Stage 1
 with P1–P4.** Per the pre-committed Stage-0 gate (spec
 `docs/superpowers/specs/2026-07-21-roads-first-placement-objective-design.md` §5),
@@ -2441,6 +2445,9 @@ generation* it is effectively free (200 banded patterns in 0.6 s).
 
 ## The surrogate is a CLASSIFIER, not a gradient — so bandit/CEM/RL over the per-branch vector is dead (2026-07-31)
 
+> **Amended 2026-11-11** — the "residual is CP-SAT seed luck" reading is wrong: it was the spread of
+> a feasibility-only solver. An in-skeleton objective converts it into 4-7 roads (CORRECTION entry, end of file).
+
 Checked before building the guided search that the reopened Track F step 5 pointed at.
 **Within the productive band, nothing predicts `achieved`** (106 in-band SATs, all |rho| < 0.22):
 
@@ -2715,3 +2722,108 @@ n=1.
 **The screen was right, for what that is worth.** `road_pressure(FR17) = 0.627` returned
 UNCERTAIN -- outside the 0.40/0.43 range that worked and below the 0.89 that failed. FR17 does
 work, just not better than the old family. An honest "uncertain" for a genuinely middling case.
+
+## CORRECTION: the placement objective was closed on a degenerate proxy — it is the biggest lever since roads-first (2026-11-11)
+
+**What was believed.** The 2026-07-21 Stage-0 study found a real ~5-road "oracle gap" between
+placements on one skeleton, but concluded no proxy could capture it (P2 "subtree" rho −0.05)
+and closed the lever. Later entries built on that: "achieved is luck-of-the-solution",
+"the residual is CP-SAT seed noise, attack it with more seeds", and the RL/bandit closure
+("within the band nothing predicts achieved").
+
+**What was wrong.** P2 kept *every* skeleton cell any consumer touches, plus their paths.
+In a dense packing every skeleton cell is touched, so P2 == k for essentially every
+placement — measured **P2 = 105 = k** on the 94-record's own placement. A constant cannot
+correlate with anything; the study measured nothing. The right quantity is the *minimum*
+set of skeleton cells, closed under the path to the TH, such that each consumer borders at
+least one — a choice per consumer, not a union.
+
+**The fix is a cheap, exact CP-SAT objective** (`foeopt.roads_first.minimize_needed`):
+`needed[c]` booleans with `needed[c] => needed[parent(c)]`, each anchor option forces
+`OR(needed on its border)`, `Minimize(sum needed)`. O(k) extra booleans — not next-things
+#6's memory-catastrophic joint model. Cold it found nothing in 120 s on darkzig; **hinted
+from the feasibility probe's placement it improves immediately**, so it runs as a second
+phase after `probe()`.
+
+**Measured.**
+- On stored record skeletons (120 s x 12 threads, hinted from the record placement):
+  darkzig 97 -> **90**, 94 -> **91**, 99 -> 97, 98 -> 98; FR16 76 -> **71**. All verified
+  (exact_route OPTIMAL == route, valid, 0 rotated, full inventory). `docs/records/*objective*`.
+- End-to-end, shipped preset, 600 s boxes, strictly sequential, paired repeats:
+
+  | city | off | on (objective_limit=probe_limit) |
+  |---|---|---|
+  | darkzig | 99 / 99 | **94 / 94** |
+  | FR16 | 77 / 77 | **75 / 74** |
+  | FR17 | 115 / 115 | 115 / **109** (exact finish: **108**, new FR17 best) |
+
+  Never worse, better in 5/6 pairs; darkzig now ties its old all-time record in one user box.
+  Adopted in `BEST_PRESET`.
+
+**A defect the smoke test caught before the A/B:** probe + objective can exceed a 35% level
+slice, and slice expiry terminates the pool, killing every in-flight SAT — FR16 at a 60 s box
+found **nothing** with the objective on. Fixed by putting the slice deadline in the payload
+and clamping the objective to it (`time.monotonic` is system-wide on Linux). Same defect
+class as 2026-07-31: *every phase inside a box must take the remaining budget as input.*
+
+**Lessons.**
+1. **Before a null result closes a lever, check the metric is not constant on the
+   population.** One `len(set(values))` would have caught P2. This is the same rule as the
+   2026-07-30 OOD entry ("plot the statistic on the candidate pool") applied one step earlier.
+2. **When a study finds a real gap but no proxy, try the exact objective before giving up on
+   the gap.** The gap was the finding; the proxies were the hypothesis. The study kept the
+   wrong one.
+3. **A "noise" conclusion is only as good as the search that produced the noise.** "Seed luck"
+   was the variance of a solver asked a yes/no question. Asked to optimise, the variance became
+   a 4-7 road improvement.
+4. `route()` leaves a road on the table in 9/12 A/B layouts (exact_route one lower). Cheap to
+   collect: `exact_finish`.
+
+## The item model's symmetry was the "big/3x3-heavy city" wall: position indexing decides in 0.2 s what timed out at 30 s (2026-11-11)
+
+**Diagnosis (from the review).** `probe()` gave every consumer its own (x, y) pair +
+NoOverlap2D. FR17 has 52 identical 3x3s among 77 consumers, FR24 81 of 146: N identical
+items = N! equivalent assignments, which wrecks both proving and finding. The 2026-07-16
+symmetry-breaking attempt (reified lex ordering) was a weak patch on the same encoding, so
+its negative result did not transfer.
+
+**Fix.** Index by POSITION: one boolean per (size class, anchor), a count per class, at most
+one coverer per cell. No identity, no permutation symmetry. Same constraints, so UNSAT is a
+proof (agreement test over random small instances).
+
+**Measured.**
+- FR17 k=121, 11 band skeletons, 30 s x 12 threads: item **11/11 UNKNOWN**; position decided
+  **all 11 in 0.1-0.3 s** (6 UNSAT, 5 SAT, legal layouts at 113-115).
+- End to end, BEST_PRESET otherwise identical, 600 s, paired:
+  darkzig 90/93 -> **88/87**, FR16 74/73 -> **68/68**, FR17 106/108 -> **105/105**; every
+  position run finished early (0.67-0.84x) because levels get DECIDED. Adopted.
+
+**Lessons.**
+1. **"Bigger / more optimized cities fail" was partly an encoding artefact,** not geometry:
+   the same skeletons are easy under a symmetry-free model. Before blaming the instance,
+   check whether the formulation has a symmetry the instance amplifies.
+2. **A closed lever's negative result transfers only to the same mechanism.** "Symmetry
+   breaking made it worse" was about reified lex constraints, not about symmetry.
+
+## Two more city-specific dead ends found by running the preset on unmeasured cities (2026-11-11)
+
+- **FR24: the quality band is empty at k >= 220** (0 skeletons per level), so the run ended
+  FAMILY_TOO_WEAK in 4 s without a single probe. A filter calibrated on two cities can be the
+  whole failure on a third. Fixed: top up with unbanded skeletons below 10 per level
+  (below every measured city's count, so measured behaviour is unchanged).
+- **The user's 97%-full city:** auto k_start = 145 = k_max (all the slack), so the walk had
+  nowhere to climb, the one level ended UNDERSAMPLED and the run gave up at 0.3x of the box.
+  Two open issues: the walk should keep descending/probing instead of stopping, and at 3
+  cells of slack fillers must be inside the CP-SAT model (the position encoding makes that
+  cheap to add: fillers are just more size classes with no road requirement).
+
+## Depth-matched skeleton gaps: REFUTED (2026-11-11)
+
+The review hypothesised that `NONUNIFORM_GAPS=(10,18)` wastes strips on depth-3-dominated
+cities (ideal pitch 7). It was untestable under the item model (everything UNKNOWN); the
+position model made it a one-minute test. 20 skeletons per cell, position probes at 10 s:
+FR24 k=210/230/250 -> 0 legal layouts for 10-18, 6-8 and 7-10 alike; FR17 k=105/113/121 ->
+the only legal layout came from the DEFAULT 10-18 (111). Not a lever at this sample size.
+(Run overlapped one A/B cell at nice; affects that cell's timing, not these verdicts, which
+are mostly proven UNSAT.) **The reasoning was plausible and wrong; the fast model is what
+made checking it cheap enough to do before building anything.**
