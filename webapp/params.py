@@ -98,6 +98,14 @@ OPTION_SPECS: list[dict] = [
                 "better, fully valid layout. 0 = off.",
     },
     {
+        "name": "road_witness", "cli": "--road-witness", "type": "bool",
+        "default": False, "advanced": True,
+        "group": "search", "label": "Keep the solver's roads",
+        "help": "After each placement objective, also try the road network the "
+                "solver itself selected, and keep it when it is smaller than the "
+                "greedy re-route and every building still fits.",
+    },
+    {
         "name": "exact_finish", "cli": "--exact-finish", "type": "bool",
         "default": False, "advanced": True,
         "group": "budget", "label": "Exact road finish",

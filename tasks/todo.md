@@ -1088,3 +1088,19 @@ Data: `scripts/_rebase_ab.jsonl`. Exposed as option `rebase_s` (webapp, CLI `--r
 (checked 2026-11-12): the verify re-routes ignored the 2x2 two-lane tile, which is illegal
 (`two_lane_not_2x2`). With the tile kept, exact_route proves the delivered count optimal
 (darkzig 88, FR16 67). Both verify scripts now keep the tile. Next: Codex T1.
+
+## 2026-11-12: Codex T1 -- keep the objective's road witness
+
+**Hypothesis.** `minimize_needed` selects a TH-closed road forest (`needed[c]`) but returns
+positions only; `validate` then greedy-routes. Phase B saw darkzig route ~1.3 roads above the
+objective in 70% of solves. Caveat to check first: the objective omits 2x2 tile cells that lie on
+the skeleton but are not `needed`, so part of that gap may be counting, not routing.
+
+- [ ] Measure first: witness network (needed + tile, pruned) vs greedy route on darkzig/FR16/FR17
+      objective solves. Stop here if the witness is never smaller.
+- [ ] `minimize_needed` puts the selected cells in `diag["witness"]` (both models; only on SAT).
+- [ ] `validate(..., witness=)`: legal pruned witness network as a second candidate; try the
+      smaller network first, fall back to the other if fillers fail; greedy wins ties.
+- [ ] Wire into worker objective, objective polish, rebased polish.
+- [ ] Tests (tests/roads_first/test_road_witness.py).
+- [ ] A/B `witness` vs `rebase` (current preset), 600 s + 120 s, 2 reps, darkzig/FR16/FR17.

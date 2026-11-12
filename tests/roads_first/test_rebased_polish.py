@@ -74,11 +74,11 @@ def test_accepts_strict_improvement_then_rebases_once_more(monkeypatch):
                      roads={(2, 2): 1})
     calls = []
 
-    def fake_min(pat, region, consumers, pos, limit, workers, model):
+    def fake_min(pat, region, consumers, pos, limit, workers, model, diag=None):
         calls.append(pat.roads)
         return dict(pos)
 
-    def fake_validate(layout, pat, pos, exact_repair, exact_workers):
+    def fake_validate(layout, pat, pos, exact_repair, exact_workers, witness=None):
         return ("OK", better, 1)
 
     monkeypatch.setattr(ip, "minimize_needed", fake_min)

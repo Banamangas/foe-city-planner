@@ -100,14 +100,17 @@ def polish_rebased(search, incumbent: Layout, achieved: int, end: float,
             row["skipped"] = "hint"
             break
         t0 = time.monotonic()
+        odiag: dict = {}
         opos = minimize_needed(pat, region, consumers, pos, limit=limit,
-                               workers=threads, model="position")
+                               workers=threads, model="position", diag=odiag)
         row["solve_s"] = round(time.monotonic() - t0, 1)
         if opos is None:
             break
         vst, vlay, vach = validate(search.layout, pat, opos,
                                    exact_repair=min(search.exact_repair, limit),
-                                   exact_workers=threads)
+                                   exact_workers=threads,
+                                   witness=odiag.get("witness")
+                                   if getattr(search, "road_witness", False) else None)
         row["status"] = vst
         if vst != "OK":
             break

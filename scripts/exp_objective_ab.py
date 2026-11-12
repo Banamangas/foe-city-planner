@@ -66,6 +66,10 @@ ARMS = {
     # Codex T4: the preset + 20 s of the polish window for rebased polish
     "rebase": {"probe_limit": 30.0, "objective_limit": 30.0, "objective_polish": 0.3,
                "exact_finish": True, "probe_model": "position", "rebase_s": 20.0},
+    # Codex T1: the current preset (rebase) + the objective's own road witness
+    "witness": {"probe_limit": 30.0, "objective_limit": 30.0, "objective_polish": 0.3,
+                "exact_finish": True, "probe_model": "position", "rebase_s": 20.0,
+                "road_witness": True},
 }
 
 
