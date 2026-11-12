@@ -1213,13 +1213,10 @@ _WORKER_MODEL: str = "item"
 # Seconds kept back for validate() after the objective solve, and the smallest
 # objective budget worth starting (hinted, it improves within seconds).
 OBJECTIVE_MARGIN_S = 3.0
-DEEPEN_FACTOR = 3          # probe/objective limit multiplier per deepening round
-DEEPEN_MAX_S = 90.0        # ...capped here (the old per-city long limit)
 BOUNDARY_LEVELS = 4        # levels probed below the walk's lowest when nothing was feasible
 EXACT_FINISH_S = 10.0      # exact_route cap on the final layout
 EXACT_FINISH_MIN_S = 1.0  # below this, skip exact finish rather than start it
 OBJECTIVE_MIN_S = 2.0
-HARVEST_POLISH_S = 10.0   # polish time kept after each harvest probing batch
 
 
 def _worker_init(layout: Layout, probe_limit: float, probe_workers: int,
@@ -1431,8 +1428,7 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
                         score_threshold=None,
                         filler_stats: dict | None = None,
                         coverage: dict | None = None,
-                        runtime: dict | None = None,
-                        given: dict | None = None) -> dict[int, tuple[str, int | None]]:
+                        runtime: dict | None = None) -> dict[int, tuple[str, int | None]]:
     """Generate + probe several k-levels' patterns in one shared pool dispatch
     instead of draining one level's ~200 patterns before the next level's are
     even generated. `_run_probe`'s payload/result already carry `k`, so this
@@ -1474,14 +1470,9 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
             gen_kwargs["quality_index_band"] = getattr(params, "quality_index_band", None)
         elif family == "comb" and getattr(params, "comb_modes", None) is not None:
             gen_kwargs["modes"] = params.comb_modes
-        if given and k in given:
-            # retry specific skeletons (deepening: ones that timed out at a
-            # shorter limit) instead of drawing new ones from the rng stream
-            pats = list(given[k])
-        else:
-            pats = gen_fn(region, th.width, th.length, k, rng, params.patterns,
-                          **gen_kwargs)
-        if not (given and k in given) and (family == "nonuniform" and gen_kwargs.get("quality_index_band") is not None
+        pats = gen_fn(region, th.width, th.length, k, rng, params.patterns,
+                      **gen_kwargs)
+        if (family == "nonuniform" and gen_kwargs.get("quality_index_band") is not None
                 and len(pats) < BAND_MIN_PATTERNS):
             # The band was calibrated on darkzig/FR16 and can be EMPTY elsewhere:
             # on FR24 it yields 0 skeletons at every k >= 220, so every level
@@ -1561,9 +1552,6 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
                     recorder(k, achieved, pat, vlay)
         elif status in ("UNKNOWN", "ROUTE_FAIL", "INVALID", "SAT_FILLER_FAIL", "SAT_ROTATED"):
             st["saw_nonproof_failure"] = True
-            unknown_recorder = getattr(params, "unknown_recorder", None)
-            if status == "UNKNOWN" and unknown_recorder is not None:
-                unknown_recorder(k, pat)
         return time.monotonic() > effective_deadline
 
     if pool is None:
@@ -1661,25 +1649,13 @@ class RoadsFirstSearch:
                  exact_finish: bool = False,
                  probe_model: str = "position",
                  keep_chains: bool = True,
-                 military: str = "connect",
-                 deepen: bool = False,
-                 deepen_retry: bool = False,
-                 objective_polish_fill: bool = False,
-                 objective_polish_keep: int | None = None,
-                 objective_polish_harvest: bool = False):
+                 military: str = "connect"):
         # Linked chains are placed as rigid composites so their links survive
         # (user-confirmed rule, 2026-11-11); every emitted layout is expanded
         # back to real buildings inside validate().
         if military not in MILITARY_POLICIES:
             raise ValueError(f"military must be one of {MILITARY_POLICIES}")
         self.military = military
-        self.deepen = deepen
-        self.deepen_retry = deepen_retry
-        self.objective_polish_fill = objective_polish_fill
-        # SAT candidates stored for polish (default top x 3). Polish solves are
-        # proven optimal in ~0.5 s on FR17, so a wider store is cheap to use.
-        self.objective_polish_keep = objective_polish_keep
-        self.objective_polish_harvest = objective_polish_harvest
         self.source_layout = layout
         if military == "unconnected":
             # Explicit per-run choice: two-lane buildings are left off the road
@@ -1779,24 +1755,19 @@ class RoadsFirstSearch:
                 "optimal": res.optimal}
 
     def _apply_objective_polish(self, cands, best, on_improvement, end,
-                                should_stop=None, fill_all: bool = False) -> dict:
+                                should_stop=None) -> dict:
         """Re-solve the top distinct SAT skeletons with minimize_needed, all
         solver threads, splitting the time left before `end` evenly across the
         candidates still to go. Keeps only fully validated strict improvements."""
         region = set(self.layout.region.cells)
         consumers = self.layout.road_needing()
         threads = max(1, self.workers * self.probe_workers)
-        top = cands if fill_all else cands[:max(1, self.objective_polish_top)]
+        top = cands[:max(1, self.objective_polish_top)]
         tried, after, per = 0, best, []
-        # objective_polish_fill: the top-N pass keeps its exact time split; if
-        # solves end early (CP-SAT proves them optimal), the time left goes to
-        # the next stored candidates instead of ending the run at ~0.63x.
-        passes = [top] + ([cands[len(top):]] if self.objective_polish_fill else [])
-        work = [(group, i, c) for group in passes for i, c in enumerate(group)]
-        for group, i, (ach, k, pat, pos) in work:
+        for i, (ach, k, pat, pos) in enumerate(top):
             if should_stop is not None and should_stop():
                 break
-            limit = (end - time.monotonic() - OBJECTIVE_MARGIN_S) / (len(group) - i)
+            limit = (end - time.monotonic() - OBJECTIVE_MARGIN_S) / (len(top) - i)
             if limit < OBJECTIVE_MIN_S:
                 break
             tried += 1
@@ -1815,6 +1786,7 @@ class RoadsFirstSearch:
                         after = vach
                         if on_improvement is not None:
                             on_improvement(vlay, k, vach)
+            # solve_s < limit_s means CP-SAT proved the skeleton's optimum early
             per.append({"k": k, "before": ach, "after": got, "limit_s": round(limit, 1),
                         "solve_s": round(solve_s, 1)})
         return {"before": best, "after": after, "tried": tried,
@@ -1908,15 +1880,13 @@ class RoadsFirstSearch:
         filler_stats = new_filler_stats()
         level_coverage: dict[int, dict] = {}
 
-        pool_limit = {"probe": self.probe_limit, "objective": self.objective_limit}
-
         def _new_pool():
             return multiprocessing.Pool(
                 self.workers,
                 initializer=_worker_init,
-                initargs=(layout, pool_limit["probe"], self.probe_workers,
+                initargs=(layout, self.probe_limit, self.probe_workers,
                          self.symmetry_breaking, self.hints, self.stub_priority,
-                         None, self.exact_repair, pool_limit["objective"],
+                         None, self.exact_repair, self.objective_limit,
                          self.probe_model))
 
         pool = _new_pool() if self.workers > 1 else None
@@ -1968,17 +1938,10 @@ class RoadsFirstSearch:
                 return
             sat_cands.append((achieved, k, pat, pos))
             sat_cands.sort(key=lambda c: (c[0], c[1]))
-            del sat_cands[self.objective_polish_keep
-                          or max(1, self.objective_polish_top) * 3:]
+            del sat_cands[max(1, self.objective_polish_top) * 3:]
 
         if objective_reserve > 0:
             params.sat_recorder = _record_sat
-
-        # deepen_retry: skeletons whose probe timed out, with the limit they had
-        timed_out: dict[int, list] = {}
-        if self.deepen and self.deepen_retry:
-            params.unknown_recorder = (
-                lambda kk, pat: timed_out.setdefault(kk, []).append((pat, params.probe_limit)))
 
         def _walk_end():
             """The walk leaves the objective-polish reserve free only once there
@@ -2031,7 +1994,7 @@ class RoadsFirstSearch:
             params.deadline = _walk_end()
             remaining = params.deadline - time.monotonic()
             params.slice_deadline = (time.monotonic()
-                                     + max(params.probe_limit,
+                                     + max(self.probe_limit,
                                            remaining * self.level_slice_frac))
 
         def _needs_probe(kk):
@@ -2128,152 +2091,6 @@ class RoadsFirstSearch:
             return None
 
         boundary_info: dict = {"probed": []}
-
-        def _harvest(objective_info):
-            """objective_polish_harvest: polish ends FR17 at ~0.63x because a whole
-            600 s walk finds only ~10 distinct SAT skeletons, and its record (103)
-            is ONE of them (k=116) improved by the polish objective. Spend the
-            rest of the reserve drawing fresh skeletons at the levels that gave
-            the best candidates, polishing each new SAT as it comes."""
-            nonlocal pool
-            polished = {c[2].roads for c in sat_cands}
-            info = {"rounds": []}
-            # A pool killed at the walk deadline is left dead on purpose
-            # (_restore_pool skips rebuilding once the walk is over), and its
-            # flag is already consumed: start harvest on a fresh pool.
-            runtime.pop("pool_terminated", None)
-            if pool is not None:
-                pool.terminate()
-                pool = _new_pool()
-            margin = self.probe_limit + OBJECTIVE_MARGIN_S + HARVEST_POLISH_S
-            while time.monotonic() + margin < polish_deadline:
-                if should_stop is not None and should_stop():
-                    break
-                ks = []
-                for c in sat_cands:              # sorted best first
-                    if c[1] not in ks:
-                        ks.append(c[1])
-                ks = ks[:max(1, self.concurrent_levels)]
-                if not ks:
-                    break
-                if runtime.pop("pool_terminated", False) and pool is not None:
-                    pool = _new_pool()
-                params.deadline = polish_deadline - HARVEST_POLISH_S
-                params.slice_deadline = None
-                _probe_levels_batch(layout, region, consumers, ks, rng, params,
-                                    lambda r: None, pool=pool,
-                                    on_improvement=on_improvement, corpus=corpus,
-                                    scorer=self.scorer,
-                                    score_threshold=self.score_threshold,
-                                    filler_stats=filler_stats,
-                                    coverage=level_coverage, runtime=runtime)
-                new = [c for c in sat_cands if c[2].roads not in polished]
-                polished |= {c[2].roads for c in new}
-                got = self._apply_objective_polish(
-                    new, objective_info["after"], on_improvement, polish_deadline,
-                    should_stop, fill_all=True) if new else None
-                if got is not None and got["after"] is not None and (
-                        objective_info["after"] is None
-                        or got["after"] < objective_info["after"]):
-                    objective_info["after"] = got["after"]
-                info["rounds"].append({"ks": ks, "new": len(new),
-                                       "tried": got["tried"] if got else 0,
-                                       "after": objective_info["after"]})
-            return info
-
-        def _deepen(hi):
-            """Spend the walk's leftover time instead of stopping (Phase B: FR16/FR17
-            ended at 0.3-0.65x of the box; at probe_limit 10, FR17 stopped at 175 s
-            with levels 105-114 merely INCONCLUSIVE). Each round re-probes the
-            unresolved levels below the best feasible k, nearest first, on FRESH
-            skeletons (the rng stream continues), with the probe and objective
-            limits multiplied by DEEPEN_FACTOR (capped at DEEPEN_MAX_S). A level
-            that turns feasible becomes the new bound. Stops at the walk deadline,
-            leaving the objective-polish reserve whole. With
-            deepen_retry, a level first retries the skeletons that TIMED OUT at a
-            shorter limit (the walk's 10 s probes drop hard-but-good skeletons
-            the 30 s preset solves) before drawing fresh ones."""
-            nonlocal pool
-            if hi is None or results.get(hi, ("", None))[0] != "FEASIBLE":
-                return None
-            # It must NOT borrow the objective-polish reserve: FR17's 103 is made
-            # there (k=116 skeleton, 106 -> 103 in ~70 s with every thread).
-            # Borrowing it (v3) left polish 0 tries and FR17 at 106.
-            info = {"rounds": [], "start_hi": hi}
-            limit = self.probe_limit
-            step = max(1, self.concurrent_levels)
-            while not _should_stop():
-                # one round = one sweep over every unresolved level below hi
-                unknown = sorted((kk for kk, r in results.items()
-                                  if kk < hi and r[0] in ("INCONCLUSIVE", "UNDERSAMPLED")),
-                                 reverse=True)
-                if hi > 1 and hi - 1 not in results:
-                    unknown.insert(0, hi - 1)      # a new bound opens an unprobed level
-                # Also re-solve the level that holds the best road count, and the
-                # bound: on FR17 (600 s) the 103 comes from a longer objective at
-                # k~116, not from a lower k (deepening reached k=114 yet kept 105).
-                scored = [(r[1], kk) for kk, r in results.items() if r[1] is not None]
-                resolve = {hi} | ({min(scored)[1]} if scored else set())
-                todo = sorted(resolve, reverse=True) + [kk for kk in unknown
-                                                        if kk not in resolve]
-                new_limit = min(limit * DEEPEN_FACTOR, max(DEEPEN_MAX_S, self.probe_limit))
-                if new_limit != limit:
-                    # worker limits are baked in at pool init: rebuild once per step
-                    limit = new_limit
-                    pool_limit["probe"] = limit
-                    pool_limit["objective"] = limit if self.objective_limit > 0 else 0.0
-                    params.probe_limit = limit
-                    params.objective_limit = pool_limit["objective"]
-                    if pool is not None:
-                        pool.terminate()
-                        pool = _new_pool()
-                status, retried = {}, {}
-                for i in range(0, len(todo), step):
-                    ks = [kk for kk in todo[i:i + step] if kk < hi or kk in resolve]
-                    if not ks:
-                        continue
-                    if _should_stop():
-                        break
-                    given = {}
-                    for kk in ks:
-                        retry = [p for p, lim in timed_out.get(kk, ()) if lim < limit]
-                        if retry:
-                            given[kk] = retry
-                            timed_out[kk] = [(p, lim) for p, lim in timed_out[kk]
-                                             if lim >= limit]
-                            retried[kk] = retried.get(kk, 0) + len(retry)
-                    _set_slice()
-                    batch = _probe_levels_batch(layout, region, consumers, ks, rng,
-                                                params, lambda r: None, pool=pool,
-                                                on_improvement=on_improvement,
-                                                corpus=corpus, scorer=self.scorer,
-                                                score_threshold=self.score_threshold,
-                                                filler_stats=filler_stats,
-                                                coverage=level_coverage, runtime=runtime,
-                                                given=given or None)
-                    _restore_pool()
-                    for kk, res in batch.items():
-                        if results.get(kk, ("", None))[0] != "FEASIBLE":
-                            results[kk] = res
-                        status[kk] = res[0]
-                        if on_status is not None:
-                            on_status(kk, res[0], 0, 0)
-                    ok = [kk for kk in ks if batch[kk][0] == "FEASIBLE"]
-                    if ok:
-                        hi = min(hi, min(ok))
-                info["rounds"].append({"limit": limit, "status": status,
-                                       "retried": retried})
-            info["end_hi"] = hi
-            if limit != self.probe_limit:
-                # later phases size their stops by self.probe_limit: restore it
-                pool_limit["probe"], pool_limit["objective"] = (self.probe_limit,
-                                                                self.objective_limit)
-                params.probe_limit, params.objective_limit = (self.probe_limit,
-                                                              self.objective_limit)
-                if pool is not None:
-                    pool.terminate()
-                    pool = _new_pool()
-            return info
 
         try:
             if self.corpus_dir:
@@ -2385,9 +2202,6 @@ class RoadsFirstSearch:
                 else:
                     lo = mid
 
-            deepen_info = None
-            if self.deepen and not _should_stop():
-                deepen_info = _deepen(hi)
             best = min((r[1] for r in results.values() if r[1] is not None), default=None)
             objective_info = None
             profile.event("walk_end")
@@ -2397,11 +2211,6 @@ class RoadsFirstSearch:
                         sat_cands, best, on_improvement, polish_deadline, should_stop)
                 if objective_info["after"] is not None and objective_info["after"] < best:
                     best = objective_info["after"]
-                if self.objective_polish_harvest:
-                    with profile.timed("finish_harvest"):
-                        objective_info["harvest"] = _harvest(objective_info)
-                    if objective_info["after"] is not None and objective_info["after"] < best:
-                        best = objective_info["after"]
             polish_info = None
             if best is not None and self.seed_polish > 0:
                 with profile.timed("finish_seed_polish"):
@@ -2425,7 +2234,6 @@ class RoadsFirstSearch:
                     "walk_complete": not truncated, "deadline_hit": _should_stop(),
                     "seed_polish": polish_info,
                     "boundary_descent": boundary_info["probed"],
-                    "deepen": deepen_info,
                     "profile": profile.as_dict(self.workers),
                     "objective_polish": objective_info,
                     "exact_finish": exact_info,

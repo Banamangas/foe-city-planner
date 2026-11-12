@@ -63,34 +63,6 @@ ARMS = {
              "exact_finish": True, "probe_model": "position"},
     "pl5": {"probe_limit": 5.0, "objective_limit": 5.0, "objective_polish": 0.3,
             "exact_finish": True, "probe_model": "position"},
-    # Phase C: fast 10 s first pass, then re-probe unknown levels below the best
-    # with 30 s, then 90 s, until the box is spent ("use the leftover box")
-    "deep10": {"probe_limit": 10.0, "objective_limit": 10.0, "objective_polish": 0.3,
-               "exact_finish": True, "probe_model": "position", "deepen": True},
-    # deep10 + retry the walk's timed-out skeletons at 30 s / 90 s first
-    "deep10r": {"probe_limit": 10.0, "objective_limit": 10.0, "objective_polish": 0.3,
-                "exact_finish": True, "probe_model": "position", "deepen": True,
-                "deepen_retry": True},
-    # the preset + objective polish keeps going over the stored candidates
-    # while time remains (FR17's 103 is made in polish; it ends at ~0.63x)
-    "fill": {"probe_limit": 30.0, "objective_limit": 30.0, "objective_polish": 0.3,
-             "exact_finish": True, "probe_model": "position",
-             "objective_polish_fill": True},
-    # fill over a wide candidate store (40 instead of 9)
-    "fillw": {"probe_limit": 30.0, "objective_limit": 30.0, "objective_polish": 0.3,
-              "exact_finish": True, "probe_model": "position",
-              "objective_polish_fill": True, "objective_polish_keep": 40},
-    "pl10fw": {"probe_limit": 10.0, "objective_limit": 10.0, "objective_polish": 0.3,
-               "exact_finish": True, "probe_model": "position",
-               "objective_polish_fill": True, "objective_polish_keep": 40},
-    # fillw + harvest: fresh skeletons at the best levels, each polished
-    "harvest": {"probe_limit": 30.0, "objective_limit": 30.0, "objective_polish": 0.3,
-                "exact_finish": True, "probe_model": "position",
-                "objective_polish_fill": True, "objective_polish_keep": 40,
-                "objective_polish_harvest": True},
-    # the preset's 30 s first pass (keeps FR17's 103 path) + deepening
-    "deep30": {"probe_limit": 30.0, "objective_limit": 30.0, "objective_polish": 0.3,
-               "exact_finish": True, "probe_model": "position", "deepen": True},
 }
 
 
@@ -166,7 +138,6 @@ def run_cell(arm, name, box, rep, outdir):
     try:
         res = RoadsFirstSearch(lay, **kwargs).run(on_improvement=on_imp)
         rec["profile"] = res.get("profile")
-        rec["deepen"] = res.get("deepen")
         rec["results"] = {k: v[0] for k, v in (res.get("results") or {}).items()}
         rec.update(ok=True, best=res.get("best_achieved"), verdict=res.get("verdict"),
                    best_k=best["k"], best_t=best["t"],
