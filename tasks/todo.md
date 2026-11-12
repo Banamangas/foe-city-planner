@@ -1084,6 +1084,7 @@ never skipped for lack of time. Records: darkzig 88 and FR16 67 (rebased from th
 records, verified from file). FR17 does not move: its rebased solve proves the same 103.
 Data: `scripts/_rebase_ab.jsonl`. Exposed as option `rebase_s` (webapp, CLI `--rebase-s`).
 
-Observed, not yet acted on: darkzig's verify re-route sometimes beats the accepted count
-(accepted 89, `exact_route` 87-88): exact finish may be skipping or losing to its 10 s cap.
-Worth a look next (cheap), then Codex T1 (solver road witness).
+~~Observed: darkzig's verify re-route sometimes beats the accepted count.~~ **Not real**
+(checked 2026-11-12): the verify re-routes ignored the 2x2 two-lane tile, which is illegal
+(`two_lane_not_2x2`). With the tile kept, exact_route proves the delivered count optimal
+(darkzig 88, FR16 67). Both verify scripts now keep the tile. Next: Codex T1.
