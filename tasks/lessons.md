@@ -2855,3 +2855,10 @@ remaining budget" must say where the budget goes. Bound the exploration window, 
 finishing started work over opening new levels.** The coverage counters (65/200 probed,
 no SAT) then show the real blocker: consumer placement itself fails at 97% density.
 That is a modelling gap (fillers outside the model), not a scheduling one.
+
+## 2026-11-12: a profile that does not cover a phase cannot prove it is cheap
+- I read "objective polish share ~0%" off the WORKER-time profile, but polish runs in
+  the parent. It is in fact where FR17's record is made; a change built on the wrong
+  claim (deepening borrowing the polish reserve) cost 2 roads.
+- Rule: before calling a phase negligible, confirm the profile instruments it, and
+  check the per-phase outcome rows (before/after) rather than only the time shares.

@@ -89,3 +89,14 @@ problem; the controller's stopping rule is. darkzig 89 (120 s, pl10) is a new le
 budget left, re-probe the unknown levels below the best with an escalating limit
 (10 -> 30 -> 90 s) on fresh skeletons until the box is spent (Phase C, "use the
 leftover box").
+
+## Correction (2026-11-12): objective polish is NOT negligible
+
+Finding 5 above said polish "converges almost at once (its share is about 0%)".
+Wrong: polish runs in the parent process with every thread, so the worker-time
+profile never counts it. The run rows (`objective_polish.per_skeleton`) show that
+**FR17's 103 is made in polish**: every preset run's walk ends at 105-106, then the
+k=116 skeleton is re-solved for ~70 s and gives 103. Its top-3 solves do finish
+early (proven optimal), which is why the run ends at ~0.63x. Consequences:
+- deepening must never borrow the polish reserve (deep30 FR17 600 s: 106,106, polish 0 tries);
+- the "leftover box" lever is polishing MORE stored candidates (`objective_polish_fill`).
