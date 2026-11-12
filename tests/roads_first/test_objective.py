@@ -452,8 +452,43 @@ def test_deepening_reprobes_unknown_levels_with_a_growing_limit(monkeypatch):
     d = res["deepen"]
     assert d["start_hi"] == 20 and d["end_hi"] == 18
     # the bound (20, best roads) is re-solved first, then unknowns nearest-first
-    assert d["rounds"][0] == {"limit": 30, "status": {20: "FEASIBLE", 19: "INCONCLUSIVE",
-                                                      18: "FEASIBLE", 16: "INCONCLUSIVE"}}
+    assert d["rounds"][0]["limit"] == 30
+    assert d["rounds"][0]["status"] == {20: "FEASIBLE", 19: "INCONCLUSIVE",
+                                        18: "FEASIBLE", 16: "INCONCLUSIVE"}
     assert list(d["rounds"][0]["status"])[:2] == [20, 19]
     assert d["rounds"][1]["limit"] == 90 and 17 in d["rounds"][1]["status"]
     assert (18, 30) in seen and res["profile"]["wall_s"] >= 2   # used the box
+
+
+def test_deepen_retry_reprobes_the_skeletons_that_timed_out(monkeypatch):
+    """deepen_retry: the walk's 10 s probes drop hard skeletons as UNKNOWN; the
+    deepening round retries exactly those at 30 s before drawing fresh ones."""
+    lay, pat = _corridor_layout(1)
+    givens = []
+
+    def fake_batch(layout, region, consumers, ks, rng, params, log, pool=None,
+                   given=None, **kw):
+        time.sleep(0.01)
+        givens.append(given)
+        out = {}
+        for k in ks:
+            if k >= 20:
+                kw["on_improvement"](lay, k, k)
+                out[k] = ("FEASIBLE", k)
+            elif given and k in given and params.probe_limit >= 30:
+                assert given[k] == ["hard19"]
+                kw["on_improvement"](lay, k, k)
+                out[k] = ("FEASIBLE", k)
+            else:
+                if k == 19 and params.probe_limit < 30 and not given:
+                    params.unknown_recorder(k, "hard19")     # timed out at 10 s
+                out[k] = ("INCONCLUSIVE", None)
+        return out
+
+    monkeypatch.setattr(rf, "_probe_levels_batch", fake_batch)
+    res = rf.RoadsFirstSearch(lay, time_box=3, workers=1, k_start=20, probe_limit=10,
+                              objective_polish=0, deepen=True, deepen_retry=True).run()
+    assert res["best_achieved"] == 19
+    first = res["deepen"]["rounds"][0]
+    assert first["retried"] == {19: 1} and first["status"][19] == "FEASIBLE"
+    assert {19: ["hard19"]} in givens
