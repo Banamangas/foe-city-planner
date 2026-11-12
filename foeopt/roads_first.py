@@ -500,7 +500,7 @@ from foeopt.chains import compose, expand, expand_buildings
 from foeopt.legality import MILITARY_POLICIES
 from foeopt.profiling import Profile
 from foeopt.packing import Grid, first_fit
-from foeopt.router import RouteError, route
+from foeopt.router import RouteError, _prune, route
 from foeopt.validate import canonical_dims, is_valid, rotated_buildings
 
 
@@ -1021,6 +1021,8 @@ def minimize_needed(pattern: Pattern, region: set[Cell], consumers: list[Buildin
                     objective_bound=solver.BestObjectiveBound() if ok else None)
     if not ok:
         return None
+    if diag is not None:
+        diag["witness"] = frozenset(c for c, v in needed.items() if solver.Value(v))
     out = {}
     for b, ol in lits:
         for xy, o in ol:
@@ -1058,7 +1060,11 @@ def _minimize_needed_position(m, needed, pattern, region, consumers, positions,
                     objective_s=round(time.monotonic() - t0, 3),
                     objective=solver.ObjectiveValue() if ok else None,
                     objective_bound=solver.BestObjectiveBound() if ok else None)
-    return _position_solution(solver, lits, classes) if ok else None
+    if not ok:
+        return None
+    if diag is not None:  # the selected forest (Codex T1); tile cells are in positions
+        diag["witness"] = frozenset(c for c, v in needed.items() if solver.Value(v))
+    return _position_solution(solver, lits, classes)
 
 
 def _place_fillers(grid: Grid, fillers: list[Building], cand: Layout) -> list[Building]:
@@ -1113,10 +1119,30 @@ def _place_fillers(grid: Grid, fillers: list[Building], cand: Layout) -> list[Bu
     return unplaced
 
 
+def witness_network(cand: Layout, witness, fixed: dict | None) -> dict | None:
+    """The objective's selected forest (Codex T1) as a road network for `cand`:
+    the `needed` cells at level 1 plus the fixed two-lane tile, pruned like
+    route() output. None unless it is a legal network for `cand` (every cell in
+    the region and off every footprint, every consumer served from the TH)."""
+    if not witness:
+        return None
+    occupied = set()
+    for b in cand.buildings:
+        occupied |= b.footprint.cells()
+    roads = {c: 1 for c in witness}
+    roads.update(fixed or {})
+    if any(c in occupied or c not in cand.region.cells for c in roads):
+        return None
+    roads = _prune(cand, roads, keep=set(fixed or ()))
+    if not is_valid(Layout(cand.region, cand.buildings, cand.townhall, roads)):
+        return None
+    return roads
+
+
 def validate(layout_src: Layout, pattern: Pattern, positions: dict,
              exact_repair: float = 0.0, exact_workers: int = 8,
              exact_objective: str = "count",
-             diag: dict | None = None) -> tuple[str, Layout | None, int]:
+             diag: dict | None = None, witness=None) -> tuple[str, Layout | None, int]:
     """Turn a SAT consumer placement into a full, legal layout.
 
     `diag`, if given, is filled with how the filler stage went -- `placed`,
@@ -1128,6 +1154,14 @@ def validate(layout_src: Layout, pattern: Pattern, positions: dict,
     rescue layouts the greedy packer cannot finish. It runs *only* on layouts
     that would otherwise be thrown away as SAT_FILLER_FAIL, and is hinted with
     the greedy packing so it can never do worse. See foeopt/exact_packing.py.
+
+    `witness` (Codex T1): the skeleton cells `minimize_needed` selected. When
+    their pruned network is legal and SMALLER than the greedy route, it is
+    tried first and the greedy route is the fallback if its fillers fail
+    (a smaller network is not always more packable). Measured 2026-11-12: the
+    witness is never larger, and smaller by 1-3 roads in ~10% of darkzig/FR17
+    objective solves (the earlier "1.3 roads" gap was mostly 2x2 tile cells the
+    objective does not count).
     """
     consumers = layout_src.road_needing()
     fillers = [b for b in layout_src.buildings
@@ -1151,13 +1185,38 @@ def validate(layout_src: Layout, pattern: Pattern, positions: dict,
     try:
         roads = route(cand, fixed=fixed)
     except RouteError:
-        return ("ROUTE_FAIL", None, 0)
+        roads = None
     finally:
         if diag is not None:
             diag["route_s"] = time.monotonic() - t_route
-    cand.roads = roads
-    if not is_valid(cand):
-        return ("INVALID", None, 0)
+    networks = [] if roads is None else [roads]
+    wnet = witness_network(cand, witness, fixed) if witness is not None else None
+    if wnet is not None and (roads is None or len(wnet) < len(roads)):
+        networks.insert(0, wnet)
+    if diag is not None and witness is not None:
+        diag["witness_roads"] = None if wnet is None else len(wnet)
+        diag["greedy_roads"] = None if roads is None else len(roads)
+    if not networks:
+        return ("ROUTE_FAIL", None, 0)
+    if roads is not None and not is_valid(Layout(cand.region, cand.buildings, th, roads)):
+        networks.remove(roads)
+        if not networks:
+            return ("INVALID", None, 0)
+    result = None
+    for net in networks:
+        result = _finish_layout(layout_src, cand, th, placed, fillers, net,
+                                exact_repair, exact_workers, exact_objective, diag)
+        if result[0] == "OK":
+            if diag is not None and witness is not None:
+                diag["witness_used"] = net is wnet
+            break
+    return result
+
+
+def _finish_layout(layout_src, cand, th, placed, fillers, roads, exact_repair,
+                   exact_workers, exact_objective, diag):
+    """Pack the fillers around one road network (validate's second half)."""
+    cand = Layout(cand.region, list(cand.buildings), th, roads)
     region = set(layout_src.region.cells)
     x0, y0, x1, y1 = _bbox(region)
     w, h = x1 + 1, y1 + 1
@@ -1210,6 +1269,7 @@ _WORKER_OBJECTIVE_LIMIT: float = 0.0
 # Below this many banded skeletons a level is topped up with unbanded ones.
 BAND_MIN_PATTERNS = 10
 _WORKER_MODEL: str = "item"
+_WORKER_ROAD_WITNESS: bool = False  # Codex T1: validate() also tries the objective's roads
 # Seconds kept back for validate() after the objective solve, and the smallest
 # objective budget worth starting (hinted, it improves within seconds).
 OBJECTIVE_MARGIN_S = 3.0
@@ -1224,12 +1284,13 @@ def _worker_init(layout: Layout, probe_limit: float, probe_workers: int,
                  stub_priority: bool = False,
                  solver_overrides: dict[str, object] | None = None,
                  exact_repair: float = 0.0, objective_limit: float = 0.0,
-                 model: str = "item") -> None:
+                 model: str = "item", road_witness: bool = False) -> None:
     global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS
     global _WORKER_SYMMETRY_BREAKING, _WORKER_HINTS, _WORKER_STUB_PRIORITY
     global _WORKER_SOLVER_OVERRIDES, _WORKER_EXACT_REPAIR, _WORKER_OBJECTIVE_LIMIT
-    global _WORKER_MODEL
+    global _WORKER_MODEL, _WORKER_ROAD_WITNESS
     _WORKER_MODEL = model
+    _WORKER_ROAD_WITNESS = road_witness
     _WORKER_LAYOUT = layout
     _WORKER_PROBE_LIMIT = probe_limit
     _WORKER_PROBE_WORKERS = probe_workers
@@ -1306,7 +1367,8 @@ def _run_probe(payload: tuple) -> dict:
             ostat, olay, oach = validate(
                 layout, pat, opos,
                 exact_repair=min(_WORKER_EXACT_REPAIR, _WORKER_PROBE_LIMIT),
-                exact_workers=_WORKER_PROBE_WORKERS)
+                exact_workers=_WORKER_PROBE_WORKERS,
+                witness=odiag.get("witness") if _WORKER_ROAD_WITNESS else None)
             phases["objective_validate"] = time.monotonic() - t_val2
             if ostat == "OK":
                 objective_cmp = (odiag.get("objective"), oach,
@@ -1331,7 +1393,7 @@ def _run_probe_seq(payload: tuple) -> dict:
     global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS
     global _WORKER_SYMMETRY_BREAKING, _WORKER_HINTS, _WORKER_STUB_PRIORITY
     global _WORKER_SOLVER_OVERRIDES, _WORKER_EXACT_REPAIR, _WORKER_OBJECTIVE_LIMIT
-    global _WORKER_MODEL
+    global _WORKER_MODEL, _WORKER_ROAD_WITNESS
     pat, k, layout, probe_limit, probe_workers, *rest = payload
     _WORKER_LAYOUT = layout
     _WORKER_PROBE_LIMIT = probe_limit
@@ -1345,10 +1407,12 @@ def _run_probe_seq(payload: tuple) -> dict:
     # Only forwarded when the objective is on: off stays byte-identical.
     deadline = rest[6] if len(rest) > 6 and _WORKER_OBJECTIVE_LIMIT > 0 else None
     _WORKER_MODEL = rest[7] if len(rest) > 7 else "item"
+    _WORKER_ROAD_WITNESS = rest[8] if len(rest) > 8 else False
     try:
         return _run_probe((pat, k, 0) if deadline is None else (pat, k, 0, deadline))
     finally:
         _WORKER_LAYOUT = None
+        _WORKER_ROAD_WITNESS = False
 
 LEVEL_STATUSES = ("FEASIBLE", "INFEASIBLE", "INCONCLUSIVE", "UNDERSAMPLED")
 
@@ -1566,7 +1630,8 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
                                          getattr(params, "exact_repair", 0.0),
                                          getattr(params, "objective_limit", 0.0),
                                          effective_deadline,
-                                         getattr(params, "probe_model", "item")))
+                                         getattr(params, "probe_model", "item"),
+                                         getattr(params, "road_witness", False)))
                 if handle_result(k, result, pat):
                     interrupted = True
                     break
@@ -1650,7 +1715,8 @@ class RoadsFirstSearch:
                  probe_model: str = "position",
                  keep_chains: bool = True,
                  military: str = "connect",
-                 rebase_s: float = 0.0):
+                 rebase_s: float = 0.0,
+                 road_witness: bool = False):
         # Linked chains are placed as rigid composites so their links survive
         # (user-confirmed rule, 2026-11-11); every emitted layout is expanded
         # back to real buildings inside validate().
@@ -1660,6 +1726,8 @@ class RoadsFirstSearch:
         # Codex T4: seconds of the objective-polish window given to re-solving on
         # the incumbent's accepted road network (foeopt/incumbent_polish.py).
         self.rebase_s = rebase_s
+        # Codex T1: validate() also tries the objective's selected roads.
+        self.road_witness = road_witness
         self.source_layout = layout
         if military == "unconnected":
             # Explicit per-run choice: two-lane buildings are left off the road
@@ -1776,14 +1844,16 @@ class RoadsFirstSearch:
                 break
             tried += 1
             t_solve = time.monotonic()
+            odiag: dict = {}
             opos = minimize_needed(pat, region, consumers, pos, limit=limit,
-                                   workers=threads, model=self.probe_model)
+                                   workers=threads, model=self.probe_model, diag=odiag)
             solve_s = time.monotonic() - t_solve
             got = None
             if opos is not None:
                 vst, vlay, vach = validate(self.layout, pat, opos,
                                            exact_repair=min(self.exact_repair, limit),
-                                           exact_workers=threads)
+                                           exact_workers=threads,
+                                           witness=odiag.get("witness") if self.road_witness else None)
                 if vst == "OK":
                     got = vach
                     if after is None or vach < after:
@@ -1891,7 +1961,7 @@ class RoadsFirstSearch:
                 initargs=(layout, self.probe_limit, self.probe_workers,
                          self.symmetry_breaking, self.hints, self.stub_priority,
                          None, self.exact_repair, self.objective_limit,
-                         self.probe_model))
+                         self.probe_model, self.road_witness))
 
         pool = _new_pool() if self.workers > 1 else None
 
@@ -1913,6 +1983,7 @@ class RoadsFirstSearch:
             exact_repair=self.exact_repair,
             objective_limit=self.objective_limit,
             probe_model=self.probe_model,
+            road_witness=self.road_witness,
             comb_modes=self.comb_modes,
             interleave_levels=self.interleave_levels,
         )
