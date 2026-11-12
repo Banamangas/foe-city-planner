@@ -80,8 +80,12 @@ def verify(src, lay) -> dict:
     ids = sorted(b.entity_id for b in lay.buildings)
     cells = [c for b in lay.buildings for c in b.footprint.cells()]
     region = src.region.cells
-    r = route(lay)
-    er = exact_route(lay, time_limit=60)
+    # Re-route with the delivered 2x2 two-lane tile fixed: without it the
+    # router serves the two-lane building with plain roads, which is illegal and
+    # looked like a 1-2 road "gap" on darkzig (2026-11-12).
+    lane = {c: lvl for c, lvl in lay.roads.items() if lvl >= 2} or None
+    r = route(lay, fixed=lane)
+    er = exact_route(lay, time_limit=60, **({"fixed": lane} if lane else {}))
     chk = type(lay)(lay.region, lay.buildings, lay.townhall, r)
     rep = check(lay, src, military=MILITARY)  # the delivered network, full rules
     return {"legality": rep.status, "violations": rep.violations,
