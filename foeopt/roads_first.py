@@ -1215,7 +1215,6 @@ _WORKER_MODEL: str = "item"
 OBJECTIVE_MARGIN_S = 3.0
 DEEPEN_FACTOR = 3          # probe/objective limit multiplier per deepening round
 DEEPEN_MAX_S = 90.0        # ...capped here (the old per-city long limit)
-DEEPEN_POLISH_KEEP_S = 30.0  # objective-polish time kept back when deepening
 BOUNDARY_LEVELS = 4        # levels probed below the walk's lowest when nothing was feasible
 EXACT_FINISH_S = 10.0      # exact_route cap on the final layout
 EXACT_FINISH_MIN_S = 1.0  # below this, skip exact finish rather than start it
@@ -1663,7 +1662,8 @@ class RoadsFirstSearch:
                  keep_chains: bool = True,
                  military: str = "connect",
                  deepen: bool = False,
-                 deepen_retry: bool = False):
+                 deepen_retry: bool = False,
+                 objective_polish_fill: bool = False):
         # Linked chains are placed as rigid composites so their links survive
         # (user-confirmed rule, 2026-11-11); every emitted layout is expanded
         # back to real buildings inside validate().
@@ -1672,6 +1672,7 @@ class RoadsFirstSearch:
         self.military = military
         self.deepen = deepen
         self.deepen_retry = deepen_retry
+        self.objective_polish_fill = objective_polish_fill
         self.source_layout = layout
         if military == "unconnected":
             # Explicit per-run choice: two-lane buildings are left off the road
@@ -1780,15 +1781,22 @@ class RoadsFirstSearch:
         threads = max(1, self.workers * self.probe_workers)
         top = cands[:max(1, self.objective_polish_top)]
         tried, after, per = 0, best, []
-        for i, (ach, k, pat, pos) in enumerate(top):
+        # objective_polish_fill: the top-N pass keeps its exact time split; if
+        # solves end early (CP-SAT proves them optimal), the time left goes to
+        # the next stored candidates instead of ending the run at ~0.63x.
+        passes = [top] + ([cands[len(top):]] if self.objective_polish_fill else [])
+        work = [(group, i, c) for group in passes for i, c in enumerate(group)]
+        for group, i, (ach, k, pat, pos) in work:
             if should_stop is not None and should_stop():
                 break
-            limit = (end - time.monotonic() - OBJECTIVE_MARGIN_S) / (len(top) - i)
+            limit = (end - time.monotonic() - OBJECTIVE_MARGIN_S) / (len(group) - i)
             if limit < OBJECTIVE_MIN_S:
                 break
             tried += 1
+            t_solve = time.monotonic()
             opos = minimize_needed(pat, region, consumers, pos, limit=limit,
                                    workers=threads, model=self.probe_model)
+            solve_s = time.monotonic() - t_solve
             got = None
             if opos is not None:
                 vst, vlay, vach = validate(self.layout, pat, opos,
@@ -1800,7 +1808,8 @@ class RoadsFirstSearch:
                         after = vach
                         if on_improvement is not None:
                             on_improvement(vlay, k, vach)
-            per.append({"k": k, "before": ach, "after": got, "limit_s": round(limit, 1)})
+            per.append({"k": k, "before": ach, "after": got, "limit_s": round(limit, 1),
+                        "solve_s": round(solve_s, 1)})
         return {"before": best, "after": after, "tried": tried,
                 "candidates": len(cands), "per_skeleton": per}
 
@@ -2119,19 +2128,17 @@ class RoadsFirstSearch:
             unresolved levels below the best feasible k, nearest first, on FRESH
             skeletons (the rng stream continues), with the probe and objective
             limits multiplied by DEEPEN_FACTOR (capped at DEEPEN_MAX_S). A level
-            that turns feasible becomes the new bound. It borrows the objective-
-            polish reserve but leaves DEEPEN_POLISH_KEEP_S of it. With
+            that turns feasible becomes the new bound. Stops at the walk deadline,
+            leaving the objective-polish reserve whole. With
             deepen_retry, a level first retries the skeletons that TIMED OUT at a
             shorter limit (the walk's 10 s probes drop hard-but-good skeletons
             the 30 s preset solves) before drawing fresh ones."""
-            nonlocal pool, walk_deadline
+            nonlocal pool
             if hi is None or results.get(hi, ("", None))[0] != "FEASIBLE":
                 return None
-            # Objective polish converges almost at once (Phase B: ~0% of worker
-            # time) while deepening was still improving FR17 at the walk end:
-            # lend it the reserve, keeping DEEPEN_POLISH_KEEP_S for the polish.
-            walk_deadline = max(walk_deadline,
-                                polish_deadline - min(objective_reserve, DEEPEN_POLISH_KEEP_S))
+            # It must NOT borrow the objective-polish reserve: FR17's 103 is made
+            # there (k=116 skeleton, 106 -> 103 in ~70 s with every thread).
+            # Borrowing it (v3) left polish 0 tries and FR17 at 106.
             info = {"rounds": [], "start_hi": hi}
             limit = self.probe_limit
             step = max(1, self.concurrent_levels)
