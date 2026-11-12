@@ -1067,3 +1067,23 @@ frees those cells as consumer anchors and starts from a known-feasible placement
       composite/lane hints; never publishes worse; no-op when no time.
 - [ ] A/B arm `rebase` (preset + rebase_s=60) vs preset, 600 s then 120 s, 2 reps,
       darkzig/FR16/FR17. Adopt only if never worse in any pair and better in one.
+
+**Result (2026-11-12): ADOPTED** -- BEST_PRESET `rebase_s: 20`. 12-cell A/B, all legal:
+
+| | preset | preset + rebase_s=20 |
+|---|---|---|
+| darkzig 600 s | 91, 92 | **89, 89** |
+| FR16 600 s | 68, 68 | **67, 67** |
+| FR17 600 s | 103, 103 | 103, 103 |
+| darkzig 120 s | 94, 94 | **88, 91** |
+| FR16 120 s | 68, 68 | **67, 67** |
+| FR17 120 s | 106, 106 | 106, 106 |
+
+Never worse, better in 8/12. Each rebase solve 0.3-14 s; it ran before exact finish and
+never skipped for lack of time. Records: darkzig 88 and FR16 67 (rebased from the saved
+records, verified from file). FR17 does not move: its rebased solve proves the same 103.
+Data: `scripts/_rebase_ab.jsonl`. Exposed as option `rebase_s` (webapp, CLI `--rebase-s`).
+
+Observed, not yet acted on: darkzig's verify re-route sometimes beats the accepted count
+(accepted 89, `exact_route` 87-88): exact finish may be skipping or losing to its 10 s cap.
+Worth a look next (cheap), then Codex T1 (solver road witness).

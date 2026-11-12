@@ -88,6 +88,16 @@ OPTION_SPECS: list[dict] = [
                 "decoration) -- your explicit choice, shown in the result.",
     },
     {
+        "name": "rebase_s", "cli": "--rebase-s", "type": "float",
+        "default": 0.0, "min": 0.0, "max": 300.0, "advanced": True,
+        "group": "budget", "label": "Rebased polish (s, 0 = off)",
+        "help": "After objective polish, re-place the buildings of the best "
+                "layout on the roads it actually uses (cells the first road "
+                "skeleton no longer needs become free spots). Takes this many "
+                "seconds from the end of the polish time; keeps only a strictly "
+                "better, fully valid layout. 0 = off.",
+    },
+    {
         "name": "exact_finish", "cli": "--exact-finish", "type": "bool",
         "default": False, "advanced": True,
         "group": "budget", "label": "Exact road finish",
@@ -317,6 +327,13 @@ SMOKE_PRESET: dict = {
 # record) -- not darkzig's 94, which needed ~10 core-hours of screening plus a
 # 496-solve polish pass. 101 is a 60% cut on darkzig as found (250) and 36%
 # better than the classical pipeline (158).
+# rebase_s 20 (rebased polish, Codex T4) -- adopted 2026-11-12 from a 12-cell
+# A/B, same protocol, all legal: preset vs preset + rebase_s=20
+#               600 s               120 s
+#     darkzig   91,92 -> 89,89      94,94 -> 88,91
+#     FR16      68,68 -> 67,67      68,68 -> 67,67
+#     FR17      103,103 -> 103,103  106,106 -> 106,106
+# Never worse, better in 8 of 12 pairs; each rebase solve takes 0.3-14 s.
 BEST_PRESET: dict = {
     "pattern_family": "nonuniform",
     "quality_index_band": "3,4",
@@ -331,6 +348,7 @@ BEST_PRESET: dict = {
     "objective_polish": 0.3,
     "exact_finish": True,
     "probe_model": "position",
+    "rebase_s": 20.0,
 }
 
 DEFAULTS: dict = {s["name"]: s["default"] for s in OPTION_SPECS}
