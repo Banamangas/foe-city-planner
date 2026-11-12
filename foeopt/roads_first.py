@@ -1219,6 +1219,7 @@ BOUNDARY_LEVELS = 4        # levels probed below the walk's lowest when nothing 
 EXACT_FINISH_S = 10.0      # exact_route cap on the final layout
 EXACT_FINISH_MIN_S = 1.0  # below this, skip exact finish rather than start it
 OBJECTIVE_MIN_S = 2.0
+HARVEST_POLISH_S = 10.0   # polish time kept after each harvest probing batch
 
 
 def _worker_init(layout: Layout, probe_limit: float, probe_workers: int,
@@ -1664,7 +1665,8 @@ class RoadsFirstSearch:
                  deepen: bool = False,
                  deepen_retry: bool = False,
                  objective_polish_fill: bool = False,
-                 objective_polish_keep: int | None = None):
+                 objective_polish_keep: int | None = None,
+                 objective_polish_harvest: bool = False):
         # Linked chains are placed as rigid composites so their links survive
         # (user-confirmed rule, 2026-11-11); every emitted layout is expanded
         # back to real buildings inside validate().
@@ -1677,6 +1679,7 @@ class RoadsFirstSearch:
         # SAT candidates stored for polish (default top x 3). Polish solves are
         # proven optimal in ~0.5 s on FR17, so a wider store is cheap to use.
         self.objective_polish_keep = objective_polish_keep
+        self.objective_polish_harvest = objective_polish_harvest
         self.source_layout = layout
         if military == "unconnected":
             # Explicit per-run choice: two-lane buildings are left off the road
@@ -1776,14 +1779,14 @@ class RoadsFirstSearch:
                 "optimal": res.optimal}
 
     def _apply_objective_polish(self, cands, best, on_improvement, end,
-                                should_stop=None) -> dict:
+                                should_stop=None, fill_all: bool = False) -> dict:
         """Re-solve the top distinct SAT skeletons with minimize_needed, all
         solver threads, splitting the time left before `end` evenly across the
         candidates still to go. Keeps only fully validated strict improvements."""
         region = set(self.layout.region.cells)
         consumers = self.layout.road_needing()
         threads = max(1, self.workers * self.probe_workers)
-        top = cands[:max(1, self.objective_polish_top)]
+        top = cands if fill_all else cands[:max(1, self.objective_polish_top)]
         tried, after, per = 0, best, []
         # objective_polish_fill: the top-N pass keeps its exact time split; if
         # solves end early (CP-SAT proves them optimal), the time left goes to
@@ -2126,6 +2129,51 @@ class RoadsFirstSearch:
 
         boundary_info: dict = {"probed": []}
 
+        def _harvest(objective_info):
+            """objective_polish_harvest: polish ends FR17 at ~0.63x because a whole
+            600 s walk finds only ~10 distinct SAT skeletons, and its record (103)
+            is ONE of them (k=116) improved by the polish objective. Spend the
+            rest of the reserve drawing fresh skeletons at the levels that gave
+            the best candidates, polishing each new SAT as it comes."""
+            nonlocal pool
+            polished = {c[2].roads for c in sat_cands}
+            info = {"rounds": []}
+            margin = self.probe_limit + OBJECTIVE_MARGIN_S + HARVEST_POLISH_S
+            while time.monotonic() + margin < polish_deadline:
+                if should_stop is not None and should_stop():
+                    break
+                ks = []
+                for c in sat_cands:              # sorted best first
+                    if c[1] not in ks:
+                        ks.append(c[1])
+                ks = ks[:max(1, self.concurrent_levels)]
+                if not ks:
+                    break
+                if runtime.pop("pool_terminated", False) and pool is not None:
+                    pool = _new_pool()
+                params.deadline = polish_deadline - HARVEST_POLISH_S
+                params.slice_deadline = None
+                _probe_levels_batch(layout, region, consumers, ks, rng, params,
+                                    lambda r: None, pool=pool,
+                                    on_improvement=on_improvement, corpus=corpus,
+                                    scorer=self.scorer,
+                                    score_threshold=self.score_threshold,
+                                    filler_stats=filler_stats,
+                                    coverage=level_coverage, runtime=runtime)
+                new = [c for c in sat_cands if c[2].roads not in polished]
+                polished |= {c[2].roads for c in new}
+                got = self._apply_objective_polish(
+                    new, objective_info["after"], on_improvement, polish_deadline,
+                    should_stop, fill_all=True) if new else None
+                if got is not None and got["after"] is not None and (
+                        objective_info["after"] is None
+                        or got["after"] < objective_info["after"]):
+                    objective_info["after"] = got["after"]
+                info["rounds"].append({"ks": ks, "new": len(new),
+                                       "tried": got["tried"] if got else 0,
+                                       "after": objective_info["after"]})
+            return info
+
         def _deepen(hi):
             """Spend the walk's leftover time instead of stopping (Phase B: FR16/FR17
             ended at 0.3-0.65x of the box; at probe_limit 10, FR17 stopped at 175 s
@@ -2342,6 +2390,11 @@ class RoadsFirstSearch:
                         sat_cands, best, on_improvement, polish_deadline, should_stop)
                 if objective_info["after"] is not None and objective_info["after"] < best:
                     best = objective_info["after"]
+                if self.objective_polish_harvest:
+                    with profile.timed("finish_harvest"):
+                        objective_info["harvest"] = _harvest(objective_info)
+                    if objective_info["after"] is not None and objective_info["after"] < best:
+                        best = objective_info["after"]
             polish_info = None
             if best is not None and self.seed_polish > 0:
                 with profile.timed("finish_seed_polish"):
