@@ -2862,3 +2862,9 @@ That is a modelling gap (fillers outside the model), not a scheduling one.
   claim (deepening borrowing the polish reserve) cost 2 roads.
 - Rule: before calling a phase negligible, confirm the profile instruments it, and
   check the per-phase outcome rows (before/after) rather than only the time shares.
+
+## 2026-11-12: a verification re-route must obey the same rules as the result
+- The A/B "route/exact" columns re-routed darkzig WITHOUT the two-lane tile and showed a
+  1-2 road "gap" I nearly chased as an exact-finish bug. The cheaper network was illegal.
+- Rule: any comparison count must be produced under the full rules (fixed tiles, chains)
+  and pass legality.check before it is read as evidence of a missed improvement.
