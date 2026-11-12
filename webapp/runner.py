@@ -77,7 +77,8 @@ class JobManager:
                objective_polish: float = 0.0,
                exact_finish: bool = False,
                probe_model: str = "position",
-               military: str = "connect") -> str:
+               military: str = "connect",
+               rebase_s: float = 0.0) -> str:
         """Start a RoadsFirstSearch in a background thread and return its id.
 
         Keyword names match webapp.params.OPTION_SPECS one for one, so the
@@ -152,6 +153,7 @@ class JobManager:
                     exact_finish=exact_finish,
                     probe_model=probe_model,
                     military=military,
+                    rebase_s=rebase_s,
                 )
                 res = search.run(on_improvement=on_improvement,
                                  on_status=on_status,

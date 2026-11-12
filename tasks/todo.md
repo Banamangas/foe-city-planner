@@ -1043,3 +1043,47 @@ Phase D (fillers in the model, user city), and an FR24 skeleton-family study.
 (deepen, deepen_retry, objective_polish_fill/keep, harvest) were removed before merging; their
 code stays in history at 5ce20ba for reference. Kept: polish rows' `solve_s`, the A/B rows'
 level statuses, all data, the docs corrections and the lesson.
+
+## 2026-11-12: Codex T4 -- rebase polish on the accepted road network
+
+**Hypothesis.** Objective polish makes FR17's record, but it re-solves on the ORIGINAL
+skeleton, whose every cell blocks consumers -- including cells the accepted network no
+longer uses (k=116 skeleton vs ~103 kept roads). Re-solving on the incumbent's actual roads
+frees those cells as consumer anchors and starts from a known-feasible placement.
+
+**Design** (`foeopt/incumbent_polish.py`, off by default, `rebase_s=0`):
+- [ ] `rebase_pattern(incumbent)`: Pattern(th = incumbent TH, roads = its saved road cells).
+- [ ] `incumbent_positions(search_layout, incumbent)`: consumer + composite-chain positions
+      (composite = member position - offset) and the two-lane tile ("lane2:0").
+- [ ] `hint_is_feasible`: every consumer has contact with a TH-reachable road, no overlap.
+- [ ] `polish_rebased(...)`: position-model minimize_needed on the rebased pattern (all
+      threads), validate (fillers repacked), accept only a strictly better routed count;
+      rebase again after an acceptance, at most 2 solves, stop on a repeated road set.
+- [ ] Budget: `rebase_s` seconds are taken from the END of the objective-polish window
+      (plus whatever polish leaves unused); runs before exact finish. Same deadline, no
+      extra time.
+- [ ] Report in result["rebased_polish"]: attempts, per-solve before/after, solve_s.
+- [ ] Tests: rebased pattern = incumbent roads; vacated skeleton cells become anchors;
+      composite/lane hints; never publishes worse; no-op when no time.
+- [ ] A/B arm `rebase` (preset + rebase_s=60) vs preset, 600 s then 120 s, 2 reps,
+      darkzig/FR16/FR17. Adopt only if never worse in any pair and better in one.
+
+**Result (2026-11-12): ADOPTED** -- BEST_PRESET `rebase_s: 20`. 12-cell A/B, all legal:
+
+| | preset | preset + rebase_s=20 |
+|---|---|---|
+| darkzig 600 s | 91, 92 | **89, 89** |
+| FR16 600 s | 68, 68 | **67, 67** |
+| FR17 600 s | 103, 103 | 103, 103 |
+| darkzig 120 s | 94, 94 | **88, 91** |
+| FR16 120 s | 68, 68 | **67, 67** |
+| FR17 120 s | 106, 106 | 106, 106 |
+
+Never worse, better in 8/12. Each rebase solve 0.3-14 s; it ran before exact finish and
+never skipped for lack of time. Records: darkzig 88 and FR16 67 (rebased from the saved
+records, verified from file). FR17 does not move: its rebased solve proves the same 103.
+Data: `scripts/_rebase_ab.jsonl`. Exposed as option `rebase_s` (webapp, CLI `--rebase-s`).
+
+Observed, not yet acted on: darkzig's verify re-route sometimes beats the accepted count
+(accepted 89, `exact_route` 87-88): exact finish may be skipping or losing to its 10 s cap.
+Worth a look next (cheap), then Codex T1 (solver road witness).
