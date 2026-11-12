@@ -1038,3 +1038,8 @@ nothing useful left to try, not because the controller stops too early.
 **Next (higher expected value):** the walk's skeletons, not its time: Codex T1 (keep the
 solver's road witness; darkzig routes ~1.3 roads above the objective in 70% of solves),
 Phase D (fillers in the model, user city), and an FR24 skeleton-family study.
+
+**Decision (2026-11-12, user: "go with your recommendation"):** the null-result knobs
+(deepen, deepen_retry, objective_polish_fill/keep, harvest) were removed before merging; their
+code stays in history at 5ce20ba for reference. Kept: polish rows' `solve_s`, the A/B rows'
+level statuses, all data, the docs corrections and the lesson.
