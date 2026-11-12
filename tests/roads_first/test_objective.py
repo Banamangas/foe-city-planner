@@ -538,3 +538,40 @@ def test_objective_polish_keep_widens_the_candidate_store(monkeypatch):
     rf.RoadsFirstSearch(lay, time_box=20, workers=1, k_start=20, objective_polish=0.5,
                         objective_polish_keep=25).run()
     assert captured["n"] == 25
+
+
+def test_harvest_draws_new_skeletons_at_the_best_levels_and_polishes_them(monkeypatch):
+    lay, pat = _corridor_layout(1)
+    calls = {"batch": [], "polished": 0}
+    counter = iter(range(10**6))
+
+    def fake_batch(layout, region, consumers, ks, rng, params, log, pool=None, **kw):
+        time.sleep(0.05)
+        calls["batch"].append(list(ks))
+        out = {}
+        for k in ks:
+            if k >= 20:
+                n = next(counter)
+                params.sat_recorder(k, 30 + n % 5,
+                                    Pattern(th=pat.th, roads=frozenset({(n, 0)}), params={}),
+                                    {})
+                kw["on_improvement"](lay, k, 30)
+                out[k] = ("FEASIBLE", 30)
+            else:
+                out[k] = ("INFEASIBLE", None)
+        return out
+
+    def fake_min(pat, region, consumers, pos, limit, workers, model):
+        calls["polished"] += 1
+        return None
+
+    monkeypatch.setattr(rf, "_probe_levels_batch", fake_batch)
+    monkeypatch.setattr(rf, "minimize_needed", fake_min)
+    monkeypatch.setattr(rf, "HARVEST_POLISH_S", 0.5)
+    res = rf.RoadsFirstSearch(lay, time_box=40, workers=1, k_start=20, probe_limit=1,
+                              objective_polish=0.5, objective_polish_keep=100,
+                              objective_polish_harvest=True).run()
+    h = res["objective_polish"]["harvest"]
+    assert h["rounds"] and all(r["ks"] for r in h["rounds"])
+    assert sum(r["new"] for r in h["rounds"]) == sum(r["tried"] for r in h["rounds"]) > 0
+    assert res["profile"]["wall_s"] > 30                 # the reserve was used
