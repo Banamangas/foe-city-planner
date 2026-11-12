@@ -515,3 +515,26 @@ def test_objective_polish_fill_spends_leftover_on_more_candidates(monkeypatch, f
     assert 9 < limits[0] < 10.5          # top-2 split: (23 - 3) / 2, as before
     if fill:
         assert 6 < limits[2] < 7         # then (23 - 3) / 3 over the rest
+
+
+def test_objective_polish_keep_widens_the_candidate_store(monkeypatch):
+    lay, pat = _corridor_layout(1)
+    captured = {}
+
+    def fake_level(layout, region, consumers, k, rng, params, log, pool=None, **kw):
+        for i in range(30):
+            params.sat_recorder(k, 10 + i, Pattern(th=pat.th, roads=frozenset({(i, 0)}),
+                                                   params={}), {})
+        captured["n"] = None
+        kw["on_improvement"](lay, k, 10)
+        return ("FEASIBLE", 10)
+
+    def fake_polish(self, cands, best, *a, **kw):
+        captured["n"] = len(cands)
+        return {"before": best, "after": best, "tried": 0}
+
+    monkeypatch.setattr(rf, "_probe_level", fake_level)
+    monkeypatch.setattr(rf.RoadsFirstSearch, "_apply_objective_polish", fake_polish)
+    rf.RoadsFirstSearch(lay, time_box=20, workers=1, k_start=20, objective_polish=0.5,
+                        objective_polish_keep=25).run()
+    assert captured["n"] == 25
