@@ -1649,13 +1649,17 @@ class RoadsFirstSearch:
                  exact_finish: bool = False,
                  probe_model: str = "position",
                  keep_chains: bool = True,
-                 military: str = "connect"):
+                 military: str = "connect",
+                 rebase_s: float = 0.0):
         # Linked chains are placed as rigid composites so their links survive
         # (user-confirmed rule, 2026-11-11); every emitted layout is expanded
         # back to real buildings inside validate().
         if military not in MILITARY_POLICIES:
             raise ValueError(f"military must be one of {MILITARY_POLICIES}")
         self.military = military
+        # Codex T4: seconds of the objective-polish window given to re-solving on
+        # the incumbent's accepted road network (foeopt/incumbent_polish.py).
+        self.rebase_s = rebase_s
         self.source_layout = layout
         if military == "unconnected":
             # Explicit per-run choice: two-lane buildings are left off the road
@@ -2207,10 +2211,20 @@ class RoadsFirstSearch:
             profile.event("walk_end")
             if best is not None and objective_reserve > 0:
                 with profile.timed("finish_objective_polish"):
+                    # rebase_s comes off the END of the polish window (same deadline)
                     objective_info = self._apply_objective_polish(
-                        sat_cands, best, on_improvement, polish_deadline, should_stop)
+                        sat_cands, best, on_improvement,
+                        polish_deadline - min(self.rebase_s, objective_reserve),
+                        should_stop)
                 if objective_info["after"] is not None and objective_info["after"] < best:
                     best = objective_info["after"]
+            rebase_info = None
+            if self.rebase_s > 0 and latest["layout"] is not None:
+                from foeopt.incumbent_polish import polish_rebased
+                with profile.timed("finish_rebased_polish"):
+                    rebase_info = polish_rebased(self, latest["layout"], latest["achieved"],
+                                                 polish_deadline, on_improvement,
+                                                 should_stop, k=latest["k"])
             polish_info = None
             if best is not None and self.seed_polish > 0:
                 with profile.timed("finish_seed_polish"):
@@ -2236,6 +2250,7 @@ class RoadsFirstSearch:
                     "boundary_descent": boundary_info["probed"],
                     "profile": profile.as_dict(self.workers),
                     "objective_polish": objective_info,
+                    "rebased_polish": rebase_info,
                     "exact_finish": exact_info,
                     "filler_failures": summarise_fillers(filler_stats),
                     "level_coverage": level_coverage,
