@@ -1431,7 +1431,8 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
                         score_threshold=None,
                         filler_stats: dict | None = None,
                         coverage: dict | None = None,
-                        runtime: dict | None = None) -> dict[int, tuple[str, int | None]]:
+                        runtime: dict | None = None,
+                        given: dict | None = None) -> dict[int, tuple[str, int | None]]:
     """Generate + probe several k-levels' patterns in one shared pool dispatch
     instead of draining one level's ~200 patterns before the next level's are
     even generated. `_run_probe`'s payload/result already carry `k`, so this
@@ -1473,9 +1474,14 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
             gen_kwargs["quality_index_band"] = getattr(params, "quality_index_band", None)
         elif family == "comb" and getattr(params, "comb_modes", None) is not None:
             gen_kwargs["modes"] = params.comb_modes
-        pats = gen_fn(region, th.width, th.length, k, rng, params.patterns,
-                      **gen_kwargs)
-        if (family == "nonuniform" and gen_kwargs.get("quality_index_band") is not None
+        if given and k in given:
+            # retry specific skeletons (deepening: ones that timed out at a
+            # shorter limit) instead of drawing new ones from the rng stream
+            pats = list(given[k])
+        else:
+            pats = gen_fn(region, th.width, th.length, k, rng, params.patterns,
+                          **gen_kwargs)
+        if not (given and k in given) and (family == "nonuniform" and gen_kwargs.get("quality_index_band") is not None
                 and len(pats) < BAND_MIN_PATTERNS):
             # The band was calibrated on darkzig/FR16 and can be EMPTY elsewhere:
             # on FR24 it yields 0 skeletons at every k >= 220, so every level
@@ -1555,6 +1561,9 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
                     recorder(k, achieved, pat, vlay)
         elif status in ("UNKNOWN", "ROUTE_FAIL", "INVALID", "SAT_FILLER_FAIL", "SAT_ROTATED"):
             st["saw_nonproof_failure"] = True
+            unknown_recorder = getattr(params, "unknown_recorder", None)
+            if status == "UNKNOWN" and unknown_recorder is not None:
+                unknown_recorder(k, pat)
         return time.monotonic() > effective_deadline
 
     if pool is None:
@@ -1653,7 +1662,8 @@ class RoadsFirstSearch:
                  probe_model: str = "position",
                  keep_chains: bool = True,
                  military: str = "connect",
-                 deepen: bool = False):
+                 deepen: bool = False,
+                 deepen_retry: bool = False):
         # Linked chains are placed as rigid composites so their links survive
         # (user-confirmed rule, 2026-11-11); every emitted layout is expanded
         # back to real buildings inside validate().
@@ -1661,6 +1671,7 @@ class RoadsFirstSearch:
             raise ValueError(f"military must be one of {MILITARY_POLICIES}")
         self.military = military
         self.deepen = deepen
+        self.deepen_retry = deepen_retry
         self.source_layout = layout
         if military == "unconnected":
             # Explicit per-run choice: two-lane buildings are left off the road
@@ -1946,6 +1957,12 @@ class RoadsFirstSearch:
         if objective_reserve > 0:
             params.sat_recorder = _record_sat
 
+        # deepen_retry: skeletons whose probe timed out, with the limit they had
+        timed_out: dict[int, list] = {}
+        if self.deepen and self.deepen_retry:
+            params.unknown_recorder = (
+                lambda kk, pat: timed_out.setdefault(kk, []).append((pat, params.probe_limit)))
+
         def _walk_end():
             """The walk leaves the objective-polish reserve free only once there
             is something to polish. With no layout yet, it may use the reserve
@@ -2102,8 +2119,11 @@ class RoadsFirstSearch:
             unresolved levels below the best feasible k, nearest first, on FRESH
             skeletons (the rng stream continues), with the probe and objective
             limits multiplied by DEEPEN_FACTOR (capped at DEEPEN_MAX_S). A level
-            that turns feasible becomes the new bound. Stops at the walk deadline,
-            so the objective-polish reserve is untouched."""
+            that turns feasible becomes the new bound. It borrows the objective-
+            polish reserve but leaves DEEPEN_POLISH_KEEP_S of it. With
+            deepen_retry, a level first retries the skeletons that TIMED OUT at a
+            shorter limit (the walk's 10 s probes drop hard-but-good skeletons
+            the 30 s preset solves) before drawing fresh ones."""
             nonlocal pool, walk_deadline
             if hi is None or results.get(hi, ("", None))[0] != "FEASIBLE":
                 return None
@@ -2140,13 +2160,21 @@ class RoadsFirstSearch:
                     if pool is not None:
                         pool.terminate()
                         pool = _new_pool()
-                status = {}
+                status, retried = {}, {}
                 for i in range(0, len(todo), step):
                     ks = [kk for kk in todo[i:i + step] if kk < hi or kk in resolve]
                     if not ks:
                         continue
                     if _should_stop():
                         break
+                    given = {}
+                    for kk in ks:
+                        retry = [p for p, lim in timed_out.get(kk, ()) if lim < limit]
+                        if retry:
+                            given[kk] = retry
+                            timed_out[kk] = [(p, lim) for p, lim in timed_out[kk]
+                                             if lim >= limit]
+                            retried[kk] = retried.get(kk, 0) + len(retry)
                     _set_slice()
                     batch = _probe_levels_batch(layout, region, consumers, ks, rng,
                                                 params, lambda r: None, pool=pool,
@@ -2154,7 +2182,8 @@ class RoadsFirstSearch:
                                                 corpus=corpus, scorer=self.scorer,
                                                 score_threshold=self.score_threshold,
                                                 filler_stats=filler_stats,
-                                                coverage=level_coverage, runtime=runtime)
+                                                coverage=level_coverage, runtime=runtime,
+                                                given=given or None)
                     _restore_pool()
                     for kk, res in batch.items():
                         if results.get(kk, ("", None))[0] != "FEASIBLE":
@@ -2165,7 +2194,8 @@ class RoadsFirstSearch:
                     ok = [kk for kk in ks if batch[kk][0] == "FEASIBLE"]
                     if ok:
                         hi = min(hi, min(ok))
-                info["rounds"].append({"limit": limit, "status": status})
+                info["rounds"].append({"limit": limit, "status": status,
+                                       "retried": retried})
             info["end_hi"] = hi
             if limit != self.probe_limit:
                 # later phases size their stops by self.probe_limit: restore it

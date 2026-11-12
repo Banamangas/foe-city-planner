@@ -67,6 +67,10 @@ ARMS = {
     # with 30 s, then 90 s, until the box is spent ("use the leftover box")
     "deep10": {"probe_limit": 10.0, "objective_limit": 10.0, "objective_polish": 0.3,
                "exact_finish": True, "probe_model": "position", "deepen": True},
+    # deep10 + retry the walk's timed-out skeletons at 30 s / 90 s first
+    "deep10r": {"probe_limit": 10.0, "objective_limit": 10.0, "objective_polish": 0.3,
+                "exact_finish": True, "probe_model": "position", "deepen": True,
+                "deepen_retry": True},
     # the preset's 30 s first pass (keeps FR17's 103 path) + deepening
     "deep30": {"probe_limit": 30.0, "objective_limit": 30.0, "objective_polish": 0.3,
                "exact_finish": True, "probe_model": "position", "deepen": True},
