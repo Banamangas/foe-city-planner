@@ -45,10 +45,12 @@ def verify(src: Layout, rec: dict, military: str = "connect", reroute: bool = Fa
     if reroute:
         from foeopt.exact_router import exact_route
         from foeopt.router import route
+        # keep the saved 2x2 two-lane tile: rerouting without it is illegal
+        lane = {c: lvl for c, lvl in lay.roads.items() if lvl >= 2} or None
         bare = Layout(lay.region, lay.buildings, lay.townhall, {})
-        out["reroute_greedy"] = len(route(bare))
-        bare.roads = route(bare)
-        er = exact_route(bare, time_limit=60)
+        bare.roads = route(bare, fixed=lane)
+        out["reroute_greedy"] = len(bare.roads)
+        er = exact_route(bare, time_limit=60, **({"fixed": lane} if lane else {}))
         out["reroute_exact"], out["reroute_exact_optimal"] = er.count, er.optimal
     out["ok"] = rep.status == "valid" and out["count_matches"]
     return out
