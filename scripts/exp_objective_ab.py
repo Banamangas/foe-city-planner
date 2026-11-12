@@ -63,6 +63,9 @@ ARMS = {
              "exact_finish": True, "probe_model": "position"},
     "pl5": {"probe_limit": 5.0, "objective_limit": 5.0, "objective_polish": 0.3,
             "exact_finish": True, "probe_model": "position"},
+    # Codex T4: the preset + 20 s of the polish window for rebased polish
+    "rebase": {"probe_limit": 30.0, "objective_limit": 30.0, "objective_polish": 0.3,
+               "exact_finish": True, "probe_model": "position", "rebase_s": 20.0},
 }
 
 
@@ -138,6 +141,7 @@ def run_cell(arm, name, box, rep, outdir):
     try:
         res = RoadsFirstSearch(lay, **kwargs).run(on_improvement=on_imp)
         rec["profile"] = res.get("profile")
+        rec["rebased_polish"] = res.get("rebased_polish")
         rec["results"] = {k: v[0] for k, v in (res.get("results") or {}).items()}
         rec.update(ok=True, best=res.get("best_achieved"), verdict=res.get("verdict"),
                    best_k=best["k"], best_t=best["t"],
