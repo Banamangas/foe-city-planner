@@ -492,3 +492,26 @@ def test_deepen_retry_reprobes_the_skeletons_that_timed_out(monkeypatch):
     first = res["deepen"]["rounds"][0]
     assert first["retried"] == {19: 1} and first["status"][19] == "FEASIBLE"
     assert {19: ["hard19"]} in givens
+
+
+@pytest.mark.parametrize("fill,expect", [(False, 2), (True, 5)])
+def test_objective_polish_fill_spends_leftover_on_more_candidates(monkeypatch, fill, expect):
+    """FR17's 103 is made by objective polish, whose top-3 solves end early
+    (proven optimal), leaving ~35% of the box. With fill, the time left goes to
+    the remaining stored candidates; the top-N split itself is unchanged."""
+    lay, pat = _corridor_layout(1)
+    limits = []
+
+    def fake_min(pat, region, consumers, pos, limit, workers, model):
+        limits.append(limit)
+        return None                      # instant "solve": nothing better
+
+    monkeypatch.setattr(rf, "minimize_needed", fake_min)
+    search = rf.RoadsFirstSearch(lay, time_box=30, workers=1, objective_polish=0.5,
+                                 objective_polish_top=2, objective_polish_fill=fill)
+    cands = [(10 + i, 10, pat, {}) for i in range(5)]
+    info = search._apply_objective_polish(cands, 10, None, time.monotonic() + 23)
+    assert info["tried"] == expect
+    assert 9 < limits[0] < 10.5          # top-2 split: (23 - 3) / 2, as before
+    if fill:
+        assert 6 < limits[2] < 7         # then (23 - 3) / 3 over the rest

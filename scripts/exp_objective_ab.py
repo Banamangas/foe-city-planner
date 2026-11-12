@@ -71,6 +71,11 @@ ARMS = {
     "deep10r": {"probe_limit": 10.0, "objective_limit": 10.0, "objective_polish": 0.3,
                 "exact_finish": True, "probe_model": "position", "deepen": True,
                 "deepen_retry": True},
+    # the preset + objective polish keeps going over the stored candidates
+    # while time remains (FR17's 103 is made in polish; it ends at ~0.63x)
+    "fill": {"probe_limit": 30.0, "objective_limit": 30.0, "objective_polish": 0.3,
+             "exact_finish": True, "probe_model": "position",
+             "objective_polish_fill": True},
     # the preset's 30 s first pass (keeps FR17's 103 path) + deepening
     "deep30": {"probe_limit": 30.0, "objective_limit": 30.0, "objective_polish": 0.3,
                "exact_finish": True, "probe_model": "position", "deepen": True},
