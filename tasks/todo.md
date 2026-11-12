@@ -1096,11 +1096,29 @@ positions only; `validate` then greedy-routes. Phase B saw darkzig route ~1.3 ro
 objective in 70% of solves. Caveat to check first: the objective omits 2x2 tile cells that lie on
 the skeleton but are not `needed`, so part of that gap may be counting, not routing.
 
-- [ ] Measure first: witness network (needed + tile, pruned) vs greedy route on darkzig/FR16/FR17
-      objective solves. Stop here if the witness is never smaller.
-- [ ] `minimize_needed` puts the selected cells in `diag["witness"]` (both models; only on SAT).
-- [ ] `validate(..., witness=)`: legal pruned witness network as a second candidate; try the
+- [x] Measure first (36 objective solves, 10 s each, same placement for both networks):
+      darkzig 2/20 smaller (by 3 and 2), FR17 1/8 (by 1), FR16 0/8; the witness is NEVER larger
+      and always legal. Mean gain 0.25 roads/solve on darkzig, not 1.3: most of the Phase B gap
+      was the objective not counting the 2x2 tile cells that sit on the skeleton.
+- [x] `minimize_needed` puts the selected cells in `diag["witness"]` (both models; only on SAT).
+- [x] `validate(..., witness=)`: legal pruned witness network as a second candidate; try the
       smaller network first, fall back to the other if fillers fail; greedy wins ties.
-- [ ] Wire into worker objective, objective polish, rebased polish.
-- [ ] Tests (tests/roads_first/test_road_witness.py).
-- [ ] A/B `witness` vs `rebase` (current preset), 600 s + 120 s, 2 reps, darkzig/FR16/FR17.
+- [x] Wire into worker objective, objective polish, rebased polish (flag `road_witness`).
+- [x] Tests (tests/roads_first/test_road_witness.py, 9 tests); 648 passed.
+- [x] A/B `witness` vs `rebase` (current preset): 600 s witness-only against this morning's
+      `rebase` rows (identical code with the flag off), 120 s both arms paired; 2 reps,
+      darkzig/FR16/FR17. Data `scripts/_witness_ab.jsonl`.
+
+**Result (2026-11-12): ADOPTED** -- BEST_PRESET `road_witness: True`. All 18 runs legal.
+
+| | preset (rebase) | + road_witness |
+|---|---|---|
+| darkzig 600 s | 89, 89 | **88, 88** |
+| FR16 600 s | 67, 67 | 67, 67 |
+| FR17 600 s | 103, 103 | 103, 103 |
+| darkzig 120 s (paired) | 89, 91 | 89, **89** |
+| FR16 120 s (paired) | 67, 67 | 67, 67 |
+| FR17 120 s (paired) | 106, 106 | 106, 106 |
+
+Never worse, better in 3 of 10 pairs, all darkzig. Small, as the measurement predicted; darkzig's
+120 s pair is within noise, the 600 s pair is consistent (88 = the record). No new record.
