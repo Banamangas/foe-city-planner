@@ -969,3 +969,77 @@ Phase E (only if C plateaus): T5 bounded optional-road spike under Codex's caps.
 
 Adoption rule as before: no validity regression, no city worse in any pair, failures
 counted, and long-run-only wins become a long-run profile rather than the default.
+
+## 2026-11-11 (night): "use the leftover box" deepening -- PAUSED (user restart)
+
+Branch `feat/deepening` (from `exp/probe-limit`, not merged, not pushed).
+`deepen=True` (off by default; A/B arm `deep10` = probe_limit 10 + deepen):
+after the k-walk settles, each round re-solves the best-roads level and the
+bound, then sweeps INCONCLUSIVE/UNDERSAMPLED levels below (plus a newly opened
+k-1) on fresh skeletons, limit x3 per round (10 -> 30 -> 90 s cap).
+
+| FR17 600 s | result | note |
+|---|---|---|
+| preset | 103, 103 | the bar (rule: never worse in any pair) |
+| v1 a2baaac | 105, 105 | slice sized by base 10 s limit -> every 90 s round UNDERSAMPLED |
+| v2 c661699 | 104, 104 | slice fixed + re-solve best/bound; still improving at walk end, ended 0.70x |
+| v3 5191759 | 104, 105 | borrows the objective-polish reserve (keeps 30 s); box now used (0.94x) but no gain -> more time alone does not reach 103 |
+
+v1 at 120 s was never worse than the preset (darkzig 91,90 vs 94,94; FR16 68;
+FR17 106,103 vs 106,106); v1 at 600 s darkzig 91,90 (preset 91,92), FR16 68.
+Data: `scripts/_deepen_ab.jsonl` (v1), `_deepen_ab_v2.jsonl`, `_deepen_ab_v3.jsonl`.
+
+Next when resuming:
+- [x] v3 did NOT reach 103 (104, 105). Deepening is not adopted; keep it off by default.
+- [ ] Next idea: give the re-solve of the best level a longer objective limit than the
+      probe limit, or re-solve the best level's recorded SAT candidates (objective polish
+      seeds) with 90 s instead of fresh skeletons.
+
+## 2026-11-12 overnight: using the leftover box -- results
+
+All runs legal, strictly sequential, 2 reps, branch `feat/deepening` (not merged).
+Preset reference (BEST_PRESET, earlier today): 600 s darkzig 91,92 / FR16 68 / FR17 103,103;
+120 s darkzig 94,94 / FR16 68 / FR17 106,106.
+
+| arm (600 s) | darkzig | FR16 | FR17 | 120 s darkzig / FR17 |
+|---|---|---|---|---|
+| deep10 v1-v3 (10 s walk + deepening) | 91,90 | 68 | 105 / 104 / 104-105 | 91,90 / 106,103 |
+| deep30 (preset + v3 deepening) | 90 (rep1 killed) | 68 | **106,106** | - |
+| deep10r (retry timed-out skeletons) | 90,91 | 68 | 105,105 | 93,91 / 106 |
+| fill (polish more stored candidates) | 91,90 | 68 | 103,103 | **92,92** / 106 |
+| fillw (fill, store 40) | 91,90 | 68 | 103,103 | 96,92 / 106 |
+| pl10fw (10 s walk + fillw) | 91,92 | 68 | 105,105 | 92,91 / 106 |
+| harvest (fillw + fresh skeletons at the best levels, each polished) | 92 (v1), 91, 91 | 68,68 | 103,103 | - |
+
+Findings:
+1. **FR17's 103 is made by objective polish**, not by the walk (k=116 skeleton 106 -> 103
+   in ~70 s, all threads). Phase B's "polish ~0%" was a profiling blind spot (corrected in
+   phase-b-baseline.md, lesson added). Borrowing the polish reserve (deep30) cost 3 roads.
+2. **Deepening is dropped** (4 variants): no variant reaches 103 on FR17 at 600 s.
+   The 10 s walk never visits FR17's good k=116 skeletons.
+3. **A 600 s FR17 run finds only ~10 distinct SAT skeletons**; each polish solve is proven
+   optimal in < 1 s. The leftover box can only help by producing MORE SAT skeletons near
+   the best levels -> `objective_polish_harvest`.
+4. darkzig 120 s varies by +-2 between identical arms (fillw 96 vs 92), so single darkzig
+   pairs at 120 s are not evidence either way.
+5. **Harvest uses the whole box (0.98x) but gains nothing**: one round per run (3 levels x
+   ~200 skeletons at 30 s), 3-8 new SAT skeletons, none better than the incumbent. v1 crashed
+   on 3/6 runs ("Pool not running": the walk can leave the pool dead) -- fixed in 5ce20ba,
+   v2 clean.
+
+**Verdict.** Nothing tonight beats the preset at 600 s. FR16 (68) and FR17 (103) look like
+plateaus for these skeleton families; darkzig moves only within its run-to-run noise.
+"Use the leftover box" is not worth more effort: the time is idle because the search has
+nothing useful left to try, not because the controller stops too early.
+- `fill` is free and never worse (could be switched on; not adopted, no clear gain).
+- deepening / deepen_retry / harvest stay in the code OFF by default (documented knobs),
+  or can be removed before merging -- the user's call.
+
+**Next (higher expected value):** the walk's skeletons, not its time: Codex T1 (keep the
+solver's road witness; darkzig routes ~1.3 roads above the objective in 70% of solves),
+Phase D (fillers in the model, user city), and an FR24 skeleton-family study.
+
+**Decision (2026-11-12, user: "go with your recommendation"):** the null-result knobs
+(deepen, deepen_retry, objective_polish_fill/keep, harvest) were removed before merging; their
+code stays in history at 5ce20ba for reference. Kept: polish rows' `solve_s`, the A/B rows'
+level statuses, all data, the docs corrections and the lesson.

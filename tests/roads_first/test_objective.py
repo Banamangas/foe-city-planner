@@ -1,5 +1,6 @@
 """minimize_needed: the in-skeleton placement objective (2026-11-11)."""
 import random
+import time
 
 import pytest
 

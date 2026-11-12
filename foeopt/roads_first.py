@@ -1771,8 +1771,10 @@ class RoadsFirstSearch:
             if limit < OBJECTIVE_MIN_S:
                 break
             tried += 1
+            t_solve = time.monotonic()
             opos = minimize_needed(pat, region, consumers, pos, limit=limit,
                                    workers=threads, model=self.probe_model)
+            solve_s = time.monotonic() - t_solve
             got = None
             if opos is not None:
                 vst, vlay, vach = validate(self.layout, pat, opos,
@@ -1784,7 +1786,9 @@ class RoadsFirstSearch:
                         after = vach
                         if on_improvement is not None:
                             on_improvement(vlay, k, vach)
-            per.append({"k": k, "before": ach, "after": got, "limit_s": round(limit, 1)})
+            # solve_s < limit_s means CP-SAT proved the skeleton's optimum early
+            per.append({"k": k, "before": ach, "after": got, "limit_s": round(limit, 1),
+                        "solve_s": round(solve_s, 1)})
         return {"before": best, "after": after, "tried": tried,
                 "candidates": len(cands), "per_skeleton": per}
 

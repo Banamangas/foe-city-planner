@@ -67,3 +67,36 @@ Next, in order of expected value per effort:
 4. **Phase D:** fillers in the position model (user city), plus an FR24 skeleton study.
 5. Pool feeding across level batches (idle workers at short boxes): after 1-2, since
    a shorter probe limit already shrinks the stragglers.
+
+## Follow-up A/B: probe_limit 30 vs 10 vs 5 (objective_limit and repair clamp with it)
+
+| city | 120 s: 30 / 10 / 5 | 600 s: 30 / 10 |
+|---|---|---|
+| darkzig | 94,94 / **90,89** / 92,90 | 91,92 / **90,91** |
+| FR16 | 68,68 / 68,68 / 68,68 | 68,68 / 68,68 |
+| FR17 | 106,106 / 106,**103** / 105,105 | **103,103** / 105,105 |
+| first layout | 31 s / 12 s / 7 s | 31 s / 12 s |
+
+Not adopted as-is: FR17 at 600 s is worse in both pairs (rule: never worse). **Why:** with
+10 s, FR17's levels 113/109/105/114 end INCONCLUSIVE (every skeleton probed, some UNKNOWN)
+quickly, the bisection settles, and the run STOPS at 175 s (0.3x of the box). At 30 s the
+same levels end UNDERSAMPLED and the walk also stops early (0.63x). In both arms the walk
+treats unknowns as the end and then leaves the box unused. The short limit is not the
+problem; the controller's stopping rule is. darkzig 89 (120 s, pl10) is a new legal record
+(`docs/records/darkzig-89-roads-pl10.json`, re-verified from file).
+
+**Next:** keep the 10 s first pass (fast first result), and when the walk settles with
+budget left, re-probe the unknown levels below the best with an escalating limit
+(10 -> 30 -> 90 s) on fresh skeletons until the box is spent (Phase C, "use the
+leftover box").
+
+## Correction (2026-11-12): objective polish is NOT negligible
+
+Finding 5 above said polish "converges almost at once (its share is about 0%)".
+Wrong: polish runs in the parent process with every thread, so the worker-time
+profile never counts it. The run rows (`objective_polish.per_skeleton`) show that
+**FR17's 103 is made in polish**: every preset run's walk ends at 105-106, then the
+k=116 skeleton is re-solved for ~70 s and gives 103. Its top-3 solves do finish
+early (proven optimal), which is why the run ends at ~0.63x. Consequences:
+- deepening must never borrow the polish reserve (deep30 FR17 600 s: 106,106, polish 0 tries);
+- the "leftover box" lever is polishing MORE stored candidates (`objective_polish_fill`).
