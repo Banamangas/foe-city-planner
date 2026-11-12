@@ -2138,6 +2138,13 @@ class RoadsFirstSearch:
             nonlocal pool
             polished = {c[2].roads for c in sat_cands}
             info = {"rounds": []}
+            # A pool killed at the walk deadline is left dead on purpose
+            # (_restore_pool skips rebuilding once the walk is over), and its
+            # flag is already consumed: start harvest on a fresh pool.
+            runtime.pop("pool_terminated", None)
+            if pool is not None:
+                pool.terminate()
+                pool = _new_pool()
             margin = self.probe_limit + OBJECTIVE_MARGIN_S + HARVEST_POLISH_S
             while time.monotonic() + margin < polish_deadline:
                 if should_stop is not None and should_stop():
