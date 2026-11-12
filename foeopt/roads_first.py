@@ -1663,7 +1663,8 @@ class RoadsFirstSearch:
                  military: str = "connect",
                  deepen: bool = False,
                  deepen_retry: bool = False,
-                 objective_polish_fill: bool = False):
+                 objective_polish_fill: bool = False,
+                 objective_polish_keep: int | None = None):
         # Linked chains are placed as rigid composites so their links survive
         # (user-confirmed rule, 2026-11-11); every emitted layout is expanded
         # back to real buildings inside validate().
@@ -1673,6 +1674,9 @@ class RoadsFirstSearch:
         self.deepen = deepen
         self.deepen_retry = deepen_retry
         self.objective_polish_fill = objective_polish_fill
+        # SAT candidates stored for polish (default top x 3). Polish solves are
+        # proven optimal in ~0.5 s on FR17, so a wider store is cheap to use.
+        self.objective_polish_keep = objective_polish_keep
         self.source_layout = layout
         if military == "unconnected":
             # Explicit per-run choice: two-lane buildings are left off the road
@@ -1961,7 +1965,8 @@ class RoadsFirstSearch:
                 return
             sat_cands.append((achieved, k, pat, pos))
             sat_cands.sort(key=lambda c: (c[0], c[1]))
-            del sat_cands[max(1, self.objective_polish_top) * 3:]
+            del sat_cands[self.objective_polish_keep
+                          or max(1, self.objective_polish_top) * 3:]
 
         if objective_reserve > 0:
             params.sat_recorder = _record_sat
