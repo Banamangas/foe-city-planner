@@ -98,6 +98,14 @@ OPTION_SPECS: list[dict] = [
                 "better, fully valid layout. 0 = off.",
     },
     {
+        "name": "road_witness", "cli": "--road-witness", "type": "bool",
+        "default": False, "advanced": True,
+        "group": "search", "label": "Keep the solver's roads",
+        "help": "After each placement objective, also try the road network the "
+                "solver itself selected, and keep it when it is smaller than the "
+                "greedy re-route and every building still fits.",
+    },
+    {
         "name": "exact_finish", "cli": "--exact-finish", "type": "bool",
         "default": False, "advanced": True,
         "group": "budget", "label": "Exact road finish",
@@ -334,6 +342,13 @@ SMOKE_PRESET: dict = {
 #     FR16      68,68 -> 67,67      68,68 -> 67,67
 #     FR17      103,103 -> 103,103  106,106 -> 106,106
 # Never worse, better in 8 of 12 pairs; each rebase solve takes 0.3-14 s.
+# road_witness (Codex T1) -- adopted 2026-11-12, preset (rebase) vs preset + witness:
+#               600 s               120 s (paired)
+#     darkzig   89,89 -> 88,88      89,91 -> 89,89
+#     FR16      67,67 -> 67,67      67,67 -> 67,67
+#     FR17      103,103 -> 103,103  106,106 -> 106,106
+# Never worse, better in 3 of 10 pairs (all darkzig, within its +-2 noise at 120 s;
+# the 600 s pair is consistent). 600 s baseline = the T4 A/B rows, same code flag-off.
 BEST_PRESET: dict = {
     "pattern_family": "nonuniform",
     "quality_index_band": "3,4",
@@ -349,6 +364,7 @@ BEST_PRESET: dict = {
     "exact_finish": True,
     "probe_model": "position",
     "rebase_s": 20.0,
+    "road_witness": True,
 }
 
 DEFAULTS: dict = {s["name"]: s["default"] for s in OPTION_SPECS}
