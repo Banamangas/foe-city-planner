@@ -182,6 +182,8 @@ def main(argv=None):
                    help="re-route the final layout with exact_route, keep if smaller")
     p.add_argument("--rebase-s", type=float, default=0.0,
                    help="seconds of the polish window for rebased polish (0 = off)")
+    p.add_argument("--road-witness", action="store_true",
+                   help="also try the objective's own roads in validate (Codex T1)")
     args = p.parse_args(argv)
     if args.smoke:
         args.patterns = 20
@@ -263,6 +265,7 @@ def main(argv=None):
         probe_model=args.probe_model,
         military=args.military,
         rebase_s=args.rebase_s,
+        road_witness=args.road_witness,
     ).run(on_improvement=on_improvement, on_status=on_status)
     print(json.dumps({k: v for k, v in res.items() if k != "results"}, indent=1))
     per_level = {k: v[0] + (f" achieved={v[1]}" if v[1] is not None else "")
