@@ -180,6 +180,16 @@ def main(argv=None):
                         "position-indexed, symmetry-free")
     p.add_argument("--exact-finish", action="store_true",
                    help="re-route the final layout with exact_route, keep if smaller")
+    p.add_argument("--polish-top", type=int, default=3,
+                   help="how many distinct SAT skeletons objective polish re-solves")
+    p.add_argument("--polish-parallel", type=int, default=0,
+                   help="objective polish: solve up to N candidates at once (0 = sequential)")
+    p.add_argument("--polish-threads", type=int, default=None,
+                   help="CP-SAT threads shared by the polish candidates "
+                        "(default workers x probe-workers)")
+    p.add_argument("--exact-finish-workers", type=int, default=0,
+                   help="exact finish: N CP-SAT workers, hinted with the incumbent "
+                        "(0 = historical 1 worker, no hint)")
     p.add_argument("--rebase-s", type=float, default=0.0,
                    help="seconds of the polish window for rebased polish (0 = off)")
     p.add_argument("--road-witness", action="store_true",
@@ -266,6 +276,10 @@ def main(argv=None):
         objective_limit=args.objective_limit,
         objective_polish=args.objective_polish,
         exact_finish=args.exact_finish,
+        polish_top=args.polish_top,
+        polish_parallel=args.polish_parallel,
+        polish_threads=args.polish_threads,
+        exact_finish_workers=args.exact_finish_workers,
         probe_model=args.probe_model,
         military=args.military,
         rebase_s=args.rebase_s,

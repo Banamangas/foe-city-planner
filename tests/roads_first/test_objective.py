@@ -215,7 +215,7 @@ def test_objective_polish_improves_a_bad_sat_and_reports_it():
     lay, pat = _corridor_layout()
     far = {10: (11, 1, 1, 1), 11: (10, 1, 1, 1), 12: (11, 3, 1, 1), 13: (10, 3, 1, 1)}
     search = rf.RoadsFirstSearch(lay, time_box=30, workers=1, probe_workers=1,
-                                 objective_polish=0.5, objective_polish_top=2)
+                                 objective_polish=0.5, polish_top=2)
     seen = []
     info = search._apply_objective_polish([(11, 10, pat, far)], 11,
                                           lambda l, k, a: seen.append(a),
@@ -315,6 +315,27 @@ def test_exact_finish_runs_the_real_router_on_a_toy():
     info = search._apply_exact_finish({"layout": lay, "k": 5, "achieved": len(lay.roads)},
                                       lambda *a: None)
     assert info["after"] <= len(lay.roads) and info["optimal"]
+    assert info["hinted"] is False and info["workers"] == 1     # default = historical
+
+
+def test_exact_finish_workers_hint_the_incumbent_and_improve_it(monkeypatch):
+    """exact_finish_workers >= 1 (backlog S2): N workers + the incumbent's own
+    network as hint; a detour network is still cut to the optimum."""
+    pytest.importorskip("ortools")
+    import foeopt.exact_router as er
+    region, _ = _corridor()
+    th = _b(1, 2, 2, needs=False, th=True, x=0, y=1)
+    lay = Layout(Region(frozenset(region)), [th, _b(10, 1, 1, x=5, y=1)], th,
+                 {(2, 2): 1, (3, 2): 1, (4, 2): 1, (5, 2): 1})       # 4; optimum 3
+    real, calls = er.exact_route, []
+    monkeypatch.setattr(er, "exact_route", lambda l, **kw: calls.append(kw) or real(l, **kw))
+    search = rf.RoadsFirstSearch(lay, time_box=5, workers=1, exact_finish=True,
+                                 exact_finish_workers=3)
+    seen = []
+    info = search._apply_exact_finish({"layout": lay, "k": 5, "achieved": 4},
+                                      lambda l, k, a: seen.append(a))
+    assert calls[0]["workers"] == 3 and calls[0]["hint"] == set(lay.roads)
+    assert info["after"] == 3 and seen == [3] and info["hinted"] and info["optimal"]
 
 
 def test_empty_quality_band_is_topped_up_with_unbanded_patterns(monkeypatch):
