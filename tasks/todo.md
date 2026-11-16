@@ -1365,6 +1365,32 @@ exactly the non-local move T5's windows could not make.
 - Prior: T5 null (local windows); perturbing good skeletons 0/64 (feasibility only, no
   objective); joint free model OOM. None tested a union with a looser closure.
 
+**Q2 status (2026-11-16, branch `feat/q2-superset-skeletons`): code done, offline evidence
+NULL, timed A/B pending.**
+- [x] Step 1: `closure="bfs"|"layered"|"flow"` (RoadsFirstSearch / webapp / CLI option,
+      default bfs = unchanged) in minimize_needed, objective polish and rebased polish.
+      layered is sound and = bfs on trees but still not exact (a route through a
+      same-or-farther cell is excluded); flow is exact (single-commodity flow, complete
+      flow hint from the hint network). Tests: tests/roads_first/test_closure.py.
+- [x] Soft skeleton cells (`soft=True|cells`): an unused cell may hold a building (needed
+      for unions: hard union cells cost space and make the best member's hint infeasible).
+- [x] Step 2 wired anyway (option `union_polish` s, default 0, `union_m`): objective |
+      union | rebase inside the polish window. foeopt/union_polish.py; new cells soft,
+      best member's network hard, flow closure, complete hint, validate + legality.
+- Offline (`scripts/exp_union_polish.py`, under the bench lock, 12-25 s per solve):
+  * Saved rebased/record networks are trees: 0-1 cells (the 2x2 tile) have >1 layered
+    predecessor, so **layered changes nothing on rebased polish** (rebase-bfs = rebase-flow:
+    darkzig 88, FR16 67 (and 71 -> 67), FR17 103, all proven optimal).
+  * Saved same-TH members are near-duplicates (1-9 new cells): no gain anywhere.
+  * Fresh same-TH networks (`--generate`, nonuniform family at the incumbent's TH):
+    FR17 103 U {105, 112} (51-55 new cells): 103, PROVEN optimal in 0.5-9 s.
+    FR16 67 U 12 networks 67-76 (23-44 new cells): 67, proven in 5 of 6 unions.
+    darkzig 88 U {93, 96/97} (48-67 new cells, 8-11k anchors): 88, FEASIBLE, bound 0-34.
+  * Making ALL union cells soft: 3x anchors, bound collapses (FR17 30-44, darkzig 20),
+    no move from the hint in 15-20 s. Layered on unions lost the hint (darkzig 96).
+- [ ] A/B (coordinator, serial): `layered:closure=layered`, `union:union_polish=60;union_m=3`.
+      Expect null: FR16/FR17 unions are proven at the incumbent; only darkzig is undecided.
+
 ### Q3. Fit the skeleton grammar to the expert networks  [M, analysis before code]
 The grammar is depth-2: one trunk flush to one TH side, straight perpendicular branches
 that stop at the first obstacle. Not expressible: second-level branches, bent branches,
