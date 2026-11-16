@@ -497,7 +497,7 @@ def prefilter(pattern: Pattern, region: set[Cell],
 
 
 from foeopt.chains import compose, expand, expand_buildings
-from foeopt.legality import MILITARY_POLICIES
+from foeopt.legality import MILITARY_POLICIES, check as legality_check
 from foeopt.profiling import Profile
 from foeopt.packing import Grid, first_fit
 from foeopt.router import RouteError, _prune, route
@@ -635,7 +635,7 @@ def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
           stub_priority: bool = False,
           solver_overrides: dict[str, object] | None = None,
           diag: dict | None = None,
-          model: str = "item") -> tuple[str, dict | None]:
+          model: str = "item", fillers=None) -> tuple[str, dict | None]:
     """`diag`, if given a dict, is filled with why this probe ended the way it
     did -- `reason` is one of:
       no_anchor  some consumer has zero road-adjacent anchors; returns UNSAT
@@ -650,7 +650,8 @@ def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
     if model == "position":
         return _probe_position(pattern, region, consumers, probe_limit=probe_limit,
                                probe_workers=probe_workers,
-                               solver_overrides=solver_overrides, diag=diag)
+                               solver_overrides=solver_overrides, diag=diag,
+                               fillers=fillers)
     t_start = time.monotonic()
     th_cells = set(pattern.th.cells())
     blocked = set(pattern.roads) | th_cells
@@ -765,8 +766,28 @@ def lane_tiles_of(positions: dict) -> list[tuple[int, int]]:
             if isinstance(k, str) and k.startswith(LANE_PREFIX)]
 
 
+def _filler_key(b: Building) -> tuple:
+    """Class key of a building placed WITHOUT road contact (Phase D). Index 3
+    is the road level (0), so the lane checks on key[3] never match it."""
+    return (b.footprint.width, b.footprint.length, "filler", 0)
+
+
+def _free_anchor_candidates(b: Building, region: set[Cell],
+                            blocked: set[Cell]) -> list[tuple[int, int]]:
+    """Every anchor inside the region off `blocked` (no contact needed)."""
+    out = []
+    w, l = b.footprint.width, b.footprint.length
+    x0, y0, x1, y1 = _bbox(region)
+    for y in range(y0, y1 - l + 2):
+        for x in range(x0, x1 - w + 2):
+            cells = Footprint(x, y, w, l).cells()
+            if cells <= region and not (cells & blocked):
+                out.append((x, y))
+    return out
+
+
 def _position_model(pattern: Pattern, region: set[Cell], consumers: list[Building],
-                    needed: dict | None = None, m=None):
+                    needed: dict | None = None, m=None, fillers=None):
     """Position-indexed placement: one boolean per (size class, anchor), a count
     per class, and at most one coverer per cell. Identical buildings have no
     identity here, so the N! permutation symmetry of the item model is gone.
@@ -838,6 +859,26 @@ def _position_model(pattern: Pattern, region: set[Cell], consumers: list[Buildin
         lits[key] = row
     for xy, u, _ in tiles:                 # a tile exists only to serve a building
         m.AddBoolOr(tile_users.get(xy, [])).OnlyEnforceIf(u)
+    # Phase D: the buildings that need no road are placed by the model too, so a
+    # SAT always leaves them room (dense cities fail filler packing otherwise).
+    for b in fillers or ():
+        key = _filler_key(b)
+        if key in lits:
+            classes[key].append(b)
+            continue
+        row = []
+        for (x, y) in _free_anchor_candidates(b, region, blocked):
+            v = m.NewBoolVar(f"f{key[0]}x{key[1]}_{x}_{y}")
+            row.append(((x, y), v))
+            for c in Footprint(x, y, key[0], key[1]).cells():
+                cover.setdefault(c, []).append(v)
+        lits[key] = row
+        classes[key] = [b]
+    for key in lits:
+        if key[2] == "filler":
+            if len(lits[key]) < len(classes[key]):
+                return None
+            m.Add(sum(v for _, v in lits[key]) == len(classes[key]))
     for vs in cover.values():
         if len(vs) > 1:
             m.AddAtMostOne(vs)
@@ -860,10 +901,11 @@ def _position_solution(solver, lits, classes) -> dict:
 
 
 def _probe_position(pattern, region, consumers, *, probe_limit, probe_workers=1,
-                    solver_overrides=None, diag=None):
+                    solver_overrides=None, diag=None, fillers=None):
     from ortools.sat.python import cp_model
     t0 = time.monotonic()
-    built = _position_model(pattern, region, consumers, m=cp_model.CpModel())
+    built = _position_model(pattern, region, consumers, m=cp_model.CpModel(),
+                            fillers=fillers)
     if built is None:
         if diag is not None:
             diag.update(reason="no_anchor", cand_s=round(time.monotonic() - t0, 3),
@@ -946,7 +988,7 @@ def needed_skeleton_cells(pattern: Pattern, positions: dict) -> int | None:
 def minimize_needed(pattern: Pattern, region: set[Cell], consumers: list[Building],
                     positions: dict, *, limit: float, workers: int = 1,
                     seed: int = 0, diag: dict | None = None,
-                    model: str = "item") -> dict | None:
+                    model: str = "item", fillers=None) -> dict | None:
     """Re-place the consumers on `pattern` minimizing the skeleton cells they
     actually NEED, hinted from a known-feasible `positions` (from `probe`).
 
@@ -979,7 +1021,7 @@ def minimize_needed(pattern: Pattern, region: set[Cell], consumers: list[Buildin
             m.AddImplication(needed[c], needed[p])
     if model == "position":
         return _minimize_needed_position(m, needed, pattern, region, consumers,
-                                         positions, limit, workers, seed, diag)
+                                         positions, limit, workers, seed, diag, fillers)
     x0b, y0b, x1b, y1b = _bbox(region)
     xiv, yiv, lits = [], [], []
     for i, b in enumerate(consumers):
@@ -1033,14 +1075,18 @@ def minimize_needed(pattern: Pattern, region: set[Cell], consumers: list[Buildin
 
 
 def _minimize_needed_position(m, needed, pattern, region, consumers, positions,
-                              limit, workers, seed, diag):
+                              limit, workers, seed, diag, fillers=None):
     from ortools.sat.python import cp_model
-    built = _position_model(pattern, region, consumers, needed=needed, m=m)
+    built = _position_model(pattern, region, consumers, needed=needed, m=m,
+                            fillers=fillers)
     if built is None:
         return None
     m, lits, classes = built
     used = {(x, y, w, l) for (x, y, w, l) in positions.values()}
+    hint_fillers = any(b.entity_id in positions for b in fillers or ())
     for key, row in lits.items():
+        if key[2] == "filler" and not hint_fillers:
+            continue                       # no known filler placement to hint
         w, l = key[0], key[1]
         for (x, y), v in row:
             m.AddHint(v, (x, y, w, l) in used)
@@ -1172,7 +1218,12 @@ def validate(layout_src: Layout, pattern: Pattern, positions: dict,
         placed.append(replace(b, footprint=Footprint(x, y, w, l)))
     # Composite chains become their real members before routing: the router
     # and validators only ever see real buildings (foeopt/chains.py).
-    placed = expand_buildings(placed)
+    # Phase D: fillers the model already placed are obstacles for the router and
+    # are not repacked; only the rest go through _place_fillers.
+    preplaced = [replace(b, footprint=Footprint(*positions[b.entity_id]))
+                 for b in fillers if b.entity_id in positions]
+    fillers = [b for b in fillers if b.entity_id not in positions]
+    placed = expand_buildings(placed) + preplaced
     th = replace(layout_src.townhall, footprint=pattern.th)
     cand = Layout(layout_src.region, [th, *placed], th, {})
     # Two-lane buildings: the placement's chosen 2x2 tiles are fixed level-2
@@ -1270,6 +1321,7 @@ _WORKER_OBJECTIVE_LIMIT: float = 0.0
 BAND_MIN_PATTERNS = 10
 _WORKER_MODEL: str = "item"
 _WORKER_ROAD_WITNESS: bool = False  # Codex T1: validate() also tries the objective's roads
+_WORKER_FILLERS_IN_MODEL: bool = False  # Phase D: the position model places fillers too
 # Seconds kept back for validate() after the objective solve, and the smallest
 # objective budget worth starting (hinted, it improves within seconds).
 OBJECTIVE_MARGIN_S = 3.0
@@ -1284,13 +1336,15 @@ def _worker_init(layout: Layout, probe_limit: float, probe_workers: int,
                  stub_priority: bool = False,
                  solver_overrides: dict[str, object] | None = None,
                  exact_repair: float = 0.0, objective_limit: float = 0.0,
-                 model: str = "item", road_witness: bool = False) -> None:
+                 model: str = "item", road_witness: bool = False,
+                 fillers_in_model: bool = False) -> None:
     global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS
     global _WORKER_SYMMETRY_BREAKING, _WORKER_HINTS, _WORKER_STUB_PRIORITY
     global _WORKER_SOLVER_OVERRIDES, _WORKER_EXACT_REPAIR, _WORKER_OBJECTIVE_LIMIT
-    global _WORKER_MODEL, _WORKER_ROAD_WITNESS
+    global _WORKER_MODEL, _WORKER_ROAD_WITNESS, _WORKER_FILLERS_IN_MODEL
     _WORKER_MODEL = model
     _WORKER_ROAD_WITNESS = road_witness
+    _WORKER_FILLERS_IN_MODEL = fillers_in_model
     _WORKER_LAYOUT = layout
     _WORKER_PROBE_LIMIT = probe_limit
     _WORKER_PROBE_WORKERS = probe_workers
@@ -1302,12 +1356,21 @@ def _worker_init(layout: Layout, probe_limit: float, probe_workers: int,
     _WORKER_OBJECTIVE_LIMIT = objective_limit
 
 
+def model_fillers(layout: Layout, on: bool, model: str) -> list[Building] | None:
+    """The buildings the position model places without road contact (Phase D),
+    or None when that mode is off (or the item model is used)."""
+    if not on or model != "position":
+        return None
+    return [b for b in layout.buildings if not b.needs_road and not b.is_townhall]
+
+
 def _run_probe(payload: tuple) -> dict:
     pat, k, pat_index = payload[:3]
     deadline = payload[3] if len(payload) > 3 else None
     layout = _WORKER_LAYOUT
     region = set(layout.region.cells)
     consumers = layout.road_needing()
+    mfill = model_fillers(layout, _WORKER_FILLERS_IN_MODEL, _WORKER_MODEL)
     t0 = time.monotonic()
     pdiag: dict = {}
     st, pos = probe(pat, region, consumers,
@@ -1319,7 +1382,8 @@ def _run_probe(payload: tuple) -> dict:
                    solver_overrides=_WORKER_SOLVER_OVERRIDES,
                    diag=pdiag,
                    # only when non-default: the item-model call stays identical
-                   **({"model": _WORKER_MODEL} if _WORKER_MODEL != "item" else {}))
+                   **({"model": _WORKER_MODEL} if _WORKER_MODEL != "item" else {}),
+                   **({"fillers": mfill} if mfill is not None else {}))
     secs = round(time.monotonic() - t0, 1)
     # Phase timings travel back with the result (worker seconds; see profiling.py).
     phases = {"probe_total": time.monotonic() - t0,
@@ -1357,7 +1421,8 @@ def _run_probe(payload: tuple) -> dict:
         t_obj = time.monotonic()
         opos = minimize_needed(pat, region, consumers, pos, limit=olimit,
                                workers=_WORKER_PROBE_WORKERS, diag=odiag,
-                               model=_WORKER_MODEL)
+                               model=_WORKER_MODEL,
+                               **({"fillers": mfill} if mfill is not None else {}))
         obj_total = time.monotonic() - t_obj
         phases["objective_total"] = obj_total
         phases["objective_solve"] = odiag.get("objective_s", 0.0)
@@ -1393,7 +1458,7 @@ def _run_probe_seq(payload: tuple) -> dict:
     global _WORKER_LAYOUT, _WORKER_PROBE_LIMIT, _WORKER_PROBE_WORKERS
     global _WORKER_SYMMETRY_BREAKING, _WORKER_HINTS, _WORKER_STUB_PRIORITY
     global _WORKER_SOLVER_OVERRIDES, _WORKER_EXACT_REPAIR, _WORKER_OBJECTIVE_LIMIT
-    global _WORKER_MODEL, _WORKER_ROAD_WITNESS
+    global _WORKER_MODEL, _WORKER_ROAD_WITNESS, _WORKER_FILLERS_IN_MODEL
     pat, k, layout, probe_limit, probe_workers, *rest = payload
     _WORKER_LAYOUT = layout
     _WORKER_PROBE_LIMIT = probe_limit
@@ -1408,11 +1473,13 @@ def _run_probe_seq(payload: tuple) -> dict:
     deadline = rest[6] if len(rest) > 6 and _WORKER_OBJECTIVE_LIMIT > 0 else None
     _WORKER_MODEL = rest[7] if len(rest) > 7 else "item"
     _WORKER_ROAD_WITNESS = rest[8] if len(rest) > 8 else False
+    _WORKER_FILLERS_IN_MODEL = rest[9] if len(rest) > 9 else False
     try:
         return _run_probe((pat, k, 0) if deadline is None else (pat, k, 0, deadline))
     finally:
         _WORKER_LAYOUT = None
         _WORKER_ROAD_WITNESS = False
+        _WORKER_FILLERS_IN_MODEL = False
 
 LEVEL_STATUSES = ("FEASIBLE", "INFEASIBLE", "INCONCLUSIVE", "UNDERSAMPLED")
 
@@ -1631,7 +1698,8 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
                                          getattr(params, "objective_limit", 0.0),
                                          effective_deadline,
                                          getattr(params, "probe_model", "item"),
-                                         getattr(params, "road_witness", False)))
+                                         getattr(params, "road_witness", False),
+                                         getattr(params, "fillers_in_model", False)))
                 if handle_result(k, result, pat):
                     interrupted = True
                     break
@@ -1716,7 +1784,9 @@ class RoadsFirstSearch:
                  keep_chains: bool = True,
                  military: str = "connect",
                  rebase_s: float = 0.0,
-                 road_witness: bool = False):
+                 road_witness: bool = False,
+                 fillers_in_model: bool = False,
+                 seed_input: bool = False):
         # Linked chains are placed as rigid composites so their links survive
         # (user-confirmed rule, 2026-11-11); every emitted layout is expanded
         # back to real buildings inside validate().
@@ -1728,6 +1798,12 @@ class RoadsFirstSearch:
         self.rebase_s = rebase_s
         # Codex T1: validate() also tries the objective's selected roads.
         self.road_witness = road_witness
+        # Phase D: the position model places the no-road buildings too.
+        self.fillers_in_model = fillers_in_model
+        # Start from the uploaded city when it is game-legal: it is the first
+        # incumbent, and the end-of-run rebased polish improves whichever layout
+        # is best (2026-11-13: FR24 232 -> 227, where every skeleton family fails).
+        self.seed_input = seed_input
         self.source_layout = layout
         if military == "unconnected":
             # Explicit per-run choice: two-lane buildings are left off the road
@@ -1826,6 +1902,20 @@ class RoadsFirstSearch:
         return {"before": before, "after": after, "status": res.status,
                 "optimal": res.optimal}
 
+    def _seed_from_input(self, on_improvement) -> dict:
+        """Publish the uploaded layout as the first incumbent if it passes the
+        full legality gate; k is its own road count (it is its own skeleton)."""
+        src = self.source_layout
+        if not src.roads or src.townhall is None:
+            return {"used": False, "reason": "no roads"}
+        rep = legality_check(src, src, military=self.military)
+        if rep.status != "valid":
+            return {"used": False, "reason": rep.status, "violations": rep.violations[:3]}
+        n = len(src.roads)
+        on_improvement(Layout(src.region, list(src.buildings), src.townhall, dict(src.roads)),
+                       n, n)
+        return {"used": True, "roads": n}
+
     def _apply_objective_polish(self, cands, best, on_improvement, end,
                                 should_stop=None) -> dict:
         """Re-solve the top distinct SAT skeletons with minimize_needed, all
@@ -1846,7 +1936,9 @@ class RoadsFirstSearch:
             t_solve = time.monotonic()
             odiag: dict = {}
             opos = minimize_needed(pat, region, consumers, pos, limit=limit,
-                                   workers=threads, model=self.probe_model, diag=odiag)
+                                   workers=threads, model=self.probe_model, diag=odiag,
+                                   fillers=model_fillers(self.layout, self.fillers_in_model,
+                                                         self.probe_model))
             solve_s = time.monotonic() - t_solve
             got = None
             if opos is not None:
@@ -1921,6 +2013,7 @@ class RoadsFirstSearch:
             latest.update(layout=vlay, k=k, achieved=achieved)
             if user_cb is not None:
                 user_cb(vlay, k, achieved)
+        seed_info = self._seed_from_input(on_improvement) if self.seed_input else None
         layout = self.layout
         region = set(layout.region.cells)
         consumers = layout.road_needing()
@@ -1961,7 +2054,8 @@ class RoadsFirstSearch:
                 initargs=(layout, self.probe_limit, self.probe_workers,
                          self.symmetry_breaking, self.hints, self.stub_priority,
                          None, self.exact_repair, self.objective_limit,
-                         self.probe_model, self.road_witness))
+                         self.probe_model, self.road_witness,
+                         self.fillers_in_model))
 
         pool = _new_pool() if self.workers > 1 else None
 
@@ -1984,6 +2078,7 @@ class RoadsFirstSearch:
             objective_limit=self.objective_limit,
             probe_model=self.probe_model,
             road_witness=self.road_witness,
+            fillers_in_model=self.fillers_in_model,
             comb_modes=self.comb_modes,
             interleave_levels=self.interleave_levels,
         )
@@ -2217,7 +2312,22 @@ class RoadsFirstSearch:
                     if found is not None:
                         k, st = found, "FEASIBLE"
                 if st != "FEASIBLE":
+                    # The walk found nothing, but a seeded incumbent (the uploaded
+                    # city) still gets the rebased polish and the exact finish.
+                    rebase_info = exact_info = None
+                    if self.rebase_s > 0 and latest["layout"] is not None:
+                        from foeopt.incumbent_polish import polish_rebased
+                        with profile.timed("finish_rebased_polish"):
+                            rebase_info = polish_rebased(
+                                self, latest["layout"], latest["achieved"], polish_deadline,
+                                on_improvement, should_stop, k=latest["k"])
+                    if self.exact_finish and latest["layout"] is not None:
+                        with profile.timed("finish_exact"):
+                            exact_info = self._apply_exact_finish(
+                                latest, on_improvement, hard_deadline, should_stop)
                     return {"verdict": "FAMILY_TOO_WEAK", "walk_complete": not truncated,
+                            "best_achieved": latest["achieved"], "seed_input": seed_info,
+                            "rebased_polish": rebase_info, "exact_finish": exact_info,
                             "deadline_hit": _should_stop(), "results": results,
                             "boundary_descent": boundary_info["probed"],
                             "profile": profile.as_dict(self.workers),
@@ -2322,6 +2432,7 @@ class RoadsFirstSearch:
                     "profile": profile.as_dict(self.workers),
                     "objective_polish": objective_info,
                     "rebased_polish": rebase_info,
+                    "seed_input": seed_info,
                     "exact_finish": exact_info,
                     "filler_failures": summarise_fillers(filler_stats),
                     "level_coverage": level_coverage,

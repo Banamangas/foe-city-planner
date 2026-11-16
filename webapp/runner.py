@@ -79,7 +79,9 @@ class JobManager:
                probe_model: str = "position",
                military: str = "connect",
                rebase_s: float = 0.0,
-               road_witness: bool = False) -> str:
+               road_witness: bool = False,
+               fillers_in_model: bool = False,
+               seed_input: bool = False) -> str:
         """Start a RoadsFirstSearch in a background thread and return its id.
 
         Keyword names match webapp.params.OPTION_SPECS one for one, so the
@@ -156,6 +158,8 @@ class JobManager:
                     military=military,
                     rebase_s=rebase_s,
                     road_witness=road_witness,
+                    fillers_in_model=fillers_in_model,
+                    seed_input=seed_input,
                 )
                 res = search.run(on_improvement=on_improvement,
                                  on_status=on_status,
