@@ -2093,7 +2093,9 @@ class RoadsFirstSearch:
                  seed_input: bool = False,
                  scheduler: str = "batch",
                  early_publish: bool = False,
-                 closure: str = "bfs"):
+                 closure: str = "bfs",
+                 union_polish: float = 0.0,
+                 union_m: int = 3):
         # Linked chains are placed as rigid composites so their links survive
         # (user-confirmed rule, 2026-11-11); every emitted layout is expanded
         # back to real buildings inside validate().
@@ -2115,6 +2117,12 @@ class RoadsFirstSearch:
         if closure not in CLOSURES:
             raise ValueError(f"closure must be one of {CLOSURES}")
         self.closure = closure
+        # Q2 step 2: seconds (taken from the polish window, after objective
+        # polish, before rebased polish) for re-solving UNIONS of solved road
+        # networks that share the TH (foeopt/union_polish.py). 0 = off.
+        self.union_polish = union_polish
+        self.union_m = union_m
+        self.solved_networks: list = []   # (roads, layout, skeleton) from polish
         self.source_layout = layout
         if military == "unconnected":
             # Explicit per-run choice: two-lane buildings are left off the road
@@ -2285,6 +2293,7 @@ class RoadsFirstSearch:
                                        witness=odiag.get("witness") if self.road_witness else None)
             if vst == "OK":
                 got = vach
+                self.solved_networks.append((vach, vlay, pat))  # union polish members
             else:
                 vlay = None
         # solve_s < limit_s means CP-SAT proved the skeleton's optimum early
@@ -2420,6 +2429,7 @@ class RoadsFirstSearch:
             latest.update(layout=vlay, k=k, achieved=achieved)
             if user_cb is not None:
                 user_cb(vlay, k, achieved)
+        self.solved_networks = []
         seed_info = self._seed_from_input(on_improvement) if self.seed_input else None
         layout = self.layout
         region = set(layout.region.cells)
@@ -2839,18 +2849,28 @@ class RoadsFirstSearch:
             _end_walk()
             best = min((r[1] for r in results.values() if r[1] is not None), default=None)
             objective_info = None
+            # rebase_s, and before it union_polish, come off the END of the
+            # polish window (same deadline): objective | union | rebase.
+            rebase_cut = min(self.rebase_s, objective_reserve)
+            union_cut = min(self.rebase_s + self.union_polish, objective_reserve)
             if best is not None and objective_reserve > 0:
                 with profile.timed("finish_objective_polish"):
-                    # rebase_s comes off the END of the polish window (same deadline)
                     objective_info = self._apply_objective_polish(
                         sat_cands, best, on_improvement,
-                        polish_deadline - min(self.rebase_s, objective_reserve),
-                        should_stop)
+                        polish_deadline - union_cut, should_stop)
                 # summed candidate wall vs the phase wall shows the overlap
                 for row in objective_info.get("per_skeleton", ()):
                     profile.add("polish_candidate", row.get("wall_s", 0.0))
                 if objective_info["after"] is not None and objective_info["after"] < best:
                     best = objective_info["after"]
+            union_info = None
+            if self.union_polish > 0 and latest["layout"] is not None:
+                from foeopt.union_polish import polish_union
+                with profile.timed("finish_union_polish"):
+                    union_info = polish_union(self, latest["layout"], latest["achieved"],
+                                              polish_deadline - rebase_cut,
+                                              list(self.solved_networks), on_improvement,
+                                              should_stop, k=latest["k"])
             rebase_info = None
             if self.rebase_s > 0 and latest["layout"] is not None:
                 from foeopt.incumbent_polish import polish_rebased
@@ -2884,6 +2904,7 @@ class RoadsFirstSearch:
                     "profile": profile.as_dict(self.workers),
                     "objective_polish": objective_info,
                     "rebased_polish": rebase_info,
+                    "union_polish": union_info,
                     "seed_input": seed_info,
                     "exact_finish": exact_info,
                     "filler_failures": summarise_fillers(filler_stats),

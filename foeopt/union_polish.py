@@ -6,13 +6,19 @@ skeleton, and the incumbents are locally optimal (T5 windows up to 20x20: no
 gain). A union lets the objective keep the good half of network A and the good
 half of network B, a non-local move neither polish can make.
 
-How: the union's cells are SOFT (`minimize_needed(..., soft=True)`): each is a
-road, a building cell or empty, so the cells the solution does not keep cost
-no space. Connectivity uses `closure` ("flow" is exact; "layered" is cheaper
-but can make the best member's own network infeasible, because the union's
-shortcuts change the distances). The best member is the hint (placement and
-roads), so the solve starts from a feasible point of the model when the
-closure admits that member's network.
+How: the cells the best member does not use are SOFT (`minimize_needed(...,
+soft=cells)`): each is a road, a building cell or empty, so unused union cells
+cost no space; the best member's own network stays hard, as in rebased polish
+(which runs next and frees what the result leaves unused). Connectivity is the
+exact "flow" closure ("layered" can reject the best member's own network,
+because the union's shortcuts change BFS distances). The best member is a
+COMPLETE hint (placement, roads and flow), so the solve starts feasible.
+
+Measured offline 2026-11-16 (scripts/exp_union_polish.py, flow, 12-25 s per
+solve): no union beat its best member or plain rebased polish on darkzig, FR16
+or FR17, including unions with freshly generated same-TH networks that add
+24-67 cells. FR16 and FR17 unions are mostly PROVEN optimal at 67 / 103;
+darkzig unions with 48-67 new cells end FEASIBLE with weak bounds (0-34).
 
 Members: the incumbent plus every network objective polish validated, grouped
 by identical TH footprint. Unions tried, best first: the top-M members of each
@@ -59,12 +65,16 @@ def plan_unions(members: list[tuple[int, Layout, Pattern | None]], incumbent: La
     """The unions to try, best first. `members` are (achieved, layout, original
     skeleton or None); duplicates (same road set) are dropped. Each plan is
     {"kind", "members": [Layout, ...] best first, "extra": cells}."""
-    seen, uniq = set(), []
+    seen: dict = {}
+    uniq = []
     for ach, lay, pat in sorted(members, key=lambda t: t[0]):
         key = frozenset(lay.roads)
-        if key in seen:
+        if key in seen:                    # same network: keep a known skeleton
+            i = seen[key]
+            if uniq[i][2] is None and pat is not None:
+                uniq[i] = (uniq[i][0], uniq[i][1], pat)
             continue
-        seen.add(key)
+        seen[key] = len(uniq)
         uniq.append((ach, lay, pat))
     groups: dict[tuple, list] = {}
     for t in uniq:
@@ -158,9 +168,12 @@ def polish_union(search, incumbent: Layout, achieved: int, end: float,
     """Try the planned unions before `end` (monotonic), splitting the time left
     evenly over the unions still to go. Publishes strict improvements only."""
     t_start = time.monotonic()
-    threads = max(1, search.workers * search.probe_workers)
-    closure = getattr(search, "closure", "bfs")
-    closure = closure if closure in ("layered", "flow") else "flow"
+    threads = (search._polish_threads() if hasattr(search, "_polish_threads")
+               else max(1, search.workers * search.probe_workers))
+    # Always flow: the union's shortcuts change BFS distances, so "layered" can
+    # reject the best member's own network (measured 2026-11-16, darkzig
+    # 88 + a 97 member: the hint became infeasible and the solve returned 96).
+    closure = "flow"
     allm = [(achieved, incumbent, None), *members]
     plans = plan_unions(allm, incumbent, m=getattr(search, "union_m", 3))
     report = {"before": achieved, "after": achieved, "members": len(allm),

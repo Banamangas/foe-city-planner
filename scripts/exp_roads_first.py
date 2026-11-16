@@ -204,6 +204,12 @@ def main(argv=None):
     p.add_argument("--early-publish", action="store_true",
                    help="publish each SAT probe's layout before its objective "
                         "(needs --scheduler queue; backlog S3)")
+    p.add_argument("--closure", choices=["bfs", "layered", "flow"], default="bfs",
+                   help="connectivity rule of the end-of-run polishes (backlog Q2)")
+    p.add_argument("--union-polish", type=float, default=0.0,
+                   help="seconds of the polish window for union polish (Q2; 0 = off)")
+    p.add_argument("--union-m", type=int, default=3,
+                   help="networks combined by the first union (Q2)")
     args = p.parse_args(argv)
     if args.smoke:
         args.patterns = 20
@@ -294,6 +300,9 @@ def main(argv=None):
         seed_input=args.seed_input,
         scheduler=args.scheduler,
         early_publish=args.early_publish,
+        closure=args.closure,
+        union_polish=args.union_polish,
+        union_m=args.union_m,
     ).run(on_improvement=on_improvement, on_status=on_status)
     print(json.dumps({k: v for k, v in res.items() if k != "results"}, indent=1))
     per_level = {k: v[0] + (f" achieved={v[1]}" if v[1] is not None else "")
