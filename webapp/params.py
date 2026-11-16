@@ -132,6 +132,14 @@ OPTION_SPECS: list[dict] = [
                 "instead of discarding them. Same search decisions.",
     },
     {
+        "name": "early_publish", "cli": "--early-publish", "type": "bool",
+        "default": False, "advanced": True,
+        "group": "parallelism", "label": "Show layouts sooner",
+        "help": "With the queue scheduler: show each feasible layout as soon as "
+                "it is checked (about a second), then the improved one when the "
+                "placement objective finishes. Ignored with the batch scheduler.",
+    },
+    {
         "name": "exact_finish", "cli": "--exact-finish", "type": "bool",
         "default": False, "advanced": True,
         "group": "budget", "label": "Exact road finish",

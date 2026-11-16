@@ -1346,8 +1346,10 @@ def _stop_active_solvers() -> int:
 
 # The task being run by a work-queue worker, or None (batch pool / sequential
 # path: _run_probe then behaves exactly as before). Keys: "deadline" (the
-# level's effective deadline; every solve is clamped to it) and "stopped"
-# (callable -> bool: the run's cooperative stop flag).
+# level's effective deadline; every solve is clamped to it), "stopped"
+# (callable -> bool: the run's cooperative stop flag) and "early" (None, or a
+# callable(achieved, layout, pos) that publishes the validated probe layout
+# before the in-walk objective runs -- option early_publish, backlog S3).
 _TASK_CTX: dict | None = None
 PROBE_MIN_S = 0.2  # a queue task with less time than this left is not started
 
@@ -1468,6 +1470,11 @@ def _run_probe(payload: tuple) -> dict:
     for key in ("route_s", "fillers_s", "repair_s"):
         if key in vdiag:
             phases["validate_" + key[:-2]] = vdiag[key]
+    if ctx is not None and ctx.get("early") is not None and vstat == "OK":
+        # early_publish: the probe's own placement passed the same validate()
+        # as every published layout, so it can be shown now rather than after
+        # the objective has held this worker for up to objective_limit.
+        ctx["early"](achieved, vlay, pos)
     objective_cmp = None
     # Clamped to one probe's own limit, for the same reason as exact_repair
     # above (charged per SAT, an unclamped value lets N SATs add N x limit),
@@ -1901,7 +1908,8 @@ class RoadsFirstSearch:
                  road_witness: bool = False,
                  fillers_in_model: bool = False,
                  seed_input: bool = False,
-                 scheduler: str = "batch"):
+                 scheduler: str = "batch",
+                 early_publish: bool = False):
         # Linked chains are placed as rigid composites so their links survive
         # (user-confirmed rule, 2026-11-11); every emitted layout is expanded
         # back to real buildings inside validate().
@@ -2001,6 +2009,12 @@ class RoadsFirstSearch:
         if scheduler not in SCHEDULERS:
             raise ValueError(f"scheduler must be one of {SCHEDULERS}")
         self.scheduler = scheduler
+        # Backlog S3: publish each SAT probe's validated layout as soon as it
+        # exists, before the in-walk objective improves it (first layout at
+        # ~1 s instead of ~objective_limit). Needs the queue's result channel.
+        if early_publish and scheduler != "queue":
+            raise ValueError("early_publish needs scheduler='queue'")
+        self.early_publish = early_publish
 
     def _apply_exact_finish(self, latest: dict, on_improvement,
                             deadline: float | None = None, should_stop=None) -> dict:
@@ -2417,7 +2431,8 @@ class RoadsFirstSearch:
                                    score_threshold=self.score_threshold,
                                    filler_stats=filler_stats, coverage=level_coverage,
                                    on_level_update=_level_update,
-                                   should_stop=should_stop)
+                                   should_stop=should_stop,
+                                   early_publish=self.early_publish)
 
             def _end_walk():
                 """Queue only: book the leftover tasks (the rest of FEASIBLE
