@@ -365,6 +365,12 @@ SMOKE_PRESET: dict = {
 #     FR17      103,103 -> 103,103  106,106 -> 106,106
 # Never worse, better in 3 of 10 pairs (all darkzig, within its +-2 noise at 120 s;
 # the 600 s pair is consistent). 600 s baseline = the T4 A/B rows, same code flag-off.
+# seed_input (Phase D) -- adopted 2026-11-16, preset (witness) vs preset + seed, 600 s:
+#     darkzig   paired 90,89 -> 89,88 (unpaired 88,88 -> 89,89: darkzig noise is +-2)
+#     FR16      67,67 -> 67,67      FR17   103,103 -> 103,103
+#     FR24      none -> 228,220     user   none -> 142,142 (its own legal city back)
+# A legal upload becomes the first incumbent, so rebased polish + exact finish run
+# even when the walk finds nothing (FR24's first optimizer result, 232 -> 220).
 BEST_PRESET: dict = {
     "pattern_family": "nonuniform",
     "quality_index_band": "3,4",
@@ -381,6 +387,7 @@ BEST_PRESET: dict = {
     "probe_model": "position",
     "rebase_s": 20.0,
     "road_witness": True,
+    "seed_input": True,
 }
 
 DEFAULTS: dict = {s["name"]: s["default"] for s in OPTION_SPECS}
