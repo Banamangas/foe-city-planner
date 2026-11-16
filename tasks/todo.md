@@ -1417,3 +1417,17 @@ CP-SAT parameter portfolios; lex symmetry breaking in the item model; assumption
 incremental solving (unsupported); skeleton bandit / CEM / RL; CNN scheduling;
 depth-matched gaps; T5 optional-road windows <= 20x20; model-build / loader / filler-scan
 speedups (~1% of time; a city load is 0.33 s).
+
+## Status 2026-11-16 (session paused at usage limit)
+Integration branch `feat/backlog-2026-11` (all new options OFF, full suite 701 passed):
+- I1 bench harness + shared machine lock: DONE.
+- S1 queue scheduler + S3 early_publish: MERGED (smoke FR16 60 s: walk idle 59% -> 3%, first solver layout 27 s -> 0.9 s). A/B pending.
+- S2 parallel polish / hinted exact finish: MERGED. A/B pending.
+- Q1 forest bound: DONE (sound, weak: 22/22/32/60 vs 88/67/103/220; no stop rule from counting).
+- Q3 analysis: MERGED (docs/reviews/2026-11-16-q3-network-topology.md; two trunks + depth 3 cover 98% of out-of-grammar cells).
+- STOPPED mid-work (check their worktree branches under .claude/worktrees/ for partial commits):
+  C1 prefilter (`fix/c1-prefilter-two-lane`), Q2 superset skeletons (`feat/q2-superset-skeletons`),
+  Q3 rooted generator (`feat/q3-rooted-family`).
+Pending A/Bs (serial, scripts/bench.py, darkzig/FR16/FR17, 120+600 s, 2 reps):
+  `--arm preset --arm "queue:scheduler=queue" --arm "qe:scheduler=queue;early_publish=true"`
+  `--arm preset --arm "par3:polish_parallel=3;polish_threads=16;exact_finish_workers=4" --arm "par6:polish_parallel=6;polish_top=6;polish_threads=16;exact_finish_workers=4"`
