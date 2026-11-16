@@ -20,7 +20,8 @@ import time
 from foeopt.model import Footprint, Layout, contact_cells
 from foeopt.legality import two_lane_tiles
 from foeopt.roads_first import (LANE_PREFIX, OBJECTIVE_MARGIN_S, OBJECTIVE_MIN_S,
-                                Pattern, minimize_needed, skeleton_parents, validate)
+                                Pattern, minimize_needed, model_fillers,
+                                skeleton_parents, validate)
 
 MAX_SOLVES = 2  # rebase again only after an accepted improvement
 
@@ -31,14 +32,16 @@ def rebase_pattern(incumbent: Layout) -> Pattern:
                    roads=frozenset(incumbent.roads), params={"rebased": True})
 
 
-def incumbent_positions(search_layout: Layout, incumbent: Layout) -> dict | None:
+def incumbent_positions(search_layout: Layout, incumbent: Layout,
+                        fillers=None) -> dict | None:
     """Positions dict (as `probe` returns) of the incumbent, keyed like the
     search layout's consumers. A composite chain sits at its first member's
     position minus that member's offset. The two-lane tile, if any, becomes
-    "lane2:0". None if a consumer cannot be found in the incumbent."""
+    "lane2:0". `fillers` (Phase D) are added the same way. None if a building
+    cannot be found in the incumbent."""
     where = {b.entity_id: b.footprint for b in incumbent.buildings}
     pos: dict = {}
-    for b in search_layout.road_needing():
+    for b in [*search_layout.road_needing(), *(fillers or ())]:
         w, l = b.footprint.width, b.footprint.length
         if b.members:
             m, dx, dy = b.members[0]
@@ -92,7 +95,9 @@ def polish_rebased(search, incumbent: Layout, achieved: int, end: float,
         if pat.roads in seen:
             break
         seen.add(pat.roads)
-        pos = incumbent_positions(search.layout, cur)
+        mfill = model_fillers(search.layout, getattr(search, "fillers_in_model", False),
+                              "position")
+        pos = incumbent_positions(search.layout, cur, mfill)
         row = {"roads": len(pat.roads), "before": cur_ach, "after": None,
                "limit_s": round(limit, 1)}
         report["attempts"].append(row)
@@ -102,7 +107,8 @@ def polish_rebased(search, incumbent: Layout, achieved: int, end: float,
         t0 = time.monotonic()
         odiag: dict = {}
         opos = minimize_needed(pat, region, consumers, pos, limit=limit,
-                               workers=threads, model="position", diag=odiag)
+                               workers=threads, model="position", diag=odiag,
+                               fillers=mfill)
         row["solve_s"] = round(time.monotonic() - t0, 1)
         if opos is None:
             break
