@@ -2868,3 +2868,11 @@ That is a modelling gap (fillers outside the model), not a scheduling one.
   1-2 road "gap" I nearly chased as an exact-finish bug. The cheaper network was illegal.
 - Rule: any comparison count must be produced under the full rules (fixed tiles, chains)
   and pass legality.check before it is read as evidence of a missed improvement.
+
+## 2026-11-16: below ~67 s the preset runs no objective polish at all (S2 smoke)
+- The rebased polish takes `min(rebase_s, reserve)` off the END of the objective window.
+  At a 60 s box the reserve is 18 s and rebase_s is 20, so objective polish gets 0 s
+  (`tried: 0`); on FR17 the walk also overran to 63 s, so rebase and exact finish were
+  SKIPPED too. A 60 s smoke of a polish change exercises none of it.
+- Rule: before using a short box to smoke a finishing-phase change, check the phase's
+  `tried`/status in the result; shrink probe_limit/rebase_s in BOTH arms if needed.

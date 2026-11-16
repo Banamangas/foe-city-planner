@@ -1255,11 +1255,21 @@ Measured: workers idle 47-53% at 120 s, 22-24% at 600 s on FR16/FR17.
 ### S2. Parallel polish  [S]
 Objective polish solves the top-3 skeletons sequentially with all threads; rebased polish
 and exact finish are sequential too, while the pool idles. FR17's record is made here.
-- [ ] Run the polish candidates concurrently (3 x 4 threads), then widen to top-6 at the
+- [x] Run the polish candidates concurrently (3 x 4 threads), then widen to top-6 at the
       same wall-clock. Use all 16 cores (preset uses 6x2).
-- [ ] `exact_route`: hint from the current roads and give it > 1 worker (exact_router.py:100).
+      -> branch `feat/s2-parallel-polish`: `polish_parallel=N` (threads; CP-SAT releases
+      the GIL in Solve), `polish_threads` (default workers x probe_workers), `polish_top`
+      (renamed from `objective_polish_top`). All OFF by default.
+- [x] `exact_route`: hint from the current roads and give it > 1 worker (exact_router.py:100).
+      -> `exact_finish_workers=N` (0 = historical). The hint (roads + BFS-tree flow) is a
+      complete feasible solution on the darkzig 88 / FR16 67 / FR17 103 records (verified
+      with fix_variables_to_their_hinted_value). Exact finish already takes 0.03-0.08 s and
+      is OPTIMAL there, so expect no gain from it on these cities.
 - [ ] Gate: same or better roads at 600 s with polish wall-clock down >= 2x, or better roads
       at equal wall-clock. Never shrink the polish reserve (lesson 2026-11-12).
+      Not run yet (code only). Note: at a 60 s box on FR17 the preset runs NO objective
+      polish -- rebase_s=20 >= the 18 s reserve takes the whole window -- so S2 can only
+      show at 120/600 s.
 
 ### S3. Publish the feasible layout before the in-walk objective  [S, UX]
 First layout appears at ~31 s because the objective holds the worker for its full limit.
