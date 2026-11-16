@@ -147,6 +147,34 @@ OPTION_SPECS: list[dict] = [
                 "(usually well under a second) and keep it if it uses fewer roads.",
     },
     {
+        "name": "closure", "cli": "--closure", "type": "choice",
+        "default": "bfs", "choices": ["bfs", "layered", "flow"], "advanced": True,
+        "group": "budget", "label": "Polish: road connectivity rule",
+        "help": "How the end-of-run polishes keep the chosen road cells joined "
+                "to the Town Hall. bfs (default): one fixed path per cell, exact "
+                "on tree-shaped skeletons. layered: any path that gets closer to "
+                "the Town Hall at every step. flow: any connected network (exact, "
+                "a larger model).",
+    },
+    {
+        "name": "union_polish", "cli": "--union-polish", "type": "float",
+        "default": 0.0, "min": 0.0, "max": 600.0, "advanced": True,
+        "group": "budget", "label": "Union polish (s, 0 = off)",
+        "help": "After objective polish, re-place the buildings on the UNION of "
+                "the best road networks found around the same Town Hall spot, so "
+                "the result can keep part of one network and part of another. "
+                "Takes this many seconds from the end of the polish time (before "
+                "rebased polish); keeps only a strictly better, fully valid "
+                "layout. 0 = off.",
+    },
+    {
+        "name": "union_m", "cli": "--union-m", "type": "int",
+        "default": 3, "min": 2, "max": 8, "advanced": True,
+        "group": "budget", "label": "Union polish: networks per union",
+        "help": "How many of the best networks around one Town Hall spot the "
+                "first union combines.",
+    },
+    {
         "name": "polish_top", "cli": "--polish-top", "type": "int",
         "default": 3, "min": 1, "max": 32, "advanced": True,
         "group": "budget", "label": "Objective polish: skeletons",
