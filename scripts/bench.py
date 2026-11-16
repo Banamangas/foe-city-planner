@@ -52,7 +52,17 @@ CITIES = {
 MILITARY = "connect"
 # harness-level defaults the webapp also uses for BEST_PRESET runs
 BASE_KWARGS = {"workers": 6, "probe_workers": 2}
-LOCK = ROOT / "output" / "bench" / ".lock"
+
+
+def _shared_root() -> pathlib.Path:
+    """The MAIN checkout, also when running from a git worktree, so every
+    worktree takes the same machine lock (one CPU budget, one lock)."""
+    common = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                            cwd=ROOT, capture_output=True, text=True).stdout.strip()
+    return pathlib.Path(common).parent if common else ROOT
+
+
+LOCK = _shared_root() / "output" / "bench" / ".lock"
 _CACHE: dict = {}
 
 
