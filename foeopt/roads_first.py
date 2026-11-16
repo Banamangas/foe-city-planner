@@ -493,7 +493,12 @@ def prefilter(pattern: Pattern, region: set[Cell],
     # neighbor. Strictly tighter than the old flat-3 check, still sound.
     capacity = sum(min(3, sum(1 for dx, dy in _ORTHO if (c[0] + dx, c[1] + dy) in free))
                    for c in pattern.roads)
-    if capacity < len(consumers):
+    # Two-lane consumers (road_level >= 2) are served only by a 2x2 tile at the
+    # TH (_position_model), never by skeleton cells, so they don't draw on this
+    # capacity. (Their tile cells may lie off the skeleton and so take area, but
+    # a tile can also sit wholly on skeleton cells: the area check's lower bound
+    # stays sound without them.)
+    if capacity < sum(1 for b in consumers if b.road_level < 2):
         return "adjacency-capacity"
     return None
 

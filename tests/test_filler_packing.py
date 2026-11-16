@@ -115,3 +115,17 @@ def test_prefilter_is_unchanged_when_fillers_are_omitted():
                           None, None, "c")]
     assert prefilter(pat, region, consumers) == prefilter(pat, region, consumers, None)
     assert prefilter(pat, region, consumers, []) is None
+
+
+def test_prefilter_does_not_count_two_lane_consumers_against_skeleton():
+    """Two-lane consumers (road_level >= 2) are served by a 2x2 tile touching
+    the TH in the position model, never by skeleton cells -- so counting them
+    against the skeleton's adjacency capacity rejected feasible patterns."""
+    from foeopt.roads_first import Pattern, _probe_position, prefilter
+    region = {(x, y) for x in range(10) for y in range(10)}
+    th = Footprint(4, 4, 2, 2)
+    pat = Pattern(th=th, roads=frozenset({(6, 4)}), params={"k": 1})  # capacity 3
+    consumers = [Building(10 + i, "c", "military", Footprint(0, 0, 1, 1), True, 2,
+                          False, None, None, f"m{i}") for i in range(5)]
+    assert _probe_position(pat, region, consumers, probe_limit=10)[0] == "SAT"
+    assert prefilter(pat, region, consumers) is None
