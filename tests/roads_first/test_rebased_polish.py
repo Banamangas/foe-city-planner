@@ -74,7 +74,8 @@ def test_accepts_strict_improvement_then_rebases_once_more(monkeypatch):
                      roads={(2, 2): 1})
     calls = []
 
-    def fake_min(pat, region, consumers, pos, limit, workers, model, diag=None, fillers=None):
+    def fake_min(pat, region, consumers, pos, limit, workers, model, diag=None, fillers=None,
+                 **kw):
         calls.append(pat.roads)
         return dict(pos)
 
@@ -132,7 +133,8 @@ def test_filler_failure_retries_with_fillers_in_the_model(monkeypatch):
     better = replace(inc, roads={(2, 2): 1})
     calls = []
 
-    def fake_min(pat, region, consumers, pos, limit, workers, model, diag=None, fillers=None):
+    def fake_min(pat, region, consumers, pos, limit, workers, model, diag=None, fillers=None,
+                 **kw):
         calls.append((fillers, 30 in pos))
         return dict(pos)
 

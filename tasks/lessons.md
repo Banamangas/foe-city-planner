@@ -2885,3 +2885,15 @@ That is a modelling gap (fillers outside the model), not a scheduling one.
 - The queue scheduler clamps every solve to its level deadline: same smoke, walk ended at
   its 39.0 s deadline. Rule: read `profile.events.walk_end` against the walk deadline, not
   only wall vs box -- a walk overrun hides inside a box that looks honoured.
+
+## 2026-11-16: Q2 superset skeletons -- check the structure before loosening a constraint
+- The "bfs closure over-constrains cyclic patterns" premise did not apply where it was
+  aimed: every accepted (rebased) network is a pruned tree, 0-1 cells with two layered
+  predecessors (the 2x2 tile). One `cyclic_share` count settled "layered on rebased
+  polish" before any A/B. Rule: before relaxing a constraint, count how often it binds.
+- A union of skeletons only helps if unused union cells are free space: hard union cells
+  make the best member's hint infeasible; making ALL cells soft tripled the anchors and
+  collapsed the bound (darkzig 20 vs 88). Soft only for the NEW cells keeps the model at
+  rebase size and starts from a complete hint (placement + roads + flow).
+- Unions with genuinely different same-TH networks were PROVEN at the incumbent on FR16
+  (67) and FR17 (103). The gap is not "mix two halves at a fixed TH" either.
