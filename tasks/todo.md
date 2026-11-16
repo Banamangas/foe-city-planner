@@ -1245,26 +1245,48 @@ Today a level batch drains fully before the next is generated, generation + pref
 serially in the parent while the pool waits, and a slice expiry calls `pool.terminate()`
 (roads_first.py:1746), discarding in-flight SAT+objective work and rebuilding the pool.
 Measured: workers idle 47-53% at 120 s, 22-24% at 600 s on FR16/FR17.
-- [ ] Persistent workers pulling `(k, pattern)` tasks from a queue the parent keeps topped
+- [x] Persistent workers pulling `(k, pattern)` tasks from a queue the parent keeps topped
       up across levels; the walk controller consumes results as they arrive.
-- [ ] Cooperative cancel: a shared deadline / level-cancel flag checked in a CP-SAT solution
+- [x] Cooperative cancel: a shared deadline / level-cancel flag checked in a CP-SAT solution
       callback and before each phase (no terminate, nothing lost).
 - [ ] Gate: idle share < 10% at 120 s; roads never worse; first-result time not worse.
 - Prior: `concurrent_levels` was a small win; "keep the pool fed" is open from Phase B.
+- **Implemented** on `feat/s1s3-work-queue` as `scheduler="queue"` (default "batch";
+  `foeopt/work_queue.py`). Walk controller unchanged; a level answers when its
+  classification is final (FEASIBLE at the first validated SAT, else all tasks back or
+  deadline), the rest of a FEASIBLE level stays queued and is booked late. Cancel = every
+  solve clamped to the level deadline + a stop Event -> `CpSolver.stop_search()` from a
+  watcher thread; a cut task is CANCELLED (not counted -> UNDERSAMPLED, as before).
+  New profile fields: `profile.walk.idle_share` (both schedulers), `profile.info.queue`.
+  Smoke (FR16, 60 s, 1 run each, correctness only): batch wall 62.8 s (walk ran to 62.8 s,
+  into the polish reserve), idle 59.5%; queue wall 40.3 s (walk ended at its 39 s
+  deadline), idle 3.0%, same level classifications. **Verdict pending the serial A/B.**
 
 ### S2. Parallel polish  [S]
 Objective polish solves the top-3 skeletons sequentially with all threads; rebased polish
 and exact finish are sequential too, while the pool idles. FR17's record is made here.
-- [ ] Run the polish candidates concurrently (3 x 4 threads), then widen to top-6 at the
+- [x] Run the polish candidates concurrently (3 x 4 threads), then widen to top-6 at the
       same wall-clock. Use all 16 cores (preset uses 6x2).
-- [ ] `exact_route`: hint from the current roads and give it > 1 worker (exact_router.py:100).
+      -> branch `feat/s2-parallel-polish`: `polish_parallel=N` (threads; CP-SAT releases
+      the GIL in Solve), `polish_threads` (default workers x probe_workers), `polish_top`
+      (renamed from `objective_polish_top`). All OFF by default.
+- [x] `exact_route`: hint from the current roads and give it > 1 worker (exact_router.py:100).
+      -> `exact_finish_workers=N` (0 = historical). The hint (roads + BFS-tree flow) is a
+      complete feasible solution on the darkzig 88 / FR16 67 / FR17 103 records (verified
+      with fix_variables_to_their_hinted_value). Exact finish already takes 0.03-0.08 s and
+      is OPTIMAL there, so expect no gain from it on these cities.
 - [ ] Gate: same or better roads at 600 s with polish wall-clock down >= 2x, or better roads
       at equal wall-clock. Never shrink the polish reserve (lesson 2026-11-12).
+      Not run yet (code only). Note: at a 60 s box on FR17 the preset runs NO objective
+      polish -- rebase_s=20 >= the 18 s reserve takes the whole window -- so S2 can only
+      show at 120/600 s.
 
 ### S3. Publish the feasible layout before the in-walk objective  [S, UX]
 First layout appears at ~31 s because the objective holds the worker for its full limit.
-- [ ] Emit the validated probe layout as an improvement immediately, then the objective's.
+- [x] Emit the validated probe layout as an improvement immediately, then the objective's.
 - [ ] Gate: first result < 3 s on darkzig/FR16/FR17; final roads unchanged.
+- **Implemented** as `early_publish` (needs `scheduler="queue"`). FR16 60 s smoke: first
+  solver layout 27.1 s -> 0.9 s. **Verdict pending the serial A/B.**
 
 ### S4. Pattern ledger  [S]
 A re-probed UNDERSAMPLED level regenerates a fresh sample and may re-probe known patterns;
@@ -1348,8 +1370,10 @@ The grammar is depth-2: one trunk flush to one TH side, straight perpendicular b
 that stop at the first obstacle. Not expressible: second-level branches, bent branches,
 offset or multiple trunks, loops. FR24 has no feasible skeleton at all, yet its uploaded
 city is legal at 232 and polishes to 220.
-- [ ] For each legal network we have (5 uploads + records): tree depth, branch count, bends,
+- [x] For each legal network we have (5 uploads + records): tree depth, branch count, bends,
       trunk offset from the TH, TH sides used, loops. Which grammar rule does each violate?
+      Done: `docs/reviews/2026-11-16-q3-network-topology.md`. Uploads 72-84% out of grammar
+      (agrou 0%); end-on TH spoke + second trunk + depth 3 covers 98% of their OOG cells.
 - [ ] Extend the generator only with the features the data shows (likely: depth-3
       branches and a second trunk on another TH side). Judge by **achieved roads after the
       objective**, not by SAT rate in the band.
@@ -1393,3 +1417,17 @@ CP-SAT parameter portfolios; lex symmetry breaking in the item model; assumption
 incremental solving (unsupported); skeleton bandit / CEM / RL; CNN scheduling;
 depth-matched gaps; T5 optional-road windows <= 20x20; model-build / loader / filler-scan
 speedups (~1% of time; a city load is 0.33 s).
+
+## Status 2026-11-16 (session paused at usage limit)
+Integration branch `feat/backlog-2026-11` (all new options OFF, full suite 701 passed):
+- I1 bench harness + shared machine lock: DONE.
+- S1 queue scheduler + S3 early_publish: MERGED (smoke FR16 60 s: walk idle 59% -> 3%, first solver layout 27 s -> 0.9 s). A/B pending.
+- S2 parallel polish / hinted exact finish: MERGED. A/B pending.
+- Q1 forest bound: DONE (sound, weak: 22/22/32/60 vs 88/67/103/220; no stop rule from counting).
+- Q3 analysis: MERGED (docs/reviews/2026-11-16-q3-network-topology.md; two trunks + depth 3 cover 98% of out-of-grammar cells).
+- STOPPED mid-work (check their worktree branches under .claude/worktrees/ for partial commits):
+  C1 prefilter (`fix/c1-prefilter-two-lane`), Q2 superset skeletons (`feat/q2-superset-skeletons`),
+  Q3 rooted generator (`feat/q3-rooted-family`).
+Pending A/Bs (serial, scripts/bench.py, darkzig/FR16/FR17, 120+600 s, 2 reps):
+  `--arm preset --arm "queue:scheduler=queue" --arm "qe:scheduler=queue;early_publish=true"`
+  `--arm preset --arm "par3:polish_parallel=3;polish_threads=16;exact_finish_workers=4" --arm "par6:polish_parallel=6;polish_top=6;polish_threads=16;exact_finish_workers=4"`
