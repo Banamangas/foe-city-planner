@@ -78,7 +78,8 @@ def test_slice_deadline_caps_the_call_but_never_extends_it():
     """A slice may only ever shorten. If it were allowed to exceed the walk
     deadline it would reintroduce the overrun class fixed on 2026-07-30."""
     import inspect
-    src = inspect.getsource(mod._probe_levels_batch)
+    assert "_effective_deadline(params)" in inspect.getsource(mod._probe_levels_batch)
+    src = inspect.getsource(mod._effective_deadline)
     assert "min(params.deadline, slice_deadline)" in src
 
 
