@@ -447,6 +447,13 @@ SMOKE_PRESET: dict = {
 #     FR24      none -> 228,220     user   none -> 142,142 (its own legal city back)
 # A legal upload becomes the first incumbent, so rebased polish + exact finish run
 # even when the walk finds nothing (FR24's first optimizer result, 232 -> 220).
+# scheduler=queue + early_publish (S1+S3) -- adopted 2026-11-16 on feat/backlog-2026-11,
+# preset vs qe (output/bench/2026-11-16-s1s2-120, s123q2-600):
+#     600 s   darkzig 89,91 -> 88,88   FR16 67,67 -> 67,67   FR17 103,103 -> 103,103
+#     120 s   darkzig 89,90 -> 90,88   FR16 67,67 -> 67,67   FR17 106,106 -> 104,104
+# 600 s never worse (better 2, tie 4). 120 s has one darkzig pair worse by 1 (its +-2
+# noise) against FR17 -2 in both pairs. First solver layout 31 s -> 1-2 s; walk idle
+# 38-71% -> 2-4%. Mechanism: the batch walk overran into the polish reserve.
 BEST_PRESET: dict = {
     "pattern_family": "nonuniform",
     "quality_index_band": "3,4",
@@ -464,6 +471,8 @@ BEST_PRESET: dict = {
     "rebase_s": 20.0,
     "road_witness": True,
     "seed_input": True,
+    "scheduler": "queue",
+    "early_publish": True,
 }
 
 DEFAULTS: dict = {s["name"]: s["default"] for s in OPTION_SPECS}

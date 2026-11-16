@@ -1481,8 +1481,11 @@ Pending A/Bs (serial, scripts/bench.py, darkzig/FR16/FR17, 120+600 s, 2 reps):
 ## Night plan 2026-11-16/17 (user asleep; nothing merged to main)
 Machine rule: every CPU-heavy run (bench, probe studies) goes through the shared lock,
 `flock output/bench/.lock <cmd>` (same lock as scripts/bench.py), so runs stay strictly serial.
-- [ ] N1. 600 s A/B (s123q2-600) finishes -> report; if qe is never-worse, set
+- [x] N1. 600 s A/B (s123q2-600) finishes -> report; if qe is never-worse, set
       scheduler=queue + early_publish in BEST_PRESET on feat/backlog-2026-11 (not main).
+      RESULT (600 s, 2 reps): qe better 2 / worse 0 / tie 4 -> ADOPTED (darkzig 89,91 -> 88,88;
+      FR16, FR17 tie; first layout 31 s -> 1-2 s). qep (parallel polish) REJECT (worse 2).
+      qeu (union polish) identical to qe in every pair -> not adopted (adds nothing).
 - [ ] N2. Q3 rooted family (`feat/q3-rooted-family`): finish the pre-flight on FR24/FR17
       (remaining k), review, merge into the integration branch (option off), A/B
       `mix:family_mix=0.5` vs qe at 600 s; FR24 `rooted:pattern_family=rooted`.
