@@ -106,6 +106,22 @@ OPTION_SPECS: list[dict] = [
                 "greedy re-route and every building still fits.",
     },
     {
+        "name": "fillers_in_model", "cli": "--fillers-in-model", "type": "bool",
+        "default": False, "advanced": True,
+        "group": "search", "label": "Place decorations in the model",
+        "help": "The placement solver also places the buildings that need no "
+                "road, so every placement it finds leaves room for them. Needed "
+                "for very full cities; makes each solve larger.",
+    },
+    {
+        "name": "seed_input", "cli": "--seed-input", "type": "bool",
+        "default": False, "advanced": True,
+        "group": "search", "label": "Start from my city",
+        "help": "If your uploaded city is game-legal, it is the first result, and "
+                "the final polish tries to improve it on its own roads. Useful "
+                "when the search finds no layout of its own.",
+    },
+    {
         "name": "exact_finish", "cli": "--exact-finish", "type": "bool",
         "default": False, "advanced": True,
         "group": "budget", "label": "Exact road finish",
@@ -349,6 +365,12 @@ SMOKE_PRESET: dict = {
 #     FR17      103,103 -> 103,103  106,106 -> 106,106
 # Never worse, better in 3 of 10 pairs (all darkzig, within its +-2 noise at 120 s;
 # the 600 s pair is consistent). 600 s baseline = the T4 A/B rows, same code flag-off.
+# seed_input (Phase D) -- adopted 2026-11-16, preset (witness) vs preset + seed, 600 s:
+#     darkzig   paired 90,89 -> 89,88 (unpaired 88,88 -> 89,89: darkzig noise is +-2)
+#     FR16      67,67 -> 67,67      FR17   103,103 -> 103,103
+#     FR24      none -> 228,220     user   none -> 142,142 (its own legal city back)
+# A legal upload becomes the first incumbent, so rebased polish + exact finish run
+# even when the walk finds nothing (FR24's first optimizer result, 232 -> 220).
 BEST_PRESET: dict = {
     "pattern_family": "nonuniform",
     "quality_index_band": "3,4",
@@ -365,6 +387,7 @@ BEST_PRESET: dict = {
     "probe_model": "position",
     "rebase_s": 20.0,
     "road_witness": True,
+    "seed_input": True,
 }
 
 DEFAULTS: dict = {s["name"]: s["default"] for s in OPTION_SPECS}
