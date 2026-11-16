@@ -1,5 +1,6 @@
 import random
-import torch
+import pytest
+torch = pytest.importorskip("torch")
 
 from rl.ppo import prior_strength_for_success, select_action_mask
 

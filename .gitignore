@@ -28,3 +28,7 @@ scripts/_overnight.jsonl
 scripts/_levelbudget.jsonl
 scripts/_lb_smoke.jsonl
 scripts/_slicerepeats.jsonl
+
+# untracked city exports / local state
+agrou-city.json
+webapp/cities.db
