@@ -787,7 +787,9 @@ def _free_anchor_candidates(b: Building, region: set[Cell],
 
 
 def _position_model(pattern: Pattern, region: set[Cell], consumers: list[Building],
-                    needed: dict | None = None, m=None, fillers=None):
+                    needed: dict | None = None, m=None, fillers=None,
+                    soft: bool = False, cost: list | None = None,
+                    aux: dict | None = None):
     """Position-indexed placement: one boolean per (size class, anchor), a count
     per class, and at most one coverer per cell. Identical buildings have no
     identity here, so the N! permutation symmetry of the item model is gone.
@@ -800,19 +802,48 @@ def _position_model(pattern: Pattern, region: set[Cell], consumers: list[Buildin
     With `needed` (skeleton-cell booleans), each anchor literal forces at least
     one needed cell on its border, as in minimize_needed. Returns
     (model, {size: [(xy, lit), ...]}, classes) or None if some class has fewer
-    anchors than members (trivially UNSAT)."""
-    blocked = set(pattern.roads) | set(pattern.th.cells())
+    anchors than members (trivially UNSAT).
+
+    `soft` (needs `needed`; Q2 superset skeletons): True, or a set of skeleton
+    cells. Soft cells are not blocked: each is a road (needed), a building
+    cell, or empty -- at most one -- so the cells a superset skeleton does not
+    use stay available. True makes every TH-reachable cell soft; a set keeps
+    the rest hard (much smaller model: soft cells multiply the anchors). A
+    two-lane tile over a soft cell makes it a road too; `cost` receives the
+    extra objective terms for such cells (the caller adds them)."""
+    if soft and needed is None:
+        raise ValueError("soft skeleton cells need `needed`")
+    soft_cells = (set(needed) if soft is True else set(soft) & set(needed)) if soft else set()
+    blocked = (set(pattern.roads) - soft_cells) | set(pattern.th.cells())
+    contact_roads = frozenset(needed) if soft else pattern.roads
     classes = _size_classes(consumers)
     cover: dict[Cell, list] = {}
     lits: dict[tuple, list] = {}
     tiles: list = []                       # [((tx, ty), literal, tile cells)]
+    road_at = {c: needed[c] for c in soft_cells}  # soft: the "this cell is road" literal
     if any(key[3] >= 2 for key in classes):
+        tile_on: dict[Cell, list] = {}
+        tile_xy: dict = {}
         for (tx, ty) in _lane_tiles(pattern, region):
             cells = Footprint(tx, ty, 2, 2).cells()
             u = m.NewBoolVar(f"lane_{tx}_{ty}")
             tiles.append(((tx, ty), u, cells))
             for c in cells - blocked:      # tile cells off the skeleton occupy space
-                cover.setdefault(c, []).append(u)
+                if c in soft_cells:
+                    tile_on.setdefault(c, []).append(u)
+                    tile_xy.setdefault(c, set()).add((tx, ty))
+                else:
+                    cover.setdefault(c, []).append(u)
+        for c, us in tile_on.items():      # road here if needed OR under a tile
+            r = m.NewBoolVar(f"r{c[0]}_{c[1]}")
+            m.AddImplication(needed[c], r)
+            for u in us:
+                m.AddImplication(u, r)
+            road_at[c] = r
+            if aux is not None:
+                aux.setdefault("tile_road", {})[c] = (r, tile_xy[c])
+            if cost is not None:
+                cost.append(r - needed[c])
         if not tiles:
             return None
         lits[LANE_KEY] = [(xy, u) for xy, u, _ in tiles]
@@ -824,7 +855,7 @@ def _position_model(pattern: Pattern, region: set[Cell], consumers: list[Buildin
             lane_cells = set().union(*(cells for _, _, cells in tiles))
             opts = _lane_anchor_candidates(members[0], region, blocked, lane_cells)
         else:
-            opts = _anchor_candidates(members[0], region, blocked, pattern.roads)
+            opts = _anchor_candidates(members[0], region, blocked, contact_roads)
         row = []
         for (x, y) in opts:
             touch = None
@@ -879,6 +910,8 @@ def _position_model(pattern: Pattern, region: set[Cell], consumers: list[Buildin
             if len(lits[key]) < len(classes[key]):
                 return None
             m.Add(sum(v for _, v in lits[key]) == len(classes[key]))
+    for c, v in road_at.items():           # soft: road and building exclude
+        cover.setdefault(c, []).append(v)
     for vs in cover.values():
         if len(vs) > 1:
             m.AddAtMostOne(vs)
@@ -958,6 +991,118 @@ def skeleton_parents(pattern: Pattern) -> dict[Cell, Cell | None]:
     return parent
 
 
+def skeleton_layers(pattern: Pattern) -> dict[Cell, int]:
+    """BFS distance of every TH-reachable skeleton cell from the TH border,
+    inside the skeleton's own cells (roots = cells touching the TH: 0)."""
+    parent = skeleton_parents(pattern)
+    dist: dict[Cell, int] = {}
+    for c in parent:                      # BFS order: a parent precedes its child
+        p = parent[c]
+        dist[c] = 0 if p is None else dist[p] + 1
+    return dist
+
+
+# How `needed[c]` is kept connected to the TH in minimize_needed (Q2 step 1).
+#  "bfs":     needed[c] => needed[parent(c)], one BFS parent per cell. Exact on
+#             trees; on cyclic skeletons it forbids every other route to the TH.
+#  "layered": needed[c] => OR(needed[p], p a skeleton neighbour one layer closer
+#             to the TH). Sound (distances strictly decrease to a root) and the
+#             same as bfs on trees, but still not exact on general graphs: a cell
+#             whose only kept route to the TH goes through a cell at the SAME or
+#             a LARGER distance is excluded.
+#  "flow":    single-commodity flow from the TH border; each needed cell absorbs
+#             one unit and flow only crosses needed cells. Exact (any connected
+#             needed set is allowed), but O(4k) integer arc variables.
+CLOSURES = ("bfs", "layered", "flow")
+
+
+def _needed_vars(m, pattern: Pattern, closure: str = "bfs", aux: dict | None = None) -> dict:
+    """`needed[c]` booleans for the TH-reachable skeleton cells, kept connected
+    to the TH by `closure` (see CLOSURES). With "flow", `aux["flows"]` gets the
+    arc variables {(p or None for the TH, c): IntVar} (for hinting)."""
+    if closure not in CLOSURES:
+        raise ValueError(f"closure must be one of {CLOSURES}")
+    dist = skeleton_layers(pattern)
+    needed = {c: m.NewBoolVar(f"n{c[0]}_{c[1]}") for c in sorted(dist)}
+
+    def nbrs(c):
+        return [(c[0] + dx, c[1] + dy) for dx, dy in _ORTHO
+                if (c[0] + dx, c[1] + dy) in needed]
+
+    if closure == "bfs":
+        for c, p in skeleton_parents(pattern).items():
+            if p is not None:
+                m.AddImplication(needed[c], needed[p])
+    elif closure == "layered":
+        for c, d in dist.items():
+            if d > 0:
+                m.AddBoolOr([needed[p] for p in nbrs(c)
+                             if dist[p] == d - 1]).OnlyEnforceIf(needed[c])
+    else:
+        big = len(needed)
+        inflow: dict[Cell, list] = {c: [] for c in needed}
+        outflow: dict[Cell, list] = {c: [] for c in needed}
+        arcs: dict = {}
+        for c in needed:
+            if dist[c] == 0:               # arc from the TH (the source)
+                f = m.NewIntVar(0, big, f"fs{c[0]}_{c[1]}")
+                m.Add(f == 0).OnlyEnforceIf(needed[c].Not())
+                inflow[c].append(f)
+                arcs[(None, c)] = f
+            for p in nbrs(c):              # arc p -> c
+                f = m.NewIntVar(0, big, f"f{p[0]}_{p[1]}_{c[0]}_{c[1]}")
+                m.Add(f == 0).OnlyEnforceIf(needed[c].Not())
+                m.Add(f == 0).OnlyEnforceIf(needed[p].Not())
+                inflow[c].append(f)
+                outflow[p].append(f)
+                arcs[(p, c)] = f
+            # redundant but cheap: a kept non-root cell has a kept neighbour
+            if dist[c] > 0:
+                m.AddBoolOr([needed[p] for p in nbrs(c)]).OnlyEnforceIf(needed[c])
+        for c, v in needed.items():
+            m.Add(sum(inflow[c]) - sum(outflow[c]) == v)
+        if aux is not None:
+            aux["flows"] = arcs
+    return needed
+
+
+def _hint_closure(m, needed: dict, hint_roads, aux: dict) -> None:
+    """Hint `needed` from a known network; under "flow" also hint a feasible
+    flow (BFS tree inside the network, arc value = subtree size), so the hint
+    is a COMPLETE solution of the closure and CP-SAT starts from it."""
+    arcs = aux.get("flows")
+    keep = {c for c in hint_roads if c in needed}
+    if arcs is None:
+        for c, v in needed.items():
+            m.AddHint(v, c in keep)
+        return
+    succ: dict = {}
+    for (p, c) in arcs:
+        succ.setdefault(p, []).append(c)
+    parent: dict = {}
+    order = []
+    for c in sorted(succ.get(None, [])):
+        if c in keep and c not in parent:
+            parent[c] = None
+            order.append(c)
+    i = 0
+    while i < len(order):
+        p = order[i]
+        i += 1
+        for c in sorted(succ.get(p, [])):
+            if c in keep and c not in parent:
+                parent[c] = p
+                order.append(c)
+    size = {c: 1 for c in order}
+    for c in reversed(order):
+        if parent[c] is not None:
+            size[parent[c]] += size[c]
+    for c, v in needed.items():
+        m.AddHint(v, c in parent)
+    for (p, c), f in arcs.items():
+        m.AddHint(f, size[c] if c in parent and parent[c] == p else 0)
+
+
 def needed_skeleton_cells(pattern: Pattern, positions: dict) -> int | None:
     """Exact objective of `minimize_needed` for a FIXED placement: the fewest
     skeleton cells, closed under the path to the TH, such that every consumer
@@ -988,7 +1133,9 @@ def needed_skeleton_cells(pattern: Pattern, positions: dict) -> int | None:
 def minimize_needed(pattern: Pattern, region: set[Cell], consumers: list[Building],
                     positions: dict, *, limit: float, workers: int = 1,
                     seed: int = 0, diag: dict | None = None,
-                    model: str = "item", fillers=None) -> dict | None:
+                    model: str = "item", fillers=None, closure: str = "bfs",
+                    soft: bool = False, hint_roads=None,
+                    max_anchors: int | None = None) -> dict | None:
     """Re-place the consumers on `pattern` minimizing the skeleton cells they
     actually NEED, hinted from a known-feasible `positions` (from `probe`).
 
@@ -1008,20 +1155,30 @@ def minimize_needed(pattern: Pattern, region: set[Cell], consumers: list[Buildin
     EVERY touched cell -- in a dense packing that is always k, so it could not
     correlate. That is a different (degenerate) quantity from this objective.
 
+    `closure` picks how needed cells stay connected to the TH (CLOSURES).
+    `soft` (position model only, Q2 superset skeletons; True or a set of
+    cells): a soft skeleton cell that is not needed may hold a building, so a
+    superset skeleton costs no space for the cells the solution does not use.
+    `hint_roads`: skeleton cells to hint as needed (e.g. the hint placement's
+    own network); under closure "flow" a matching flow is hinted too, so a
+    connected `hint_roads` makes the hint a complete solution. `max_anchors`:
+    return None (diag status SKIP_CAPS) instead of solving a bigger model.
+
     Returns new positions, or None if the solver produced nothing (the caller
     keeps the hint placement, so this can never lose a feasible result)."""
     from ortools.sat.python import cp_model
 
-    parent = skeleton_parents(pattern)
     blocked = set(pattern.roads) | set(pattern.th.cells())
     m = cp_model.CpModel()
-    needed = {c: m.NewBoolVar(f"n{c[0]}_{c[1]}") for c in sorted(parent)}
-    for c, p in parent.items():
-        if p is not None:
-            m.AddImplication(needed[c], needed[p])
+    aux: dict = {}
+    needed = _needed_vars(m, pattern, closure, aux)
     if model == "position":
         return _minimize_needed_position(m, needed, pattern, region, consumers,
-                                         positions, limit, workers, seed, diag, fillers)
+                                         positions, limit, workers, seed, diag, fillers,
+                                         soft=soft, hint_roads=hint_roads,
+                                         max_anchors=max_anchors, aux=aux)
+    if soft:
+        raise ValueError("soft skeleton cells need model='position'")
     x0b, y0b, x1b, y1b = _bbox(region)
     xiv, yiv, lits = [], [], []
     for i, b in enumerate(consumers):
@@ -1075,13 +1232,24 @@ def minimize_needed(pattern: Pattern, region: set[Cell], consumers: list[Buildin
 
 
 def _minimize_needed_position(m, needed, pattern, region, consumers, positions,
-                              limit, workers, seed, diag, fillers=None):
+                              limit, workers, seed, diag, fillers=None,
+                              soft=False, hint_roads=None, max_anchors=None, aux=None):
     from ortools.sat.python import cp_model
+    extra: list = []
     built = _position_model(pattern, region, consumers, needed=needed, m=m,
-                            fillers=fillers)
+                            fillers=fillers, soft=soft, cost=extra, aux=aux)
     if built is None:
+        if diag is not None:
+            diag["objective_status"] = "NO_ANCHOR"
         return None
     m, lits, classes = built
+    anchors = sum(len(r) for r in lits.values())
+    if diag is not None:
+        diag["model_size"] = {"needed": len(needed), "anchors": anchors}
+    if max_anchors is not None and anchors > max_anchors:
+        if diag is not None:
+            diag["objective_status"] = "SKIP_CAPS"
+        return None
     used = {(x, y, w, l) for (x, y, w, l) in positions.values()}
     hint_fillers = any(b.entity_id in positions for b in fillers or ())
     for key, row in lits.items():
@@ -1090,10 +1258,17 @@ def _minimize_needed_position(m, needed, pattern, region, consumers, positions,
         w, l = key[0], key[1]
         for (x, y), v in row:
             m.AddHint(v, (x, y, w, l) in used)
+    if hint_roads is not None:
+        _hint_closure(m, needed, hint_roads, aux or {})
+        tiles = {xy for xy, v in lits.get(LANE_KEY, ())
+                 if (xy[0], xy[1], 2, 2) in used}
+        for c, (r, us_xy) in (aux or {}).get("tile_road", {}).items():
+            m.AddHint(r, c in hint_roads or bool(us_xy & tiles))
     # a two-lane tile's cells off the skeleton are extra road
-    tile_cost = [len(Footprint(x, y, 2, 2).cells() - set(pattern.roads)) * u
+    on_skel = set(pattern.roads)
+    tile_cost = [len(Footprint(x, y, 2, 2).cells() - on_skel) * u
                  for (x, y), u in lits.get(LANE_KEY, ())]
-    m.Minimize(sum(needed.values()) + sum(tile_cost))
+    m.Minimize(sum(needed.values()) + sum(tile_cost) + sum(extra))
     solver = cp_model.CpSolver()
     solver.parameters.num_search_workers = workers
     solver.parameters.random_seed = seed
@@ -1786,7 +1961,8 @@ class RoadsFirstSearch:
                  rebase_s: float = 0.0,
                  road_witness: bool = False,
                  fillers_in_model: bool = False,
-                 seed_input: bool = False):
+                 seed_input: bool = False,
+                 closure: str = "bfs"):
         # Linked chains are placed as rigid composites so their links survive
         # (user-confirmed rule, 2026-11-11); every emitted layout is expanded
         # back to real buildings inside validate().
@@ -1804,6 +1980,10 @@ class RoadsFirstSearch:
         # incumbent, and the end-of-run rebased polish improves whichever layout
         # is best (2026-11-13: FR24 232 -> 227, where every skeleton family fails).
         self.seed_input = seed_input
+        # Q2: how the end-of-run polishes keep needed cells connected (CLOSURES).
+        if closure not in CLOSURES:
+            raise ValueError(f"closure must be one of {CLOSURES}")
+        self.closure = closure
         self.source_layout = layout
         if military == "unconnected":
             # Explicit per-run choice: two-lane buildings are left off the road
@@ -1938,7 +2118,8 @@ class RoadsFirstSearch:
             opos = minimize_needed(pat, region, consumers, pos, limit=limit,
                                    workers=threads, model=self.probe_model, diag=odiag,
                                    fillers=model_fillers(self.layout, self.fillers_in_model,
-                                                         self.probe_model))
+                                                         self.probe_model),
+                                   closure=self.closure)
             solve_s = time.monotonic() - t_solve
             got = None
             if opos is not None:
