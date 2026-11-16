@@ -194,7 +194,7 @@ export function OptimizePanel() {
       {spec?.presets?.best && (
         <div className="row">
           <button disabled={running} className="preset-best"
-            title="Best measured configuration: at a 10-minute box it reached darkzig 88 (game-legal: two-lane tile and chains kept), FR16 67, FR17 103 roads (2 minutes: 88-91, 67, 106). Non-uniform skeletons in the productive quality band, the symmetry-free position model, a placement objective on every feasible skeleton plus an end-of-run objective polish, a rebased polish on the roads actually kept, the solver's own road network when it is smaller, exact filler repair and an exact road finish. Seed polish is off: it does not pay inside a short box."
+            title="Best measured configuration: at a 10-minute box it reached darkzig 88 (game-legal: two-lane tile and chains kept), FR16 67, FR17 103, FR24 220 roads (2 minutes: 88-91, 67, 106). Non-uniform skeletons in the productive quality band, the symmetry-free position model, a placement objective on every feasible skeleton plus an end-of-run objective polish, a rebased polish on the roads actually kept, the solver's own road network when it is smaller, exact filler repair and an exact road finish. A legal uploaded city is the starting point, so dense cities still get polished. Seed polish is off: it does not pay inside a short box."
             onClick={() => setValues(applyPreset(specs, values, spec.presets.best))}>
             Use best-known settings
           </button>

@@ -1122,3 +1122,47 @@ the skeleton but are not `needed`, so part of that gap may be counting, not rout
 
 Never worse, better in 3 of 10 pairs, all darkzig. Small, as the measurement predicted; darkzig's
 120 s pair is within noise, the 600 s pair is consistent (88 = the record). No new record.
+
+## 2026-11-13: next items after T1 (user: "merge it and proceed to the next items")
+
+T1 merged to main (743c9b4). Order chosen: the dense cities first (FR24, user), since they
+still get NO layout, which is worth more than a road on darkzig.
+
+**Finding.** FR24's uploaded city is game-legal with 232 roads (user city: 142). Every
+skeleton family has failed on FR24, but the uploaded city is a known feasible start. Rebased
+polish from it:
+- consumers only (fillers repacked): SAT_FILLER_FAIL, even with a 120 s exact repair;
+- **fillers placed by the position model, hinted from where they stand: 232 -> 227, legal**
+  (one 300 s solve, not proven optimal);
+- user city: 142 -> 142 in 300 s (an expert layout; the rebase can only drop road cells).
+
+**Phase D, built on `feat/fillers-in-model` (bce86a7), both off by default:**
+- [x] `fillers_in_model`: filler size classes in `_position_model` (any anchor off roads/TH,
+      no contact, the same per-cell at-most-one); probe, minimize_needed, objective polish
+      and rebased polish pass them; validate keeps model-placed fillers and packs the rest.
+- [x] `seed_input`: a legal uploaded city is the first incumbent (k = its road count) and gets
+      rebased polish + exact finish, also on the FAMILY_TOO_WEAK path.
+- [x] Tests: tests/roads_first/test_fillers_in_model.py (10); 657 passed.
+- [x] A/B (`scripts/_phased_ab.jsonl`), 600 s, all legal:
+
+| | preset (witness) | fill | seed | fillseed |
+|---|---|---|---|---|
+| darkzig | 88, 88 | **94, 94** | | |
+| FR16 | 67, 67 | 67, 67 (0.98x box) | | |
+| FR17 | 103, 103 | **105, 104** | | |
+| FR24 | none | | **220** | 227 |
+| user | none | | 142 (= input) | 142 |
+
+  `fill` in the walk is REJECTED: bigger models, slower probes, worse on darkzig/FR17.
+  `seed` alone: FR24 232 -> 220 in a 16 s solve, then its 2nd solve failed filler packing;
+  `fillseed` is reliable but slow (one 176 s solve, 227).
+- [x] Hybrid (e2edefb): rebased polish tries the fast solve first; on SAT_FILLER_FAIL it re-solves
+      with fillers placed by the model. 658 passed.
+- [x] A/B `seed` (preset + seed_input, with the retry) on all 5 cities, 600 s x2
+      (`scripts/_seed_ab.jsonl`), all legal: darkzig 89,89 (witness arm 88,88), FR16 67,67,
+      FR17 103,103, FR24 228,220 (rep0's fast solve failed fillers, retry ate the box),
+      user 142,142 (= input). darkzig walk levels identical; the gap is in rebased polish
+      (91->89 / 90->89 vs 90->88). Seed is a 250-road no-op there, so suspected noise.
+      FR24 220 re-verified legal -> `docs/records/fr24-220-roads-seed-input.json`.
+- [x] Paired darkzig witness vs seed, 600 s x2 (`scripts/_seed_pair_darkzig.jsonl`):
+      witness 90,89 vs seed 89,88 -- the gap was noise. seed_input ADOPTED in BEST_PRESET.
