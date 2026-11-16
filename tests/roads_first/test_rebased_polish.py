@@ -121,3 +121,28 @@ def test_run_gives_rebase_the_end_of_the_polish_window(monkeypatch):
     off = rf.RoadsFirstSearch(search, time_box=30, workers=1, k_start=3,
                               objective_polish=0.5).run()
     assert off["rebased_polish"] is None
+
+
+def test_filler_failure_retries_with_fillers_in_the_model(monkeypatch):
+    search, inc = _world()
+    f = _b(30, 2, 1, needs=False, x=8, y=0)
+    search = replace(search, buildings=[*search.buildings, f])
+    inc = replace(inc, buildings=[*inc.buildings, f])
+    th, c10, c11, _ = inc.buildings
+    better = replace(inc, roads={(2, 2): 1})
+    calls = []
+
+    def fake_min(pat, region, consumers, pos, limit, workers, model, diag=None, fillers=None):
+        calls.append((fillers, 30 in pos))
+        return dict(pos)
+
+    def fake_validate(layout, pat, pos, exact_repair, exact_workers, witness=None):
+        return ("OK", better, 1) if 30 in pos else ("SAT_FILLER_FAIL", None, 1)
+
+    monkeypatch.setattr(ip, "minimize_needed", fake_min)
+    monkeypatch.setattr(ip, "validate", fake_validate)
+    s = rf.RoadsFirstSearch(search, time_box=30, workers=1, probe_workers=1)
+    rep = ip.polish_rebased(s, inc, 2, time.monotonic() + 30)
+    # fast path (no fillers, no filler hint), then the model-placed retry
+    assert calls[:2] == [(None, False), ([f], True)]
+    assert rep["after"] == 1 and rep["attempts"][0]["filler_retry"]
