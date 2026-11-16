@@ -75,6 +75,22 @@ def hint_is_feasible(search_layout: Layout, pattern: Pattern, positions: dict) -
     return True
 
 
+def _solve(search, pat, region, consumers, pos, fillers, limit, threads):
+    """One rebased objective solve plus validate; (None, None, None) if the
+    solver returned nothing. Filler positions in `pos` are only hints."""
+    odiag: dict = {}
+    opos = minimize_needed(pat, region, consumers, pos, limit=limit,
+                           workers=threads, model="position", diag=odiag,
+                           fillers=fillers)
+    if opos is None:
+        return None, None, None
+    return validate(search.layout, pat, opos,
+                    exact_repair=min(search.exact_repair, limit),
+                    exact_workers=threads,
+                    witness=odiag.get("witness")
+                    if getattr(search, "road_witness", False) else None)
+
+
 def polish_rebased(search, incumbent: Layout, achieved: int, end: float,
                    on_improvement=None, should_stop=None, k=None) -> dict:
     """Up to MAX_SOLVES rebased objective solves before `end` (monotonic).
@@ -95,9 +111,11 @@ def polish_rebased(search, incumbent: Layout, achieved: int, end: float,
         if pat.roads in seen:
             break
         seen.add(pat.roads)
-        mfill = model_fillers(search.layout, getattr(search, "fillers_in_model", False),
-                              "position")
-        pos = incumbent_positions(search.layout, cur, mfill)
+        all_fillers = model_fillers(search.layout, True, "position")
+        first = all_fillers if getattr(search, "fillers_in_model", False) else None
+        pos = incumbent_positions(search.layout, cur)
+        # filler positions only hint the model-placed solve
+        fpos = (incumbent_positions(search.layout, cur, all_fillers) or pos) if all_fillers else pos
         row = {"roads": len(pat.roads), "before": cur_ach, "after": None,
                "limit_s": round(limit, 1)}
         report["attempts"].append(row)
@@ -105,18 +123,20 @@ def polish_rebased(search, incumbent: Layout, achieved: int, end: float,
             row["skipped"] = "hint"
             break
         t0 = time.monotonic()
-        odiag: dict = {}
-        opos = minimize_needed(pat, region, consumers, pos, limit=limit,
-                               workers=threads, model="position", diag=odiag,
-                               fillers=mfill)
+        vst, vlay, vach = _solve(search, pat, region, consumers,
+                                 fpos if first else pos, first, limit, threads)
+        if vst == "SAT_FILLER_FAIL" and first is None and all_fillers:
+            # Fast path first; when the fillers no longer fit, re-solve with them
+            # placed by the model (slower, but a SAT always leaves them room).
+            # FR24 2026-11-13: the fast path gave 232 -> 220, then a filler failure.
+            left = end - time.monotonic() - OBJECTIVE_MARGIN_S
+            row["filler_retry"] = True
+            if left >= OBJECTIVE_MIN_S:
+                vst, vlay, vach = _solve(search, pat, region, consumers, fpos,
+                                         all_fillers, left, threads)
         row["solve_s"] = round(time.monotonic() - t0, 1)
-        if opos is None:
+        if vst is None:
             break
-        vst, vlay, vach = validate(search.layout, pat, opos,
-                                   exact_repair=min(search.exact_repair, limit),
-                                   exact_workers=threads,
-                                   witness=odiag.get("witness")
-                                   if getattr(search, "road_witness", False) else None)
         row["status"] = vst
         if vst != "OK":
             break
