@@ -1166,3 +1166,230 @@ polish from it:
       FR24 220 re-verified legal -> `docs/records/fr24-220-roads-seed-input.json`.
 - [x] Paired darkzig witness vs seed, 600 s x2 (`scripts/_seed_pair_darkzig.jsonl`):
       witness 90,89 vs seed 89,88 -- the gap was noise. seed_input ADOPTED in BEST_PRESET.
+
+# Optimization backlog for agents — 2026-11-16 (project review)
+
+Source: a full review on 2026-11-16 (history docs, `foeopt/roads_first.py` audit, infra audit).
+Nothing below is implemented or measured yet; every "expected" is a hypothesis.
+
+**Where we stand (all legal):** darkzig 88, FR16 67, FR17 103, FR24 220 (seed only; no
+skeleton family ever hosts it), user city 142 (= input). No useful lower bound exists
+(`bound_adjacency` gives 21 on darkzig), so the optimality gap is unknown.
+
+**What the evidence says about where the gap is:** incumbents are locally optimal (T5
+windows up to 20x20: 0 gains, mostly proven), the leftover box has nothing to spend on
+(deepening / fill / harvest: null), and solver-parameter portfolios sit at the noise floor.
+The remaining quality is in **global skeleton topology** (what road networks the objective
+is allowed to choose from). The remaining speed is in **scheduling** (idle workers,
+killed in-flight work, sequential polish) and in **UNKNOWN probes** (46-61% of worker time
+on FR16/FR17).
+
+## Rules for every agent picking up an item
+
+- [ ] Grep `tasks/lessons.md` for the lever first and quote the prior result in your notes.
+- [ ] One item = one branch (`feat/<id>-...`) in its own worktree; new behaviour behind an
+      option that is OFF by default; BEST_PRESET changes only after the gate.
+- [ ] **Benchmarks are strictly serial on this machine** (16 cores, CP-SAT limits are
+      wall-clock). Code and unit tests may proceed in parallel; timed runs must hold the
+      bench lock from I1. Never run two timed runs at once.
+- [ ] Gate: darkzig, FR16, FR17 at 120 s and 600 s, >= 2 paired reps, adopt only if never
+      worse in any pair and better in at least one. darkzig is +-2 noise: paired runs only.
+- [ ] Every result must pass `legality.check` (no rotation, two-lane tiles, chains) and be
+      re-verified from the saved file; records go to `docs/records/` with provenance.
+- [ ] Before calling a result negative: check the budget could detect the effect, and that
+      treatment differs from control (set difference of skeletons / solutions).
+- [ ] Write the verdict (adopted / null / refuted, with numbers) back under the item here,
+      and a lesson in `tasks/lessons.md` if something was surprising.
+
+## Suggested order
+
+I1 -> (S1, S2, S3, C1 in parallel as code; benchmarks queued) -> Q1 -> Q2 -> Q3 -> Q4 -> rest.
+I1 comes first because every other item needs its lock and its paired-run table.
+
+---
+
+## I — Infrastructure (unblocks parallel agents)
+
+### I1. One benchmark harness with a machine lock  [S, do first]
+- [ ] `scripts/bench.py --arm name=opt1,opt2 --cities darkzig,fr16,fr17 --box 120,600 --reps 2`:
+      paired, sequential, takes `flock` on a lock file for the whole run, writes one JSONL
+      row per run (commit hash, dirty flag, full options, seed, profile incl. parent phases,
+      roads, legality) under `output/bench/<date>-<name>/`, and prints the paired table plus
+      the never-worse verdict.
+- [ ] Replace `scripts/_ab_common.py` callers gradually; do not port the 30 `exp_*.py`.
+- [ ] Done when a preset-vs-preset run reproduces 88-90 / 67 / 103 and a second concurrent
+      invocation blocks on the lock.
+
+### I2. Seeds as a first-class option  [S]
+`random.Random(0)` (roads_first.py:2020) and probe seed 0 are hardcoded, so repeat runs
+differ only by timing noise and sample the same skeletons every time.
+- [ ] Add a `seed` option (skeleton rng + CP-SAT seed); default 0 keeps today's behaviour.
+- [ ] Measure true run-to-run spread: preset x 4 seeds x 3 cities at 600 s. This is the
+      noise floor every later gate should be judged against, and a free record-hunting lever
+      (best-of-N seeds).
+
+### I3. Hygiene  [S]
+- [ ] `tests/test_rl_anneal.py`, `tests/test_rl_gate.py`: `pytest.importorskip("torch")`
+      (plain `pytest -x` aborts at collection today; 658 pass otherwise in 75 s).
+- [ ] `.gitignore`: `agrou-city.json` (48 MB, untracked, not ignored), `webapp/cities.db`.
+- [ ] Add `agrou-city.json` as a benchmark city (report consumers, Σ/2, input roads, whether
+      any family hosts it). More cities = less tuning on three.
+- [ ] README: lead with roads-first + presets + records; move layout/improve/anneal to "legacy".
+
+---
+
+## S — Speed
+
+### S1. Continuous work queue instead of level batches  [M, highest speed value]
+Today a level batch drains fully before the next is generated, generation + prefilter run
+serially in the parent while the pool waits, and a slice expiry calls `pool.terminate()`
+(roads_first.py:1746), discarding in-flight SAT+objective work and rebuilding the pool.
+Measured: workers idle 47-53% at 120 s, 22-24% at 600 s on FR16/FR17.
+- [ ] Persistent workers pulling `(k, pattern)` tasks from a queue the parent keeps topped
+      up across levels; the walk controller consumes results as they arrive.
+- [ ] Cooperative cancel: a shared deadline / level-cancel flag checked in a CP-SAT solution
+      callback and before each phase (no terminate, nothing lost).
+- [ ] Gate: idle share < 10% at 120 s; roads never worse; first-result time not worse.
+- Prior: `concurrent_levels` was a small win; "keep the pool fed" is open from Phase B.
+
+### S2. Parallel polish  [S]
+Objective polish solves the top-3 skeletons sequentially with all threads; rebased polish
+and exact finish are sequential too, while the pool idles. FR17's record is made here.
+- [ ] Run the polish candidates concurrently (3 x 4 threads), then widen to top-6 at the
+      same wall-clock. Use all 16 cores (preset uses 6x2).
+- [ ] `exact_route`: hint from the current roads and give it > 1 worker (exact_router.py:100).
+- [ ] Gate: same or better roads at 600 s with polish wall-clock down >= 2x, or better roads
+      at equal wall-clock. Never shrink the polish reserve (lesson 2026-11-12).
+
+### S3. Publish the feasible layout before the in-walk objective  [S, UX]
+First layout appears at ~31 s because the objective holds the worker for its full limit.
+- [ ] Emit the validated probe layout as an improvement immediately, then the objective's.
+- [ ] Gate: first result < 3 s on darkzig/FR16/FR17; final roads unchanged.
+
+### S4. Pattern ledger  [S]
+A re-probed UNDERSAMPLED level regenerates a fresh sample and may re-probe known patterns;
+nothing is remembered across levels.
+- [ ] Hash patterns (roads + TH); skip decided ones; reuse SAT answers as candidates.
+- [ ] Exact matches only. Any subset/superset dominance rule must be proven sound first
+      (extra roads both add contact and remove free cells, so neither direction is obvious).
+- [ ] Report the duplicate rate first; drop the item if it is < 2%.
+
+### S5. Use the objective bound  [S]
+Each objective solve reports `objective_bound` (roads_first.py:1063); nothing reads it.
+- [ ] Polish: skip or stop a candidate whose bound >= incumbent roads.
+- [ ] In-walk objective: A/B a cutoff `Σneeded <= incumbent - 1` (finishes early as
+      infeasible when the skeleton cannot beat the incumbent). Prior: T2B was skipped
+      because solves "take seconds", yet objective solves are 13-38% of worker time.
+
+### S6. What are the UNKNOWN probes?  [M, diagnostic then decide]
+UNKNOWN probes cost 46-61% of worker time on FR16/FR17 and 73% on the user city.
+- [ ] Sample 40 UNKNOWN (k, pattern) pairs per city from a preset run; re-solve each with
+      300 s x 8 threads. Report the SAT / UNSAT / still-unknown split and time-to-decide.
+- [ ] If mostly SAT: cross-skeleton hints (Q5) and longer adaptive limits are the lever.
+      If mostly UNSAT: stronger refutation -- LP relaxation of the position model as a
+      screen (HiGHS or CP-SAT `linearization_level=2`), class-pair capacity cuts.
+- [ ] Also try the pure-boolean model on a SAT solver with cardinality encodings (pysat):
+      the position model is only exact-counts + at-most-one per cell.
+
+---
+
+## C — Correctness (cheap, may be hiding results)
+
+### C1. Prefilter counts two-lane consumers against skeleton capacity  [S]
+`prefilter` (roads_first.py:469) is documented "sound", but `capacity < len(consumers)`
+includes two-lane buildings, which are served by a 2x2 tile, not by skeleton cells.
+- [ ] Confirm with a unit test (a pattern feasible only because the military building sits on
+      the tile); if real, exclude tile-served consumers from the count.
+- [ ] Count how many patterns per city this rejected in a preset run.
+
+### C2. Walk assumes feasibility is monotone in k  [S]
+The binary search (roads_first.py:2378) relies on it; the docstring at 2234 says it is not.
+- [ ] From existing run rows, list levels where k is infeasible/unknown but k-4 is SAT.
+      If frequent, bisect on "best achieved so far" instead of on k.
+
+### C3. `verify_layout_file.py` re-routes instead of checking the saved roads  [S]
+- [ ] Verify the roads as saved (legality on the file), and report the re-route separately.
+
+---
+
+## Q — Quality (the real gap: global topology)
+
+### Q1. A lower bound that means something  [M]
+- [ ] Side-counting bound, one hour: a connected network of R cells has <= 2R+1 sides
+      left for consumers (4R sides, 2(R-1) used by road-road adjacency, 1 by the TH), each
+      consumer needs >= 1, so R >= ceil((n-1)/2). Compare with ceil(n/3) on all cities.
+- [ ] Geometric strengthening: a side of a straight run of length L hosts at most
+      floor-packing of consumer widths; LP over (class, contact-width) with the side budget.
+- [ ] LP relaxation of position model + optional road cells on a coarsened grid
+      (the joint model OOM'd as CP-SAT; an LP with column generation may not).
+- [ ] Deliverable: bound per city, gap to record, and a stop rule proposal. If the gap on
+      FR16 is <= 3, stop spending on FR16 and redirect to FR17/FR24.
+
+### Q2. Superset skeletons with DAG connectivity  [L, main quality bet]
+`minimize_needed` can only pick a subset of ONE skeleton and keeps it connected through a
+single BFS parent per cell (roads_first.py:1019) -- exact only on trees. So the objective
+can never mix the good half of skeleton A with the good half of skeleton B, which is
+exactly the non-local move T5's windows could not make.
+- [ ] Step 1 (enabler): `needed[c] => OR(needed[p] for p in neighbours with dist(p) =
+      dist(c)-1)`, dist = BFS distance to the TH border inside the pattern. Still sound
+      (every needed cell chains to the TH), identical on trees, strictly looser on cyclic
+      patterns. Unit-test connectivity on random cyclic patterns; A/B on rebased polish.
+- [ ] Step 2: union pattern = road cells of the top-M (M = 2..4) distinct SAT networks that
+      share a TH anchor; hint from the best member; objective picks the subset.
+      Watch model size (anchor candidates grow) and cap by literals as T5 did.
+- [ ] Step 3: if step 2 gains, put the union pass in polish (after objective polish,
+      before rebase) and try the loose-k controller (k_start +4/+8 with the objective on).
+- [ ] Gate: any city improves in paired 600 s runs; FR17 is the target (lags at 117%).
+- Prior: T5 null (local windows); perturbing good skeletons 0/64 (feasibility only, no
+  objective); joint free model OOM. None tested a union with a looser closure.
+
+### Q3. Fit the skeleton grammar to the expert networks  [M, analysis before code]
+The grammar is depth-2: one trunk flush to one TH side, straight perpendicular branches
+that stop at the first obstacle. Not expressible: second-level branches, bent branches,
+offset or multiple trunks, loops. FR24 has no feasible skeleton at all, yet its uploaded
+city is legal at 232 and polishes to 220.
+- [ ] For each legal network we have (5 uploads + records): tree depth, branch count, bends,
+      trunk offset from the TH, TH sides used, loops. Which grammar rule does each violate?
+- [ ] Extend the generator only with the features the data shows (likely: depth-3
+      branches and a second trunk on another TH side). Judge by **achieved roads after the
+      objective**, not by SAT rate in the band.
+- [ ] Gate: FR24 gets a non-seed layout, or FR17 improves.
+- Prior: 21 out-of-grammar generators gave 0 SAT in 240 (scatter best 103). Those were
+  invented shapes judged on feasibility; this item derives shapes from working cities.
+  Re-check that study's probe budget before trusting it.
+
+### Q4. Seed from the incumbent more aggressively on dense cities  [M]
+`seed_input` took FR24 232 -> 220 in one 16 s solve; then the second solve failed fillers.
+- [ ] Iterate rebased polish to a fixed point with the model-filler retry, alternating with
+      the Q2 union (incumbent network ∪ best partial skeleton).
+- [ ] User city (97% full, 142): run Q1's bound first -- it may already be near-optimal.
+
+### Q5. Hints across skeletons for the position probe  [S]
+The position probe starts cold; only the objective is hinted. Neighbouring skeletons share
+the TH and trunk.
+- [ ] Hint every anchor of the nearest SAT answer that is still a candidate.
+- [ ] Gate on UNKNOWN rate and time-to-SAT (uses S6's sample), then on roads.
+- Prior: warm start from repack was -7, but in the item model with a greedy placement.
+
+### Q6. Let fillers move in the exact finish  [S]
+`exact_finish` re-routes with fillers fixed, so a filler cell can never become road.
+- [ ] Final solve with fillers in the model (as the rebase fallback already does) on the
+      final incumbent only. Expect 0-1 roads; drop quickly if null.
+
+### Q7. TH anchor study from existing logs  [S, data mining only]
+User-flagged open thread: TH placement. No new runs.
+- [ ] From all stored run rows: best achieved per TH anchor, per city. If the top anchors
+      are stable across runs, concentrate sampling there (and it defines the same-TH
+      groups Q2 needs).
+- Prior: inside the band nothing predicted achieved (|rho| < 0.22); TH-offset alone was
+  neutral in the old constructor. Expect a weak result; one afternoon at most.
+
+---
+
+## Explicitly NOT on this list (already refuted or null — do not re-run without a new mechanism)
+
+Leftover-box deepening / fill / harvest; probe_limit 10/5 as-is; fillers in the walk;
+CP-SAT parameter portfolios; lex symmetry breaking in the item model; assumption-based
+incremental solving (unsupported); skeleton bandit / CEM / RL; CNN scheduling;
+depth-matched gaps; T5 optional-road windows <= 20x20; model-build / loader / filler-scan
+speedups (~1% of time; a city load is 0.33 s).
