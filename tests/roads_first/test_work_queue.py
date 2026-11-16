@@ -271,3 +271,125 @@ def test_run_probe_in_a_queue_clamps_and_cancels(monkeypatch):
     seen.clear()
     res = mod._run_probe((_pattern(40, 0), 40, 0, deadline))
     assert res["status"] == "CANCELLED" and "limit" not in seen
+
+
+# --- early_publish (backlog S3) ----------------------------------------------
+
+def test_early_publish_needs_the_queue():
+    with pytest.raises(ValueError, match="early_publish"):
+        mod.RoadsFirstSearch(_city(), time_box=5, early_publish=True)
+    mod.RoadsFirstSearch(_city(), time_box=5, scheduler="queue", early_publish=True)
+
+
+def test_early_publish_shows_the_probe_layout_before_the_objective(monkeypatch):
+    """The probe's layout (12) is published and answers the level at once; the
+    objective's better layout (9) follows when that task finishes."""
+    def beh(k, i, n):
+        return {"status": "SAT", "achieved": 9, "early": 12, "dur": 0.02,
+                "objective_dur": 1.0}
+    _fake_generation(monkeypatch, beh, n=1)
+    lay = _city()
+    t0 = time.monotonic()
+    published, updates = [], []
+    q = _queue(lay, _params(60), task_fn=fakes.fake_task, early_publish=True,
+               on_improvement=lambda lay_, k, a: published.append(
+                   (a, round(time.monotonic() - t0, 2))),
+               on_level_update=lambda k, a: updates.append(a))
+    try:
+        ans = q.levels([40])
+        took = time.monotonic() - t0
+        q.drain(until=time.monotonic() + 10)
+    finally:
+        q.close()
+    assert ans[40] == ("FEASIBLE", 12)
+    assert took < 0.8, "the level must answer on the probe layout, not after the objective"
+    assert [a for a, _ in published] == [12, 9]
+    assert published[0][1] < published[1][1]
+    assert updates == [("FEASIBLE", 9)]
+    assert q.stats["early_published"] == 1
+
+
+def test_early_publish_off_publishes_only_the_final_layout(monkeypatch):
+    def beh(k, i, n):
+        return {"status": "SAT", "achieved": 9, "early": 12, "dur": 0.02,
+                "objective_dur": 0.2}
+    _fake_generation(monkeypatch, beh, n=1)
+    published = []
+    q = _queue(_city(), _params(60), task_fn=fakes.fake_task,
+               on_improvement=lambda lay_, k, a: published.append(a))
+    try:
+        assert q.levels([40])[40] == ("FEASIBLE", 9)
+    finally:
+        q.close()
+    assert published == [9] and q.stats["early_published"] == 0
+
+
+def test_run_probe_publishes_the_validated_probe_layout_before_the_objective(monkeypatch):
+    calls = []
+    monkeypatch.setattr(mod, "probe",
+                        lambda *a, **k: (calls.append("probe"), ("SAT", {1: 1}))[1])
+
+    def fake_validate(layout, pat, pos, **kw):
+        calls.append(("validate", pos))
+        return ("OK", f"layout-{pos}", 20 if pos == {1: 1} else 15)
+
+    def fake_minimize(*a, **k):
+        calls.append("objective")
+        return {2: 2}
+
+    monkeypatch.setattr(mod, "validate", fake_validate)
+    monkeypatch.setattr(mod, "minimize_needed", fake_minimize)
+    monkeypatch.setattr(mod, "_WORKER_LAYOUT", _city())
+    monkeypatch.setattr(mod, "_WORKER_PROBE_LIMIT", 30.0)
+    monkeypatch.setattr(mod, "_WORKER_OBJECTIVE_LIMIT", 30.0)
+    deadline = time.monotonic() + 60
+    monkeypatch.setattr(mod, "_TASK_CTX", {
+        "deadline": deadline, "stopped": lambda: False,
+        "early": lambda ach, lay, pos: calls.append(("early", ach, lay))})
+    res = mod._run_probe((_pattern(40, 0), 40, 0, deadline))
+    assert calls == ["probe", ("validate", {1: 1}), ("early", 20, "layout-{1: 1}"),
+                     "objective", ("validate", {2: 2})]
+    assert res["status"] == "SAT" and res["achieved"] == 15
+
+
+def _real_city(n=14):
+    th = Building(1, "c1", "main_building", Footprint(5, 5, 3, 3), False, 1, True,
+                  None, None, "TH")
+
+    def b(eid, w, l, needs=True):
+        return Building(eid, f"c{eid}", "g", Footprint(0, 0, w, l), needs, 1, False,
+                        None, None, f"b{eid}")
+    bs = ([th] + [b(10 + i, 2, 2) for i in range(10)] + [b(30 + i, 3, 3) for i in range(4)]
+          + [b(50 + i, 1, 1, needs=False) for i in range(4)])
+    return Layout(Region(frozenset((x, y) for x in range(n) for y in range(n))), bs, th, {})
+
+
+@pytest.mark.parametrize("early", [False, True])
+def test_real_solver_run_publishes_only_legal_decreasing_layouts(early):
+    """End to end with real CP-SAT: every published layout passes the game
+    legality check, counts strictly decrease, and the walk equals batch's."""
+    pytest.importorskip("ortools")
+    from foeopt.legality import check
+    lay = _real_city()
+    kw = dict(time_box=30, workers=3, probe_workers=1, patterns=40, probe_limit=5,
+              objective_limit=3, k_start=20, th_anchors="coarse", concurrent_levels=2,
+              probe_model="position")
+    runs = {}
+    for sched in ("batch", "queue"):
+        seen = []
+        extra = {"scheduler": sched}
+        if sched == "queue":
+            extra["early_publish"] = early
+        res = mod.RoadsFirstSearch(lay, **kw, **extra).run(
+            on_improvement=lambda out, k, a: seen.append((a, out)))
+        counts = [a for a, _ in seen]
+        assert counts == sorted(counts, reverse=True) and len(set(counts)) == len(counts)
+        for a, out in seen:
+            assert check(out, lay).status == "valid"
+            assert len(out.roads) == a
+        runs[sched] = res
+    assert {k: v[0] for k, v in runs["queue"]["results"].items()} == \
+        {k: v[0] for k, v in runs["batch"]["results"].items()}
+    assert runs["queue"]["best_achieved"] == runs["batch"]["best_achieved"]
+    if early:
+        assert runs["queue"]["profile"]["info"]["queue"]["early_published"] > 0

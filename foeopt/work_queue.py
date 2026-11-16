@@ -34,6 +34,13 @@ answer comes back and what happens to the work around it:
   calls `CpSolver.stop_search()` on the running solve. A stopped or clamped
   objective still returns its best placement, so partial SAT results reach
   the caller.
+* **early_publish (backlog S3).** A SAT probe's validated layout is sent to the
+  parent as an "early" message before the in-walk objective starts, and
+  published through the run's single incumbent (strictly better only), so the
+  first layout appears in about a second instead of after objective_limit. It
+  also answers the level FEASIBLE at once (its final result is SAT whatever
+  the objective does). The objective's result follows as the task's normal
+  result and is published only if it is better.
 * At the end of the walk the controller drains the leftover tasks (bounded by
   their deadlines and by the live walk end, so the polish reserve is never
   borrowed), then closes the queue, which stops anything still running.
@@ -67,7 +74,8 @@ def _watch(stop_event) -> None:
         time.sleep(WATCH_S)
 
 
-def _worker_main(task_q, result_q, stop_event, init_args, task_fn) -> None:
+def _worker_main(task_q, result_q, stop_event, init_args, task_fn,
+                 early_publish: bool = False) -> None:
     rf._worker_init(*init_args)
     threading.Thread(target=_watch, args=(stop_event,), daemon=True).start()
     stopped = stop_event.is_set
@@ -76,7 +84,12 @@ def _worker_main(task_q, result_q, stop_event, init_args, task_fn) -> None:
         if item is None:
             return
         tid, payload = item
-        rf._TASK_CTX = {"deadline": payload[3], "stopped": stopped}
+        early = None
+        if early_publish:
+            def early(achieved, layout, pos, _tid=tid):
+                result_q.put(("early", _tid, {"achieved": achieved, "layout": layout,
+                                              "pos": pos}))
+        rf._TASK_CTX = {"deadline": payload[3], "stopped": stopped, "early": early}
         try:
             result = task_fn(payload)
         except BaseException:  # noqa: BLE001 -- reported to, and raised by, the parent
@@ -115,7 +128,7 @@ class LevelQueue:
                  init_args: tuple, log=None, on_improvement=None, corpus=None,
                  scorer=None, score_threshold=None, filler_stats=None,
                  coverage=None, on_level_update=None, should_stop=None,
-                 task_fn=None):
+                 task_fn=None, early_publish: bool = False):
         self.layout, self.region, self.consumers = layout, region, consumers
         self.rng, self.params = rng, params
         self.log = log if log is not None else (lambda row: None)
@@ -135,7 +148,8 @@ class LevelQueue:
         self.procs = [multiprocessing.Process(
             target=_worker_main,
             args=(self.task_q, self.result_q, self.stop_event, init_args,
-                  task_fn if task_fn is not None else rf._run_probe),
+                  task_fn if task_fn is not None else rf._run_probe,
+                  early_publish),
             daemon=True) for _ in range(self.workers)]
         for p in self.procs:
             p.start()
@@ -148,7 +162,7 @@ class LevelQueue:
         self._tids = itertools.count()
         self.closed = False
         self.stats = {"tasks": 0, "dispatched": 0, "dropped": 0, "cancelled": 0,
-                      "late_results": 0, "level_updates": 0}
+                      "late_results": 0, "level_updates": 0, "early_published": 0}
 
     # ---------------------------------------------------------------- public
 
@@ -345,6 +359,9 @@ class LevelQueue:
         kind, tid, data = msg
         if kind == "error":
             raise RuntimeError(f"work-queue worker failed:\n{data}")
+        if kind == "early":
+            self._on_early(self.tasks[tid][0], data)
+            return
         run, pat, _ = self.tasks.pop(tid)
         self.outstanding -= 1
         run.inflight -= 1
@@ -365,6 +382,19 @@ class LevelQueue:
                 rf._fill_coverage({run.k: run.st}, [run.k], self.coverage)
         else:
             self._maybe_settle(run)
+
+    def _on_early(self, run, data) -> None:
+        """A SAT probe's validated layout, sent before its objective runs.
+        Published through the same incumbent as everything else (the run's
+        on_improvement only passes a strictly better count); the task's final
+        result comes later and is booked normally."""
+        self.stats["early_published"] += 1
+        if self.profile is not None:
+            self.profile.event("first_early_publish")
+        if self.on_improvement is not None:
+            self.on_improvement(data["layout"], run.k, data["achieved"])
+        self._note_best(run.k, data["achieved"])
+        self._maybe_settle(run)
 
     def _note_best(self, k: int, achieved: int) -> None:
         old = self.level_best.get(k)

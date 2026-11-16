@@ -82,7 +82,8 @@ class JobManager:
                road_witness: bool = False,
                fillers_in_model: bool = False,
                seed_input: bool = False,
-               scheduler: str = "batch") -> str:
+               scheduler: str = "batch",
+               early_publish: bool = False) -> str:
         """Start a RoadsFirstSearch in a background thread and return its id.
 
         Keyword names match webapp.params.OPTION_SPECS one for one, so the
@@ -162,6 +163,7 @@ class JobManager:
                     fillers_in_model=fillers_in_model,
                     seed_input=seed_input,
                     scheduler=scheduler,
+                    early_publish=early_publish and scheduler == "queue",
                 )
                 res = search.run(on_improvement=on_improvement,
                                  on_status=on_status,
