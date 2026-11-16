@@ -1477,3 +1477,21 @@ Pending A/Bs (serial, scripts/bench.py, darkzig/FR16/FR17, 120+600 s, 2 reps):
 - C1 merged (sound, zero rejections changed on darkzig/FR16/FR17). Q2 merged, options off:
   offline null (unions with 50+ new cells re-prove FR17 103 and FR16 67 optimal at the
   incumbent's TH; darkzig unsettled), layered closure = bfs on pruned trees.
+
+## Night plan 2026-11-16/17 (user asleep; nothing merged to main)
+Machine rule: every CPU-heavy run (bench, probe studies) goes through the shared lock,
+`flock output/bench/.lock <cmd>` (same lock as scripts/bench.py), so runs stay strictly serial.
+- [ ] N1. 600 s A/B (s123q2-600) finishes -> report; if qe is never-worse, set
+      scheduler=queue + early_publish in BEST_PRESET on feat/backlog-2026-11 (not main).
+- [ ] N2. Q3 rooted family (`feat/q3-rooted-family`): finish the pre-flight on FR24/FR17
+      (remaining k), review, merge into the integration branch (option off), A/B
+      `mix:family_mix=0.5` vs qe at 600 s; FR24 `rooted:pattern_family=rooted`.
+- [ ] N3. Multi-trunk family (user idea): 1-4 main roads, one per TH side, with TH placement
+      filtered by room on every used side (central TH for 3-4 trunks), level-2 combs
+      and stubs serving up to 3 buildings. Offline first: achieved roads after the objective
+      vs nonuniform at the same TH and k on darkzig/FR16/FR17/FR24/user. Data note: none of
+      the 5 uploads uses more than 2 TH sides (Q3 table, `sd` column), so 3-4 trunks are
+      untested, not refuted.
+- [ ] N4. More optimized city layouts: search public sources (FoE Helper exports, city
+      planner shares) for optimized layouts in a format the loader accepts; the user can
+      supply more on 2026-11-17.
