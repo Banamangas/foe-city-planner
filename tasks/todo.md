@@ -1486,12 +1486,20 @@ Machine rule: every CPU-heavy run (bench, probe studies) goes through the shared
 - [ ] N2. Q3 rooted family (`feat/q3-rooted-family`): finish the pre-flight on FR24/FR17
       (remaining k), review, merge into the integration branch (option off), A/B
       `mix:family_mix=0.5` vs qe at 600 s; FR24 `rooted:pattern_family=rooted`.
+      Pre-flight (probe 20+20 skeletons/level): FR17 k121 rooted 1 SAT best 111 vs nonuniform
+      4 SAT best 111; FR24 k226/k238 0 SAT for both. Merged the integration branch into
+      `feat/q3-rooted-family` (full suite 736 passed). A/B queued from pinned worktree
+      /home/born/Github/foe-bench-q3: output/bench/q3-600.jsonl, q3-fr24.jsonl.
 - [ ] N3. Multi-trunk family (user idea): 1-4 main roads, one per TH side, with TH placement
       filtered by room on every used side (central TH for 3-4 trunks), level-2 combs
       and stubs serving up to 3 buildings. Offline first: achieved roads after the objective
       vs nonuniform at the same TH and k on darkzig/FR16/FR17/FR24/user. Data note: none of
       the 5 uploads uses more than 2 TH sides (Q3 table, `sd` column), so 3-4 trunks are
       untested, not refuted.
-- [ ] N4. More optimized city layouts: search public sources (FoE Helper exports, city
+- [x] N4. More optimized city layouts: search public sources (FoE Helper exports, city
       planner shares) for optimized layouts in a format the loader accepts; the user can
       supply more on 2026-11-17.
+      RESULT: none found. Public layouts are screenshots; foe-helper.com planner links need a
+      login; GitHub code search for CityMapData finds nothing. Ask the user for FoE Helper
+      exports (Town Overview -> "Download data" = `<world>_citymap_<date>_<id>.json`) from
+      road-optimized cities, with era. Checker: `output/n4-layouts/_scripts/check.py`.
