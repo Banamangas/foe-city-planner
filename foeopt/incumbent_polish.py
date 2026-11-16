@@ -81,7 +81,7 @@ def _solve(search, pat, region, consumers, pos, fillers, limit, threads):
     odiag: dict = {}
     opos = minimize_needed(pat, region, consumers, pos, limit=limit,
                            workers=threads, model="position", diag=odiag,
-                           fillers=fillers)
+                           fillers=fillers, closure=getattr(search, "closure", "bfs"))
     if opos is None:
         return None, None, None
     return validate(search.layout, pat, opos,
