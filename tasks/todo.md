@@ -1506,3 +1506,8 @@ Machine rule: every CPU-heavy run (bench, probe studies) goes through the shared
       login; GitHub code search for CityMapData finds nothing. Ask the user for FoE Helper
       exports (Town Overview -> "Download data" = `<world>_citymap_<date>_<id>.json`) from
       road-optimized cities, with era. Checker: `output/n4-layouts/_scripts/check.py`.
+- Q3-gen insight (agent report 2026-11-16): the rooted family CAN express the uploads (best
+  single-skeleton coverage 0.51-0.63 vs nonuniform 0.26-0.38), but random draws almost never
+  land near one (mean coverage 0.04-0.09 for both). The bottleneck is sampling, not grammar.
+  Candidate next mechanism: directed skeleton search (mutate the incumbent/best SAT skeleton:
+  move/extend/add a trunk or branch, re-probe) instead of more random families.
