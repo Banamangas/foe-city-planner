@@ -1358,8 +1358,10 @@ The grammar is depth-2: one trunk flush to one TH side, straight perpendicular b
 that stop at the first obstacle. Not expressible: second-level branches, bent branches,
 offset or multiple trunks, loops. FR24 has no feasible skeleton at all, yet its uploaded
 city is legal at 232 and polishes to 220.
-- [ ] For each legal network we have (5 uploads + records): tree depth, branch count, bends,
+- [x] For each legal network we have (5 uploads + records): tree depth, branch count, bends,
       trunk offset from the TH, TH sides used, loops. Which grammar rule does each violate?
+      Done: `docs/reviews/2026-11-16-q3-network-topology.md`. Uploads 72-84% out of grammar
+      (agrou 0%); end-on TH spoke + second trunk + depth 3 covers 98% of their OOG cells.
 - [ ] Extend the generator only with the features the data shows (likely: depth-3
       branches and a second trunk on another TH side). Judge by **achieved roads after the
       objective**, not by SAT rate in the band.
