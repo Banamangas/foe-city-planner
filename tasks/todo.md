@@ -1457,3 +1457,23 @@ Integration branch `feat/backlog-2026-11` (all new options OFF, full suite 701 p
 Pending A/Bs (serial, scripts/bench.py, darkzig/FR16/FR17, 120+600 s, 2 reps):
   `--arm preset --arm "queue:scheduler=queue" --arm "qe:scheduler=queue;early_publish=true"`
   `--arm preset --arm "par3:polish_parallel=3;polish_threads=16;exact_finish_workers=4" --arm "par6:polish_parallel=6;polish_top=6;polish_threads=16;exact_finish_workers=4"`
+
+### A/B 120 s (2026-11-16, `output/bench/2026-11-16-s1s2-120/`, 2 reps, all legal)
+| city | preset | qe (queue+early) | par3 |
+|---|---|---|---|
+| darkzig | 89, 90 | 90, 88 | 89, 88 |
+| FR16 | 67, 67 | 67, 67 | 67, 67 |
+| FR17 | 106, 106 | **104, 104** | 106, 106 |
+| first solver layout | 27 s | **1-2 s** | 27 s |
+| walk idle share | 38-71% | **2-4%** | 38-71% |
+- qe: FR17 -2 in both reps; darkzig within the +-2 noise (one pair worse by 1, so the strict
+  rule says REJECT at 120 s). Mechanism: under batch, darkzig's walk overruns its deadline and
+  objective polish gets 0 s (`tried 0`); the queue leaves the polish window intact.
+- par3: the "ADOPT" is spurious -- in the differing pairs polish never ran (`tried 0`), so the
+  code was not exercised; where it ran (FR17) it took 12 s vs 5 s for the same roads (5 threads
+  per candidate stop proving optimality). Re-test on top of the queue scheduler.
+- Decider: 600 s, arms preset / qe / qe+par3 / qe+union_polish=60, pinned worktree at 54032ba
+  (`output/bench/s123q2-600.jsonl`).
+- C1 merged (sound, zero rejections changed on darkzig/FR16/FR17). Q2 merged, options off:
+  offline null (unions with 50+ new cells re-prove FR17 103 and FR16 67 optimal at the
+  incumbent's TH; darkzig unsettled), layered closure = bfs on pruned trees.
