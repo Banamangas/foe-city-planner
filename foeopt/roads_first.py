@@ -1554,31 +1554,23 @@ def summarise_fillers(fs: dict) -> dict | None:
     }
 
 
-def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=None,
-                        on_improvement=None, corpus=None, scorer=None,
-                        score_threshold=None,
-                        filler_stats: dict | None = None,
-                        coverage: dict | None = None,
-                        runtime: dict | None = None) -> dict[int, tuple[str, int | None]]:
-    """Generate + probe several k-levels' patterns in one shared pool dispatch
-    instead of draining one level's ~200 patterns before the next level's are
-    even generated. `_run_probe`'s payload/result already carry `k`, so this
-    only changes dispatch/demux, not the worker-side probe logic.
+def _effective_deadline(params) -> float:
+    """The walk deadline, capped by the current level slice if one is set.
 
-    Levels are generated in `ks` order against the *same* `rng` stream, so
-    pattern content for a given k is identical to what a sequential run of
-    `_probe_level` would have produced -- this is the determinism invariant
-    that makes batching a pure speed change, not a different search."""
-    th = layout.townhall.footprint
-    if filler_stats is None:
-        filler_stats = new_filler_stats()
-    # A slice caps THIS call, so one level cannot eat the whole box. Measured on
-    # FR17 at k_start=117: the first level alone could consume 525 s of a 600 s
-    # box (35 patterns x 90 s / 6 workers) and then return INCONCLUSIVE, leaving
-    # every later level with one probe or none.
+    A slice caps ONE probing call, so one level cannot eat the whole box.
+    Measured on FR17 at k_start=117: the first level alone could consume 525 s
+    of a 600 s box (35 patterns x 90 s / 6 workers) and then return
+    INCONCLUSIVE, leaving every later level with one probe or none."""
     slice_deadline = getattr(params, "slice_deadline", None)
-    effective_deadline = (params.deadline if slice_deadline is None
-                          else min(params.deadline, slice_deadline))
+    return (params.deadline if slice_deadline is None
+            else min(params.deadline, slice_deadline))
+
+
+def _generate_levels(layout, region, consumers, ks, rng, params, log, *,
+                     scorer=None, score_threshold=None) -> dict[int, dict]:
+    """Generate + prefilter (+ score) every level of `ks`, in order, against
+    the shared `rng`: the per-level probing state both schedulers consume."""
+    th = layout.townhall.footprint
     th_mode = getattr(params, "th_anchors", "coarse")
     family = getattr(params, "pattern_family", "comb")
     gen_fn = _pattern_generator(family)
@@ -1637,6 +1629,18 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
         state[k] = {"pats": pats, "surviving": surviving, "best_achieved": None,
                     "saw_nonproof_failure": False, "order": 0}
 
+    return state
+
+
+def _result_handler(state, params, log, *, on_improvement=None, corpus=None,
+                    filler_stats=None):
+    """Returns `handle_result(k, result, pat)`, which books one probe result
+    into `state[k]` (order, best, non-proof failures), logs it, and publishes
+    a strictly better SAT through `on_improvement`."""
+    profile = getattr(params, "profile", None)
+    if filler_stats is None:
+        filler_stats = new_filler_stats()
+
     def handle_result(k, result, pat):
         st = state[k]
         st["order"] += 1
@@ -1683,8 +1687,32 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
                     recorder(k, achieved, pat, vlay)
         elif status in ("UNKNOWN", "ROUTE_FAIL", "INVALID", "SAT_FILLER_FAIL", "SAT_ROTATED"):
             st["saw_nonproof_failure"] = True
-        return time.monotonic() > effective_deadline
 
+    return handle_result
+
+
+def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=None,
+                        on_improvement=None, corpus=None, scorer=None,
+                        score_threshold=None,
+                        filler_stats: dict | None = None,
+                        coverage: dict | None = None,
+                        runtime: dict | None = None) -> dict[int, tuple[str, int | None]]:
+    """Generate + probe several k-levels' patterns in one shared pool dispatch
+    instead of draining one level's ~200 patterns before the next level's are
+    even generated. `_run_probe`'s payload/result already carry `k`, so this
+    only changes dispatch/demux, not the worker-side probe logic.
+
+    Levels are generated in `ks` order against the *same* `rng` stream, so
+    pattern content for a given k is identical to what a sequential run of
+    `_probe_level` would have produced -- this is the determinism invariant
+    that makes batching a pure speed change, not a different search."""
+    if filler_stats is None:
+        filler_stats = new_filler_stats()
+    effective_deadline = _effective_deadline(params)
+    state = _generate_levels(layout, region, consumers, ks, rng, params, log,
+                             scorer=scorer, score_threshold=score_threshold)
+    handle_result = _result_handler(state, params, log, on_improvement=on_improvement,
+                                    corpus=corpus, filler_stats=filler_stats)
     if pool is None:
         for i, k in enumerate(ks):
             interrupted = False
@@ -1700,7 +1728,8 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
                                          getattr(params, "probe_model", "item"),
                                          getattr(params, "road_witness", False),
                                          getattr(params, "fillers_in_model", False)))
-                if handle_result(k, result, pat):
+                handle_result(k, result, pat)
+                if time.monotonic() > effective_deadline:
                     interrupted = True
                     break
             if interrupted:
@@ -1736,7 +1765,8 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
             k = result["k"]
             idx = result["pat_index"]
             pat = state[k]["surviving"][idx]
-            if handle_result(k, result, pat):
+            handle_result(k, result, pat)
+            if time.monotonic() > effective_deadline:
                 # Kills in-flight probes, which is what we want -- but it also
                 # leaves the pool permanently unusable. Before slicing this only
                 # ever happened at the walk deadline, when the pool was about to
