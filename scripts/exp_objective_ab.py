@@ -70,6 +70,17 @@ ARMS = {
     "witness": {"probe_limit": 30.0, "objective_limit": 30.0, "objective_polish": 0.3,
                 "exact_finish": True, "probe_model": "position", "rebase_s": 20.0,
                 "road_witness": True},
+    # Phase D: the current preset (witness) + fillers placed by the position model,
+    # and + starting from the uploaded city
+    "fill": {"probe_limit": 30.0, "objective_limit": 30.0, "objective_polish": 0.3,
+             "exact_finish": True, "probe_model": "position", "rebase_s": 20.0,
+             "road_witness": True, "fillers_in_model": True},
+    "seed": {"probe_limit": 30.0, "objective_limit": 30.0, "objective_polish": 0.3,
+             "exact_finish": True, "probe_model": "position", "rebase_s": 20.0,
+             "road_witness": True, "seed_input": True},
+    "fillseed": {"probe_limit": 30.0, "objective_limit": 30.0, "objective_polish": 0.3,
+                 "exact_finish": True, "probe_model": "position", "rebase_s": 20.0,
+                 "road_witness": True, "fillers_in_model": True, "seed_input": True},
 }
 
 

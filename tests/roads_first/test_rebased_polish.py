@@ -74,7 +74,7 @@ def test_accepts_strict_improvement_then_rebases_once_more(monkeypatch):
                      roads={(2, 2): 1})
     calls = []
 
-    def fake_min(pat, region, consumers, pos, limit, workers, model, diag=None):
+    def fake_min(pat, region, consumers, pos, limit, workers, model, diag=None, fillers=None):
         calls.append(pat.roads)
         return dict(pos)
 

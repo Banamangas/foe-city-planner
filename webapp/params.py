@@ -106,6 +106,22 @@ OPTION_SPECS: list[dict] = [
                 "greedy re-route and every building still fits.",
     },
     {
+        "name": "fillers_in_model", "cli": "--fillers-in-model", "type": "bool",
+        "default": False, "advanced": True,
+        "group": "search", "label": "Place decorations in the model",
+        "help": "The placement solver also places the buildings that need no "
+                "road, so every placement it finds leaves room for them. Needed "
+                "for very full cities; makes each solve larger.",
+    },
+    {
+        "name": "seed_input", "cli": "--seed-input", "type": "bool",
+        "default": False, "advanced": True,
+        "group": "search", "label": "Start from my city",
+        "help": "If your uploaded city is game-legal, it is the first result, and "
+                "the final polish tries to improve it on its own roads. Useful "
+                "when the search finds no layout of its own.",
+    },
+    {
         "name": "exact_finish", "cli": "--exact-finish", "type": "bool",
         "default": False, "advanced": True,
         "group": "budget", "label": "Exact road finish",

@@ -184,6 +184,10 @@ def main(argv=None):
                    help="seconds of the polish window for rebased polish (0 = off)")
     p.add_argument("--road-witness", action="store_true",
                    help="also try the objective's own roads in validate (Codex T1)")
+    p.add_argument("--fillers-in-model", action="store_true",
+                   help="the position model places the no-road buildings too (Phase D)")
+    p.add_argument("--seed-input", action="store_true",
+                   help="start from the uploaded city when it is legal")
     args = p.parse_args(argv)
     if args.smoke:
         args.patterns = 20
@@ -266,6 +270,8 @@ def main(argv=None):
         military=args.military,
         rebase_s=args.rebase_s,
         road_witness=args.road_witness,
+        fillers_in_model=args.fillers_in_model,
+        seed_input=args.seed_input,
     ).run(on_improvement=on_improvement, on_status=on_status)
     print(json.dumps({k: v for k, v in res.items() if k != "results"}, indent=1))
     per_level = {k: v[0] + (f" achieved={v[1]}" if v[1] is not None else "")
