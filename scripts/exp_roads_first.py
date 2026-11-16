@@ -198,6 +198,12 @@ def main(argv=None):
                    help="the position model places the no-road buildings too (Phase D)")
     p.add_argument("--seed-input", action="store_true",
                    help="start from the uploaded city when it is legal")
+    p.add_argument("--scheduler", choices=["batch", "queue"], default="batch",
+                   help="batch: one pool dispatch per level batch (historical); "
+                        "queue: persistent workers fed across levels (backlog S1)")
+    p.add_argument("--early-publish", action="store_true",
+                   help="publish each SAT probe's layout before its objective "
+                        "(needs --scheduler queue; backlog S3)")
     args = p.parse_args(argv)
     if args.smoke:
         args.patterns = 20
@@ -286,6 +292,8 @@ def main(argv=None):
         road_witness=args.road_witness,
         fillers_in_model=args.fillers_in_model,
         seed_input=args.seed_input,
+        scheduler=args.scheduler,
+        early_publish=args.early_publish,
     ).run(on_improvement=on_improvement, on_status=on_status)
     print(json.dumps({k: v for k, v in res.items() if k != "results"}, indent=1))
     per_level = {k: v[0] + (f" achieved={v[1]}" if v[1] is not None else "")

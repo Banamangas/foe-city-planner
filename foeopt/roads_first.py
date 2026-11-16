@@ -4,7 +4,9 @@ import itertools
 import json
 import multiprocessing
 import random
+import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
@@ -703,7 +705,8 @@ def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
         for key, value in solver_overrides.items():
             setattr(solver.parameters, key, value)
     t_solve = time.monotonic()
-    st = solver.Solve(m)
+    with _cancellable(solver):
+        st = solver.Solve(m)
     if diag is not None:
         branches = solver.NumBranches()
         diag.update(reason="presolve" if branches == 0 else "search",
@@ -722,6 +725,7 @@ def probe(pattern: Pattern, region: set[Cell], consumers: list[Building],
 
 
 PROBE_MODELS = ("item", "position")
+SCHEDULERS = ("batch", "queue")
 
 
 def _class_key(b: Building) -> tuple:
@@ -923,7 +927,8 @@ def _probe_position(pattern, region, consumers, *, probe_limit, probe_workers=1,
         for key, value in solver_overrides.items():
             setattr(solver.parameters, key, value)
     t1 = time.monotonic()
-    st = solver.Solve(m)
+    with _cancellable(solver):
+        st = solver.Solve(m)
     if diag is not None:
         branches = solver.NumBranches()
         diag.update(reason="presolve" if branches == 0 else "search",
@@ -1054,7 +1059,8 @@ def minimize_needed(pattern: Pattern, region: set[Cell], consumers: list[Buildin
     solver.parameters.random_seed = seed
     solver.parameters.max_time_in_seconds = limit
     t0 = time.monotonic()
-    st = solver.Solve(m)
+    with _cancellable(solver):
+        st = solver.Solve(m)
     ok = st in (cp_model.OPTIMAL, cp_model.FEASIBLE)
     if diag is not None:
         diag.update(objective_status=solver.status_name(st),
@@ -1099,7 +1105,8 @@ def _minimize_needed_position(m, needed, pattern, region, consumers, positions,
     solver.parameters.random_seed = seed
     solver.parameters.max_time_in_seconds = limit
     t0 = time.monotonic()
-    st = solver.Solve(m)
+    with _cancellable(solver):
+        st = solver.Solve(m)
     ok = st in (cp_model.OPTIMAL, cp_model.FEASIBLE)
     if diag is not None:
         diag.update(objective_status=solver.status_name(st),
@@ -1308,6 +1315,45 @@ def _finish_layout(layout_src, cand, th, placed, fillers, roads, exact_repair,
     return ("OK", cand, len(roads))
 
 
+# --- cooperative cancellation (scheduler="queue") ----------------------------
+# Every CP-SAT solve of a probe task registers here while it runs, so a watcher
+# thread in a work-queue worker can stop it (CpSolver.stop_search is documented
+# as asynchronous and thread-safe) instead of the parent killing the process.
+# Outside a work-queue worker nothing ever calls _stop_active_solvers(), so the
+# registry is inert.
+_ACTIVE_SOLVERS: set = set()
+_SOLVER_LOCK = threading.Lock()
+
+
+@contextmanager
+def _cancellable(solver):
+    with _SOLVER_LOCK:
+        _ACTIVE_SOLVERS.add(solver)
+    try:
+        yield solver
+    finally:
+        with _SOLVER_LOCK:
+            _ACTIVE_SOLVERS.discard(solver)
+
+
+def _stop_active_solvers() -> int:
+    with _SOLVER_LOCK:
+        solvers = list(_ACTIVE_SOLVERS)
+    for solver in solvers:
+        solver.stop_search()
+    return len(solvers)
+
+
+# The task being run by a work-queue worker, or None (batch pool / sequential
+# path: _run_probe then behaves exactly as before). Keys: "deadline" (the
+# level's effective deadline; every solve is clamped to it), "stopped"
+# (callable -> bool: the run's cooperative stop flag) and "early" (None, or a
+# callable(achieved, layout, pos) that publishes the validated probe layout
+# before the in-walk objective runs -- option early_publish, backlog S3).
+_TASK_CTX: dict | None = None
+PROBE_MIN_S = 0.2  # a queue task with less time than this left is not started
+
+
 _WORKER_LAYOUT: Layout | None = None
 _WORKER_PROBE_LIMIT: float = 30.0
 _WORKER_PROBE_WORKERS: int = 1
@@ -1372,9 +1418,18 @@ def _run_probe(payload: tuple) -> dict:
     consumers = layout.road_needing()
     mfill = model_fillers(layout, _WORKER_FILLERS_IN_MODEL, _WORKER_MODEL)
     t0 = time.monotonic()
+    # scheduler="queue" only (None otherwise, and then nothing below changes):
+    # every solve is clamped to the level's deadline instead of being killed
+    # with its process, and the stop flag is honoured between phases.
+    ctx = _TASK_CTX
+    plimit = _WORKER_PROBE_LIMIT
+    if ctx is not None:
+        plimit = min(plimit, ctx["deadline"] - t0)
+        if plimit < PROBE_MIN_S or ctx["stopped"]():
+            return _cancelled_result(pat, k, pat_index, t0, {})
     pdiag: dict = {}
     st, pos = probe(pat, region, consumers,
-                   probe_limit=_WORKER_PROBE_LIMIT,
+                   probe_limit=plimit,
                    probe_workers=_WORKER_PROBE_WORKERS,
                    symmetry_breaking=_WORKER_SYMMETRY_BREAKING,
                    hints=_WORKER_HINTS,
@@ -1389,7 +1444,14 @@ def _run_probe(payload: tuple) -> dict:
     phases = {"probe_total": time.monotonic() - t0,
               "probe_build": pdiag.get("cand_s", 0.0), "probe_solve": pdiag.get("solve_s", 0.0),
               f"probe_{st.lower()}": time.monotonic() - t0}
+    if (ctx is not None and st == "UNKNOWN"
+            and (plimit < _WORKER_PROBE_LIMIT or ctx["stopped"]())):
+        # Cut short by the deadline or a stop, not by its own limit: no more
+        # evidence about the pattern than a probe that never ran (the batch
+        # scheduler loses the same probe to pool.terminate()).
+        return _cancelled_result(pat, k, pat_index, t0, phases)
     if st != "SAT":
+        phases["task_total"] = time.monotonic() - t0
         return {"k": k, "params": pat.params, "status": st,
                 "achieved": None, "secs": secs, "layout": None,
                 "pat_index": pat_index, "pos": None, "phases": phases}
@@ -1402,12 +1464,17 @@ def _run_probe(payload: tuple) -> dict:
     t_val = time.monotonic()
     vstat, vlay, achieved = validate(
         layout, pat, pos,
-        exact_repair=min(_WORKER_EXACT_REPAIR, _WORKER_PROBE_LIMIT),
+        exact_repair=_repair_limit(ctx),
         exact_workers=_WORKER_PROBE_WORKERS, diag=vdiag)
     phases["validate_total"] = time.monotonic() - t_val
     for key in ("route_s", "fillers_s", "repair_s"):
         if key in vdiag:
             phases["validate_" + key[:-2]] = vdiag[key]
+    if ctx is not None and ctx.get("early") is not None and vstat == "OK":
+        # early_publish: the probe's own placement passed the same validate()
+        # as every published layout, so it can be shown now rather than after
+        # the objective has held this worker for up to objective_limit.
+        ctx["early"](achieved, vlay, pos)
     objective_cmp = None
     # Clamped to one probe's own limit, for the same reason as exact_repair
     # above (charged per SAT, an unclamped value lets N SATs add N x limit),
@@ -1416,7 +1483,8 @@ def _run_probe(payload: tuple) -> dict:
     olimit = min(_WORKER_OBJECTIVE_LIMIT, _WORKER_PROBE_LIMIT)
     if deadline is not None:
         olimit = min(olimit, deadline - time.monotonic() - OBJECTIVE_MARGIN_S)
-    if _WORKER_OBJECTIVE_LIMIT > 0 and olimit >= OBJECTIVE_MIN_S:
+    if (_WORKER_OBJECTIVE_LIMIT > 0 and olimit >= OBJECTIVE_MIN_S
+            and not (ctx is not None and ctx["stopped"]())):
         odiag: dict = {}
         t_obj = time.monotonic()
         opos = minimize_needed(pat, region, consumers, pos, limit=olimit,
@@ -1431,7 +1499,7 @@ def _run_probe(payload: tuple) -> dict:
             t_val2 = time.monotonic()
             ostat, olay, oach = validate(
                 layout, pat, opos,
-                exact_repair=min(_WORKER_EXACT_REPAIR, _WORKER_PROBE_LIMIT),
+                exact_repair=_repair_limit(ctx),
                 exact_workers=_WORKER_PROBE_WORKERS,
                 witness=odiag.get("witness") if _WORKER_ROAD_WITNESS else None)
             phases["objective_validate"] = time.monotonic() - t_val2
@@ -1443,6 +1511,7 @@ def _run_probe(payload: tuple) -> dict:
                 vstat, vlay, achieved, pos = ostat, olay, oach, opos
         secs = round(time.monotonic() - t0, 1)
     phases["worker_total"] = time.monotonic() - t0
+    phases["task_total"] = phases["worker_total"]
     if vstat == "OK":
         return {"k": k, "params": pat.params, "status": "SAT",
                 "achieved": achieved, "secs": secs, "layout": vlay,
@@ -1452,6 +1521,28 @@ def _run_probe(payload: tuple) -> dict:
             "achieved": None, "secs": secs, "layout": None, "filler": vdiag,
             "pat_index": pat_index, "pos": pos, "phases": phases,
             "objective_cmp": objective_cmp}
+
+
+def _repair_limit(ctx) -> float:
+    """exact_repair budget for one validate(): clamped to one probe's limit
+    (see _run_probe) and, for a queue task, to the time left before its
+    deadline -- nothing kills it there, so it must stop by itself."""
+    limit = min(_WORKER_EXACT_REPAIR, _WORKER_PROBE_LIMIT)
+    if ctx is not None:
+        limit = min(limit, max(0.0, ctx["deadline"] - time.monotonic()))
+    return limit
+
+
+def _cancelled_result(pat, k, pat_index, t0, phases) -> dict:
+    """A queue task stopped (or never started) because its level's deadline
+    passed or the run was stopped. It carries no evidence about the pattern:
+    the parent neither logs it nor counts it as probed, so the level classifies
+    exactly as if the task had been dropped (UNDERSAMPLED)."""
+    phases = dict(phases)
+    phases["task_total"] = time.monotonic() - t0
+    return {"k": k, "params": pat.params, "status": "CANCELLED", "achieved": None,
+            "secs": round(time.monotonic() - t0, 1), "layout": None,
+            "pat_index": pat_index, "pos": None, "phases": phases}
 
 
 def _run_probe_seq(payload: tuple) -> dict:
@@ -1554,31 +1645,23 @@ def summarise_fillers(fs: dict) -> dict | None:
     }
 
 
-def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=None,
-                        on_improvement=None, corpus=None, scorer=None,
-                        score_threshold=None,
-                        filler_stats: dict | None = None,
-                        coverage: dict | None = None,
-                        runtime: dict | None = None) -> dict[int, tuple[str, int | None]]:
-    """Generate + probe several k-levels' patterns in one shared pool dispatch
-    instead of draining one level's ~200 patterns before the next level's are
-    even generated. `_run_probe`'s payload/result already carry `k`, so this
-    only changes dispatch/demux, not the worker-side probe logic.
+def _effective_deadline(params) -> float:
+    """The walk deadline, capped by the current level slice if one is set.
 
-    Levels are generated in `ks` order against the *same* `rng` stream, so
-    pattern content for a given k is identical to what a sequential run of
-    `_probe_level` would have produced -- this is the determinism invariant
-    that makes batching a pure speed change, not a different search."""
-    th = layout.townhall.footprint
-    if filler_stats is None:
-        filler_stats = new_filler_stats()
-    # A slice caps THIS call, so one level cannot eat the whole box. Measured on
-    # FR17 at k_start=117: the first level alone could consume 525 s of a 600 s
-    # box (35 patterns x 90 s / 6 workers) and then return INCONCLUSIVE, leaving
-    # every later level with one probe or none.
+    A slice caps ONE probing call, so one level cannot eat the whole box.
+    Measured on FR17 at k_start=117: the first level alone could consume 525 s
+    of a 600 s box (35 patterns x 90 s / 6 workers) and then return
+    INCONCLUSIVE, leaving every later level with one probe or none."""
     slice_deadline = getattr(params, "slice_deadline", None)
-    effective_deadline = (params.deadline if slice_deadline is None
-                          else min(params.deadline, slice_deadline))
+    return (params.deadline if slice_deadline is None
+            else min(params.deadline, slice_deadline))
+
+
+def _generate_levels(layout, region, consumers, ks, rng, params, log, *,
+                     scorer=None, score_threshold=None) -> dict[int, dict]:
+    """Generate + prefilter (+ score) every level of `ks`, in order, against
+    the shared `rng`: the per-level probing state both schedulers consume."""
+    th = layout.townhall.footprint
     th_mode = getattr(params, "th_anchors", "coarse")
     family = getattr(params, "pattern_family", "comb")
     gen_fn = _pattern_generator(family)
@@ -1637,6 +1720,18 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
         state[k] = {"pats": pats, "surviving": surviving, "best_achieved": None,
                     "saw_nonproof_failure": False, "order": 0}
 
+    return state
+
+
+def _result_handler(state, params, log, *, on_improvement=None, corpus=None,
+                    filler_stats=None):
+    """Returns `handle_result(k, result, pat)`, which books one probe result
+    into `state[k]` (order, best, non-proof failures), logs it, and publishes
+    a strictly better SAT through `on_improvement`."""
+    profile = getattr(params, "profile", None)
+    if filler_stats is None:
+        filler_stats = new_filler_stats()
+
     def handle_result(k, result, pat):
         st = state[k]
         st["order"] += 1
@@ -1683,8 +1778,32 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
                     recorder(k, achieved, pat, vlay)
         elif status in ("UNKNOWN", "ROUTE_FAIL", "INVALID", "SAT_FILLER_FAIL", "SAT_ROTATED"):
             st["saw_nonproof_failure"] = True
-        return time.monotonic() > effective_deadline
 
+    return handle_result
+
+
+def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=None,
+                        on_improvement=None, corpus=None, scorer=None,
+                        score_threshold=None,
+                        filler_stats: dict | None = None,
+                        coverage: dict | None = None,
+                        runtime: dict | None = None) -> dict[int, tuple[str, int | None]]:
+    """Generate + probe several k-levels' patterns in one shared pool dispatch
+    instead of draining one level's ~200 patterns before the next level's are
+    even generated. `_run_probe`'s payload/result already carry `k`, so this
+    only changes dispatch/demux, not the worker-side probe logic.
+
+    Levels are generated in `ks` order against the *same* `rng` stream, so
+    pattern content for a given k is identical to what a sequential run of
+    `_probe_level` would have produced -- this is the determinism invariant
+    that makes batching a pure speed change, not a different search."""
+    if filler_stats is None:
+        filler_stats = new_filler_stats()
+    effective_deadline = _effective_deadline(params)
+    state = _generate_levels(layout, region, consumers, ks, rng, params, log,
+                             scorer=scorer, score_threshold=score_threshold)
+    handle_result = _result_handler(state, params, log, on_improvement=on_improvement,
+                                    corpus=corpus, filler_stats=filler_stats)
     if pool is None:
         for i, k in enumerate(ks):
             interrupted = False
@@ -1700,7 +1819,8 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
                                          getattr(params, "probe_model", "item"),
                                          getattr(params, "road_witness", False),
                                          getattr(params, "fillers_in_model", False)))
-                if handle_result(k, result, pat):
+                handle_result(k, result, pat)
+                if time.monotonic() > effective_deadline:
                     interrupted = True
                     break
             if interrupted:
@@ -1736,7 +1856,8 @@ def _probe_levels_batch(layout, region, consumers, ks, rng, params, log, pool=No
             k = result["k"]
             idx = result["pat_index"]
             pat = state[k]["surviving"][idx]
-            if handle_result(k, result, pat):
+            handle_result(k, result, pat)
+            if time.monotonic() > effective_deadline:
                 # Kills in-flight probes, which is what we want -- but it also
                 # leaves the pool permanently unusable. Before slicing this only
                 # ever happened at the walk deadline, when the pool was about to
@@ -1789,7 +1910,9 @@ class RoadsFirstSearch:
                  rebase_s: float = 0.0,
                  road_witness: bool = False,
                  fillers_in_model: bool = False,
-                 seed_input: bool = False):
+                 seed_input: bool = False,
+                 scheduler: str = "batch",
+                 early_publish: bool = False):
         # Linked chains are placed as rigid composites so their links survive
         # (user-confirmed rule, 2026-11-11); every emitted layout is expanded
         # back to real buildings inside validate().
@@ -1891,6 +2014,21 @@ class RoadsFirstSearch:
         # Measurement knob only: False restores the level-grouped payload order
         # that made a "concurrent" batch drain one level at a time.
         self.interleave_levels = interleave_levels
+        # How probe tasks reach the workers (backlog S1). "batch": one Pool
+        # dispatch per level batch, drained fully, terminated on slice expiry
+        # (the historical behaviour). "queue": persistent workers fed from one
+        # queue across levels, cooperative cancel, no terminate; same walk
+        # decisions (foeopt/work_queue.py). "queue" always uses worker
+        # processes, even with workers=1.
+        if scheduler not in SCHEDULERS:
+            raise ValueError(f"scheduler must be one of {SCHEDULERS}")
+        self.scheduler = scheduler
+        # Backlog S3: publish each SAT probe's validated layout as soon as it
+        # exists, before the in-walk objective improves it (first layout at
+        # ~1 s instead of ~objective_limit). Needs the queue's result channel.
+        if early_publish and scheduler != "queue":
+            raise ValueError("early_publish needs scheduler='queue'")
+        self.early_publish = early_publish
 
     def _apply_exact_finish(self, latest: dict, on_improvement,
                             deadline: float | None = None, should_stop=None) -> dict:
@@ -2130,17 +2268,21 @@ class RoadsFirstSearch:
         filler_stats = new_filler_stats()
         level_coverage: dict[int, dict] = {}
 
+        init_args = (layout, self.probe_limit, self.probe_workers,
+                     self.symmetry_breaking, self.hints, self.stub_priority,
+                     None, self.exact_repair, self.objective_limit,
+                     self.probe_model, self.road_witness,
+                     self.fillers_in_model)
+
         def _new_pool():
             return multiprocessing.Pool(
                 self.workers,
                 initializer=_worker_init,
-                initargs=(layout, self.probe_limit, self.probe_workers,
-                         self.symmetry_breaking, self.hints, self.stub_priority,
-                         None, self.exact_repair, self.objective_limit,
-                         self.probe_model, self.road_witness,
-                         self.fillers_in_model))
+                initargs=init_args)
 
-        pool = _new_pool() if self.workers > 1 else None
+        use_queue = self.scheduler == "queue"
+        pool = _new_pool() if self.workers > 1 and not use_queue else None
+        queue = None  # the LevelQueue, created once the corpus exists
 
         corpus = None
 
@@ -2267,13 +2409,17 @@ class RoadsFirstSearch:
             if _needs_probe(k):
                 attempts[k] = attempts.get(k, 0) + 1
                 _set_slice()
-                results[k] = _probe_level(layout, region, consumers, k, rng,
-                                          params, lambda r: None, pool=pool,
-                                          on_improvement=on_improvement, corpus=corpus,
-                                          scorer=self.scorer, score_threshold=self.score_threshold,
-                                          filler_stats=filler_stats,
-                                          coverage=level_coverage, runtime=runtime)
-                _restore_pool()
+                if queue is not None:
+                    results[k] = queue.levels([k])[k]
+                else:
+                    results[k] = _probe_level(layout, region, consumers, k, rng,
+                                              params, lambda r: None, pool=pool,
+                                              on_improvement=on_improvement, corpus=corpus,
+                                              scorer=self.scorer,
+                                              score_threshold=self.score_threshold,
+                                              filler_stats=filler_stats,
+                                              coverage=level_coverage, runtime=runtime)
+                    _restore_pool()
                 if on_status is not None:
                     on_status(k, results[k][0], 0, 0)
             return results[k]
@@ -2284,14 +2430,18 @@ class RoadsFirstSearch:
                 for kk in missing:
                     attempts[kk] = attempts.get(kk, 0) + 1
                 _set_slice()
-                batch = _probe_levels_batch(layout, region, consumers, missing, rng,
-                                            params, lambda r: None, pool=pool,
-                                            on_improvement=on_improvement, corpus=corpus,
-                                            scorer=self.scorer, score_threshold=self.score_threshold,
-                                            filler_stats=filler_stats,
-                                            coverage=level_coverage,
-                                            runtime=runtime)
-                _restore_pool()
+                if queue is not None:
+                    batch = queue.levels(missing)
+                else:
+                    batch = _probe_levels_batch(layout, region, consumers, missing, rng,
+                                                params, lambda r: None, pool=pool,
+                                                on_improvement=on_improvement,
+                                                corpus=corpus, scorer=self.scorer,
+                                                score_threshold=self.score_threshold,
+                                                filler_stats=filler_stats,
+                                                coverage=level_coverage,
+                                                runtime=runtime)
+                    _restore_pool()
                 for kk, res in batch.items():
                     results[kk] = res
                     if on_status is not None:
@@ -2348,6 +2498,35 @@ class RoadsFirstSearch:
         try:
             if self.corpus_dir:
                 corpus = CorpusWriter(self.corpus_dir, layout)
+            if use_queue:
+                from foeopt.work_queue import LevelQueue
+
+                def _level_update(kk, res):
+                    # the rest of an answered level found a (better) layout
+                    results[kk] = res
+                    if on_status is not None:
+                        on_status(kk, res[0], 0, 0)
+
+                queue = LevelQueue(layout, region, consumers, rng, params,
+                                   workers=self.workers, init_args=init_args,
+                                   on_improvement=on_improvement, corpus=corpus,
+                                   scorer=self.scorer,
+                                   score_threshold=self.score_threshold,
+                                   filler_stats=filler_stats, coverage=level_coverage,
+                                   on_level_update=_level_update,
+                                   should_stop=should_stop,
+                                   early_publish=self.early_publish)
+
+            def _end_walk():
+                """Queue only: book the leftover tasks (the rest of FEASIBLE
+                levels, which the batch path would have finished before moving
+                on) until the live walk end, then stop the workers -- polish
+                runs in this process with every thread."""
+                if queue is not None:
+                    queue.drain(until=_walk_end())
+                    queue.close()
+                profile.event("walk_end")
+
             truncated = False
 
             if self.k_start == "auto":
@@ -2395,6 +2574,7 @@ class RoadsFirstSearch:
                     if found is not None:
                         k, st = found, "FEASIBLE"
                 if st != "FEASIBLE":
+                    _end_walk()
                     # The walk found nothing, but a seeded incumbent (the uploaded
                     # city) still gets the rebased polish and the exact finish.
                     rebase_info = exact_info = None
@@ -2470,9 +2650,9 @@ class RoadsFirstSearch:
                 else:
                     lo = mid
 
+            _end_walk()
             best = min((r[1] for r in results.values() if r[1] is not None), default=None)
             objective_info = None
-            profile.event("walk_end")
             if best is not None and objective_reserve > 0:
                 with profile.timed("finish_objective_polish"):
                     # rebase_s comes off the END of the polish window (same deadline)
@@ -2526,6 +2706,8 @@ class RoadsFirstSearch:
                         1 for r in results.values() if r[0] == "UNDERSAMPLED"),
                     "results": results}
         finally:
+            if queue is not None:
+                queue.close(abort=True)  # no-op after a normal walk end
             if corpus is not None:
                 corpus.close()
             if pool is not None:
