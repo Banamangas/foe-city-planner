@@ -203,3 +203,41 @@ def test_pick_k_start_stays_positive_for_tiny_cities():
     region = Region(frozenset((x, y) for x in range(6) for y in range(6)))
     lay = Layout(region, blds, th, {})
     assert pick_k_start(lay, "nonuniform") >= 1
+
+
+from foeopt.bounds import bound_forest
+
+
+def test_forest_bound_formula():
+    """1x1 TH in the middle of a 9x9 region (P=4) with 14 consumers: the
+    (n-P)/2 term dominates, max(ceil(14/3)=5, ceil(10/2)=5) = 5."""
+    th = Building(1, "c1", "main_building", Footprint(4, 4, 1, 1), needs_road=False,
+                  road_level=1, is_townhall=True, set_id=None, chain_id=None, name="th")
+    cons = [_b(10 + i, 1, 1, needs=True) for i in range(14)]
+    layout = Layout(_region(9, 9), [th, *cons], th, {})
+    assert bound_forest(layout) == max(math.ceil(14 / 3), math.ceil((14 - 4) / 2))  # 5
+
+
+def test_forest_bound_le_true_optimum_on_tiny_instances():
+    th = Building(1, "c1", "main_building", Footprint(0, 0, 1, 1), needs_road=False,
+                  road_level=1, is_townhall=True, set_id=None, chain_id=None, name="th")
+    for n in (2, 3, 4):
+        cons = [_b(10 + i, 1, 1, needs=True) for i in range(n)]
+        layout = Layout(_region(4, 4), [th, *cons], th, {})
+        opt = optimal_roads(layout, budget_s=30.0)
+        assert opt is not None
+        assert bound_forest(layout) <= opt
+
+
+@pytest.mark.parametrize("files,record", [
+    (("darkzig.json",), 88),
+    (("CityMap-Born-FR16-2026-07-07.json",), 67),
+    (("CityMap-Born-FR17-2026-07-07.json",), 103),
+    (("CityMap-Born-FR24-2026-07-07.json",), 220),
+])
+def test_forest_bound_below_records(repo_root, files, record):
+    if not all((repo_root / f).exists() for f in files):
+        pytest.skip("city export not present")
+    lay = load_layout(*(str(repo_root / f) for f in files))
+    b = report_bounds(lay)
+    assert b["adjacency"] <= b["forest"] == b["max"] <= record

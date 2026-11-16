@@ -23,9 +23,36 @@ def bound_adjacency(layout: Layout) -> int:
     return math.ceil(len(layout.road_needing()) / 3)
 
 
+def bound_forest(layout: Layout) -> int:
+    """roads >= max(ceil(n/3), ceil((n - P) / 2)), P = Townhall border cells
+    inside the region.
+
+    Argument. Only road cells connected to the Townhall border serve anyone
+    (validate.connected_road_cells), so count those: R_c <= R cells in t
+    components. A consumer is served through a (road cell, direction) pair
+    whose neighbour cell lies in that consumer; a cell belongs to one building,
+    so distinct consumers use distinct pairs. A component of r cells has 4r
+    pairs, at least 2(r-1) of them face its own road cells (a spanning tree,
+    counted from both ends) and at least one faces the Townhall (its root lies
+    on the Townhall's orthogonal border), so it offers at most 2r+1 pairs.
+    Hence n <= 2*R_c + t, and t <= min(R_c, P) because every component holds a
+    distinct Townhall border cell. t <= R_c gives n <= 3R (bound_adjacency);
+    t <= P gives n <= 2R + P.
+
+    Weak by nature (2026-11-16): darkzig 22, FR16 22, FR17 32, FR24 60 against
+    records 88 / 67 / 103 / 220. Counting cannot see packing geometry or area
+    slack, which is where the real limit lives (tasks/todo.md, Q1)."""
+    n = len(layout.road_needing())
+    if layout.townhall is None:
+        return bound_adjacency(layout)
+    region = set(layout.region.cells)
+    p = sum(1 for c in layout.townhall.footprint.border_cells() if c in region)
+    return max(bound_adjacency(layout), math.ceil(max(0, n - p) / 2))
+
+
 def report_bounds(layout: Layout) -> dict[str, int]:
     """All provable bounds plus their max (the usable combined bound)."""
-    bounds = {"adjacency": bound_adjacency(layout)}
+    bounds = {"adjacency": bound_adjacency(layout), "forest": bound_forest(layout)}
     bounds["max"] = max(bounds.values())
     return bounds
 
