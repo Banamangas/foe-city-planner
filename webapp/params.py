@@ -128,6 +128,36 @@ OPTION_SPECS: list[dict] = [
         "help": "Re-route the final layout with the exact minimum-roads router "
                 "(usually well under a second) and keep it if it uses fewer roads.",
     },
+    {
+        "name": "polish_top", "cli": "--polish-top", "type": "int",
+        "default": 3, "min": 1, "max": 32, "advanced": True,
+        "group": "budget", "label": "Objective polish: skeletons",
+        "help": "How many of the best distinct skeletons objective polish "
+                "re-solves. With parallel polish, more fit in the same time.",
+    },
+    {
+        "name": "polish_parallel", "cli": "--polish-parallel", "type": "int",
+        "default": 0, "min": 0, "max": 32, "advanced": True,
+        "group": "budget", "label": "Objective polish: at once (0 = one by one)",
+        "help": "Solve up to this many polish skeletons at the same time, "
+                "splitting the solver threads between them, against the same "
+                "deadline. The best result wins. 0 or 1 = one at a time.",
+    },
+    {
+        "name": "polish_threads", "cli": "--polish-threads", "type": "int_or_null",
+        "default": None, "min": 1, "max": 256, "advanced": True,
+        "group": "budget", "label": "Objective polish: threads (blank = auto)",
+        "help": "Solver threads the polish phase uses in total (the search "
+                "workers idle meanwhile). Blank = workers x threads per probe.",
+    },
+    {
+        "name": "exact_finish_workers", "cli": "--exact-finish-workers", "type": "int",
+        "default": 0, "min": 0, "max": 64, "advanced": True,
+        "group": "budget", "label": "Exact finish threads (0 = classic)",
+        "help": "Solver threads for the exact road finish, started from the "
+                "current roads so it can only match or beat them. 0 = the "
+                "classic single-thread cold start.",
+    },
     # ---- search shape ----
     {
         "name": "patterns", "cli": "--patterns", "type": "int",

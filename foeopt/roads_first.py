@@ -1778,8 +1778,11 @@ class RoadsFirstSearch:
                  interleave_levels: bool = True,
                  objective_limit: float = 0.0,
                  objective_polish: float = 0.0,
-                 objective_polish_top: int = 3,
+                 polish_top: int = 3,
+                 polish_parallel: int = 0,
+                 polish_threads: int | None = None,
                  exact_finish: bool = False,
+                 exact_finish_workers: int = 0,
                  probe_model: str = "position",
                  keep_chains: bool = True,
                  military: str = "connect",
@@ -1830,13 +1833,24 @@ class RoadsFirstSearch:
         # is strictly smaller. route() is greedy: on 2026-11-11 A/B layouts it
         # left one road on the table in both arms (99 -> 98, 94 -> 93).
         self.exact_finish = exact_finish
+        # 0: the historical exact finish (1 CP-SAT worker, cold start). N >= 1:
+        # N workers, hinted with the incumbent's own network (a complete
+        # feasible solution), so the solve starts at the incumbent's count.
+        self.exact_finish_workers = exact_finish_workers
+        # Backlog S2. polish_parallel > 1 solves up to that many polish
+        # candidates at once in threads (CP-SAT releases the GIL in Solve),
+        # each with polish_threads // N workers, against the same deadline.
+        # 0/1 = the historical sequential loop. polish_threads defaults to
+        # workers x probe_workers (the pool idles during polish).
+        self.polish_parallel = polish_parallel
+        self.polish_threads = polish_threads
         # > 0: reserve this FRACTION of the box, after the walk, to re-solve the
-        # best `objective_polish_top` distinct SAT skeletons with minimize_needed
+        # best `polish_top` distinct SAT skeletons with minimize_needed
         # using every solver thread (workers x probe_workers). The in-walk
         # objective_limit gets one probe's threads and is clamped to probe_limit;
         # the record-breaking runs used 120 s x 12 threads on one skeleton.
         self.objective_polish = objective_polish
-        self.objective_polish_top = objective_polish_top
+        self.polish_top = polish_top
         # > 0: after every SAT, spend up to this many seconds (clamped to
         # probe_limit) minimizing the skeleton cells the placement needs. See
         # minimize_needed. 0 = feasibility only, the historical behaviour.
@@ -1892,7 +1906,12 @@ class RoadsFirstSearch:
             return {"before": before, "after": before, "status": "SKIPPED",
                     "optimal": False}
         lane = {c: lvl for c, lvl in lay.roads.items() if lvl >= 2}
-        res = exact_route(lay, time_limit=limit, **({"fixed": lane} if lane else {}))
+        kw = {"fixed": lane} if lane else {}
+        if self.exact_finish_workers >= 1:
+            kw.update(workers=self.exact_finish_workers, hint=set(lay.roads))
+        t0 = time.monotonic()
+        res = exact_route(lay, time_limit=limit, **kw)
+        wall = round(time.monotonic() - t0, 2)
         after = before
         if res.roads is not None and res.count is not None and res.count < before:
             cand = Layout(lay.region, lay.buildings, lay.townhall, dict(res.roads))
@@ -1900,7 +1919,9 @@ class RoadsFirstSearch:
                 after = res.count
                 on_improvement(cand, latest["k"], after)
         return {"before": before, "after": after, "status": res.status,
-                "optimal": res.optimal}
+                "optimal": res.optimal, "wall_s": wall,
+                "workers": max(1, self.exact_finish_workers),
+                "hinted": self.exact_finish_workers >= 1}
 
     def _seed_from_input(self, on_improvement) -> dict:
         """Publish the uploaded layout as the first incumbent if it passes the
@@ -1916,47 +1937,109 @@ class RoadsFirstSearch:
                        n, n)
         return {"used": True, "roads": n}
 
+    def _polish_threads(self) -> int:
+        return max(1, self.polish_threads or self.workers * self.probe_workers)
+
+    def _polish_one(self, cand, limit: float, threads: int):
+        """One objective-polish solve + validation. Returns (layout | None,
+        roads | None, per-candidate telemetry row)."""
+        ach, k, pat, pos = cand
+        region = set(self.layout.region.cells)
+        consumers = self.layout.road_needing()
+        t_solve = time.monotonic()
+        odiag: dict = {}
+        opos = minimize_needed(pat, region, consumers, pos, limit=limit,
+                               workers=threads, model=self.probe_model, diag=odiag,
+                               fillers=model_fillers(self.layout, self.fillers_in_model,
+                                                     self.probe_model))
+        solve_s = time.monotonic() - t_solve
+        got = vlay = None
+        if opos is not None:
+            vst, vlay, vach = validate(self.layout, pat, opos,
+                                       exact_repair=min(self.exact_repair, limit),
+                                       exact_workers=threads,
+                                       witness=odiag.get("witness") if self.road_witness else None)
+            if vst == "OK":
+                got = vach
+            else:
+                vlay = None
+        # solve_s < limit_s means CP-SAT proved the skeleton's optimum early
+        row = {"k": k, "before": ach, "after": got, "limit_s": round(limit, 1),
+               "solve_s": round(solve_s, 1),
+               "wall_s": round(time.monotonic() - t_solve, 1),
+               "status": odiag.get("objective_status"), "threads": threads}
+        return vlay, got, row
+
     def _apply_objective_polish(self, cands, best, on_improvement, end,
                                 should_stop=None) -> dict:
         """Re-solve the top distinct SAT skeletons with minimize_needed, all
         solver threads, splitting the time left before `end` evenly across the
-        candidates still to go. Keeps only fully validated strict improvements."""
-        region = set(self.layout.region.cells)
-        consumers = self.layout.road_needing()
-        threads = max(1, self.workers * self.probe_workers)
-        top = cands[:max(1, self.objective_polish_top)]
-        tried, after, per = 0, best, []
-        for i, (ach, k, pat, pos) in enumerate(top):
+        candidates still to go. Keeps only fully validated strict improvements.
+        polish_parallel > 1 runs them concurrently (_polish_concurrent)."""
+        t_phase = time.monotonic()
+        top = cands[:max(1, self.polish_top)]
+        if self.polish_parallel > 1 and len(top) > 1:
+            info = self._polish_concurrent(top, best, on_improvement, end, should_stop)
+        else:
+            threads = self._polish_threads()
+            tried, after, per = 0, best, []
+            for i, cand in enumerate(top):
+                if should_stop is not None and should_stop():
+                    break
+                limit = (end - time.monotonic() - OBJECTIVE_MARGIN_S) / (len(top) - i)
+                if limit < OBJECTIVE_MIN_S:
+                    break
+                tried += 1
+                vlay, got, row = self._polish_one(cand, limit, threads)
+                if got is not None and (after is None or got < after):
+                    after = got
+                    if on_improvement is not None:
+                        on_improvement(vlay, cand[1], got)
+                per.append(row)
+            info = {"before": best, "after": after, "tried": tried, "per_skeleton": per,
+                    "parallel": 1}
+        info.update(candidates=len(cands), wall_s=round(time.monotonic() - t_phase, 2))
+        return info
+
+    def _polish_concurrent(self, top, best, on_improvement, end, should_stop) -> dict:
+        """Up to `polish_parallel` candidates at once, in threads: CP-SAT
+        releases the GIL inside Solve (measured: 3 threads x 2 workers burn 3x
+        the CPU of one 2-worker solve in the same wall time), and threads share
+        the layout without pickling. Each gets polish_threads // N workers.
+
+        A candidate's limit is the time left over the number of WAVES still to
+        run (ceil(unstarted / N), itself included), so a top larger than N
+        splits the window like the sequential loop does. Candidates start in
+        list order (the executor queue is FIFO). Results are emitted only
+        after all finish, best (roads, candidate index) first, so the outcome
+        never depends on completion order."""
+        from concurrent.futures import ThreadPoolExecutor
+        n = min(self.polish_parallel, len(top))
+        threads = max(1, self._polish_threads() // n)
+
+        def task(i, cand):
             if should_stop is not None and should_stop():
-                break
-            limit = (end - time.monotonic() - OBJECTIVE_MARGIN_S) / (len(top) - i)
+                return None
+            waves = -(-(len(top) - i) // n)
+            limit = (end - time.monotonic() - OBJECTIVE_MARGIN_S) / waves
             if limit < OBJECTIVE_MIN_S:
-                break
-            tried += 1
-            t_solve = time.monotonic()
-            odiag: dict = {}
-            opos = minimize_needed(pat, region, consumers, pos, limit=limit,
-                                   workers=threads, model=self.probe_model, diag=odiag,
-                                   fillers=model_fillers(self.layout, self.fillers_in_model,
-                                                         self.probe_model))
-            solve_s = time.monotonic() - t_solve
-            got = None
-            if opos is not None:
-                vst, vlay, vach = validate(self.layout, pat, opos,
-                                           exact_repair=min(self.exact_repair, limit),
-                                           exact_workers=threads,
-                                           witness=odiag.get("witness") if self.road_witness else None)
-                if vst == "OK":
-                    got = vach
-                    if after is None or vach < after:
-                        after = vach
-                        if on_improvement is not None:
-                            on_improvement(vlay, k, vach)
-            # solve_s < limit_s means CP-SAT proved the skeleton's optimum early
-            per.append({"k": k, "before": ach, "after": got, "limit_s": round(limit, 1),
-                        "solve_s": round(solve_s, 1)})
-        return {"before": best, "after": after, "tried": tried,
-                "candidates": len(cands), "per_skeleton": per}
+                return None
+            return self._polish_one(cand, limit, threads)
+
+        with ThreadPoolExecutor(max_workers=n, thread_name_prefix="polish") as ex:
+            outs = list(ex.map(task, range(len(top)), top))
+        done = [(i, o) for i, o in enumerate(outs) if o is not None]
+        after = best
+        ok = [(o[1], i, o[0]) for i, o in done if o[1] is not None]
+        if ok:
+            got, i, vlay = min(ok, key=lambda t: (t[0], t[1]))
+            if after is None or got < after:
+                after = got
+                if on_improvement is not None:
+                    on_improvement(vlay, top[i][1], got)
+        return {"before": best, "after": after, "tried": len(done),
+                "per_skeleton": [o[2] for _, o in done], "parallel": n,
+                "threads_each": threads}
 
     def _apply_seed_polish(self, best_holder: dict, on_improvement,
                            should_stop=None, incumbent: int | None = None) -> dict | None:
@@ -2108,7 +2191,7 @@ class RoadsFirstSearch:
                 return
             sat_cands.append((achieved, k, pat, pos))
             sat_cands.sort(key=lambda c: (c[0], c[1]))
-            del sat_cands[max(1, self.objective_polish_top) * 3:]
+            del sat_cands[max(1, self.polish_top) * 3:]
 
         if objective_reserve > 0:
             params.sat_recorder = _record_sat
@@ -2397,6 +2480,9 @@ class RoadsFirstSearch:
                         sat_cands, best, on_improvement,
                         polish_deadline - min(self.rebase_s, objective_reserve),
                         should_stop)
+                # summed candidate wall vs the phase wall shows the overlap
+                for row in objective_info.get("per_skeleton", ()):
+                    profile.add("polish_candidate", row.get("wall_s", 0.0))
                 if objective_info["after"] is not None and objective_info["after"] < best:
                     best = objective_info["after"]
             rebase_info = None

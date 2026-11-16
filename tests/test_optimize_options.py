@@ -240,3 +240,14 @@ def test_warm_start_budget_is_capped_by_the_time_box(monkeypatch):
 def test_integral_floats_and_strings_still_coerce_to_int():
     assert parse_options({"patterns": 200.0})["patterns"] == 200
     assert parse_options({"patterns": "200"})["patterns"] == 200
+
+
+def test_parallel_polish_options_reach_the_search(monkeypatch):
+    """Backlog S2 knobs: defaults keep today's behaviour, and set values flow."""
+    assert (DEFAULTS["polish_top"], DEFAULTS["polish_parallel"], DEFAULTS["polish_threads"],
+            DEFAULTS["exact_finish_workers"]) == (3, 0, None, 0)
+    keys = ("polish_parallel", "polish_threads", "polish_top", "exact_finish_workers")
+    opts = parse_options({"polish_parallel": "3", "polish_threads": "16",
+                          "polish_top": 6, "exact_finish_workers": 4})
+    captured = _submit_and_capture(monkeypatch, time_box=0.1, **{k: opts[k] for k in keys})
+    assert tuple(captured[k] for k in keys) == (3, 16, 6, 4)
