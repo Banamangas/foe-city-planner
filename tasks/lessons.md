@@ -2876,3 +2876,12 @@ That is a modelling gap (fillers outside the model), not a scheduling one.
   SKIPPED too. A 60 s smoke of a polish change exercises none of it.
 - Rule: before using a short box to smoke a finishing-phase change, check the phase's
   `tried`/status in the result; shrink probe_limit/rebase_s in BOTH arms if needed.
+
+## 2026-11-16: the batch scheduler's walk can run into the polish reserve (S1 smoke)
+- FR16 at a 60 s box, preset: `walk_end` at 62.8 s, wall 1.05x, rebased/objective polish got
+  nothing. The batch path checks the slice only when a result arrives, and 30 s probes
+  started near the walk deadline return ~a probe later. "1.02-1.03x overshoot" (2026-07-31)
+  understated it at short boxes: the overrun is taken out of the polish phases, not added.
+- The queue scheduler clamps every solve to its level deadline: same smoke, walk ended at
+  its 39.0 s deadline. Rule: read `profile.events.walk_end` against the walk deadline, not
+  only wall vs box -- a walk overrun hides inside a box that looks honoured.

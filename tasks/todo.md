@@ -1245,12 +1245,22 @@ Today a level batch drains fully before the next is generated, generation + pref
 serially in the parent while the pool waits, and a slice expiry calls `pool.terminate()`
 (roads_first.py:1746), discarding in-flight SAT+objective work and rebuilding the pool.
 Measured: workers idle 47-53% at 120 s, 22-24% at 600 s on FR16/FR17.
-- [ ] Persistent workers pulling `(k, pattern)` tasks from a queue the parent keeps topped
+- [x] Persistent workers pulling `(k, pattern)` tasks from a queue the parent keeps topped
       up across levels; the walk controller consumes results as they arrive.
-- [ ] Cooperative cancel: a shared deadline / level-cancel flag checked in a CP-SAT solution
+- [x] Cooperative cancel: a shared deadline / level-cancel flag checked in a CP-SAT solution
       callback and before each phase (no terminate, nothing lost).
 - [ ] Gate: idle share < 10% at 120 s; roads never worse; first-result time not worse.
 - Prior: `concurrent_levels` was a small win; "keep the pool fed" is open from Phase B.
+- **Implemented** on `feat/s1s3-work-queue` as `scheduler="queue"` (default "batch";
+  `foeopt/work_queue.py`). Walk controller unchanged; a level answers when its
+  classification is final (FEASIBLE at the first validated SAT, else all tasks back or
+  deadline), the rest of a FEASIBLE level stays queued and is booked late. Cancel = every
+  solve clamped to the level deadline + a stop Event -> `CpSolver.stop_search()` from a
+  watcher thread; a cut task is CANCELLED (not counted -> UNDERSAMPLED, as before).
+  New profile fields: `profile.walk.idle_share` (both schedulers), `profile.info.queue`.
+  Smoke (FR16, 60 s, 1 run each, correctness only): batch wall 62.8 s (walk ran to 62.8 s,
+  into the polish reserve), idle 59.5%; queue wall 40.3 s (walk ended at its 39 s
+  deadline), idle 3.0%, same level classifications. **Verdict pending the serial A/B.**
 
 ### S2. Parallel polish  [S]
 Objective polish solves the top-3 skeletons sequentially with all threads; rebased polish
@@ -1273,8 +1283,10 @@ and exact finish are sequential too, while the pool idles. FR17's record is made
 
 ### S3. Publish the feasible layout before the in-walk objective  [S, UX]
 First layout appears at ~31 s because the objective holds the worker for its full limit.
-- [ ] Emit the validated probe layout as an improvement immediately, then the objective's.
+- [x] Emit the validated probe layout as an improvement immediately, then the objective's.
 - [ ] Gate: first result < 3 s on darkzig/FR16/FR17; final roads unchanged.
+- **Implemented** as `early_publish` (needs `scheduler="queue"`). FR16 60 s smoke: first
+  solver layout 27.1 s -> 0.9 s. **Verdict pending the serial A/B.**
 
 ### S4. Pattern ledger  [S]
 A re-probed UNDERSAMPLED level regenerates a fresh sample and may re-probe known patterns;

@@ -17,6 +17,7 @@ class Profile:
         self.objective = {"n": 0, "route_above_objective": 0, "route_below_objective": 0,
                           "route_minus_objective_sum": 0, "objective_improved_route": 0}
         self.events: dict[str, float] = {}         # first occurrence, seconds from start
+        self.info: dict = {}                       # free-form run facts (e.g. scheduler stats)
         self.t0 = time.monotonic()
 
     def add(self, name: str, secs: float, count: int = 1) -> None:
@@ -63,5 +64,27 @@ class Profile:
                          "share_of_worker_time": round(t / cap, 4)}
                   for name, (t, n, mx) in sorted(self.phases.items(),
                                                  key=lambda kv: -kv[1][0])}
-        return {"wall_s": round(wall, 1), "workers": workers, "phases": phases,
-                "objective_vs_route": dict(self.objective), "events": dict(self.events)}
+        out = {"wall_s": round(wall, 1), "workers": workers, "phases": phases,
+               "objective_vs_route": dict(self.objective), "events": dict(self.events)}
+        walk = self.walk_utilisation(workers)
+        if walk is not None:
+            out["walk"] = walk
+        if self.info:
+            out["info"] = dict(self.info)
+        return out
+
+    def walk_utilisation(self, workers: int = 1) -> dict | None:
+        """Worker utilisation over the k-walk (run start -> `walk_end` event).
+
+        `task_total` is the wall time each probe task spent in a worker, from
+        start to result, including tasks that were cut short. idle_share is
+        then exact for scheduler="queue" (no task is ever lost); for "batch" it
+        also counts the in-flight tasks a pool.terminate() discarded as idle,
+        because their time never comes back."""
+        walk = self.events.get("walk_end")
+        busy = self.phases.get("task_total")
+        if not walk or busy is None:
+            return None
+        cap = walk * max(1, workers)
+        return {"wall_s": walk, "worker_s": round(busy[0], 1), "tasks": int(busy[1]),
+                "idle_share": round(max(0.0, 1.0 - busy[0] / cap), 4)}

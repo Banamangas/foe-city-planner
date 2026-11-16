@@ -122,6 +122,24 @@ OPTION_SPECS: list[dict] = [
                 "when the search finds no layout of its own.",
     },
     {
+        "name": "scheduler", "cli": "--scheduler", "type": "choice",
+        "default": "batch", "choices": ["batch", "queue"], "advanced": True,
+        "group": "parallelism", "label": "Work scheduler",
+        "help": "batch (default): probe a batch of k levels, wait for all of it, "
+                "and restart the workers when a level runs out of time. queue: "
+                "the workers stay up and are fed from one queue across levels; "
+                "a level that runs out of time stops its solves cooperatively "
+                "instead of discarding them. Same search decisions.",
+    },
+    {
+        "name": "early_publish", "cli": "--early-publish", "type": "bool",
+        "default": False, "advanced": True,
+        "group": "parallelism", "label": "Show layouts sooner",
+        "help": "With the queue scheduler: show each feasible layout as soon as "
+                "it is checked (about a second), then the improved one when the "
+                "placement objective finishes. Ignored with the batch scheduler.",
+    },
+    {
         "name": "exact_finish", "cli": "--exact-finish", "type": "bool",
         "default": False, "advanced": True,
         "group": "budget", "label": "Exact road finish",
