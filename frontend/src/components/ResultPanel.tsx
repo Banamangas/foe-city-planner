@@ -2,12 +2,14 @@ import { useEffect, useState } from "react";
 import { useCityStore } from "../stores/cityStore";
 import { apiSaveLayout, apiLayouts, apiLayout } from "../api";
 import type { LayoutListItem } from "../types";
+import { forServer } from "../edits";
 
 export function ResultPanel() {
   const city = useCityStore((s) => s.city);
   const optimized = useCityStore((s) => s.optimized);
   const optimizedRaw = useCityStore((s) => s.optimizedRaw);
   const applyImprovement = useCityStore((s) => s.applyImprovement);
+  const edits = useCityStore((s) => s.edits);
   const [history, setHistory] = useState<LayoutListItem[]>([]);
   const [msg, setMsg] = useState("");
 
@@ -27,7 +29,11 @@ export function ResultPanel() {
     if (!optimizedRaw) return;
     await apiSaveLayout({
       city_id: city.city_id, k: optimizedRaw.k, achieved: optimizedRaw.achieved,
-      layout_json: optimizedRaw, roads_count: optimizedRaw.achieved,
+      // A layout made for an edited city keeps its edit set, so reopening it
+      // says which edits it was made for.
+      layout_json: optimizedRaw.to_store || optimizedRaw.added
+        ? { ...optimizedRaw, edits: optimizedRaw.edits ?? forServer(edits) } : optimizedRaw,
+      roads_count: optimizedRaw.achieved,
     });
     setMsg("saved");
     refresh();
@@ -65,6 +71,25 @@ export function ResultPanel() {
             <button onClick={exportLayout}>Export</button>
           </div>
           {msg && <div className="status">{msg}</div>}
+          {optimizedRaw?.added && optimizedRaw.added.length > 0 && (
+            <div className="sub">
+              Added: {optimizedRaw.added.map((a) => a.name).join(", ")}
+            </div>
+          )}
+          {optimizedRaw?.to_store && optimizedRaw.to_store.length > 0 && (
+            <details className="to-store">
+              <summary>To store: {optimizedRaw.to_store.length} building(s)</summary>
+              {optimizedRaw.to_store.map((s) => (
+                <div className="brow" key={s.entity_id}>
+                  <span className="bname">{s.name}</span>
+                  <span className="bsize">{s.width}×{s.length}</span>
+                  <span className="btype" title={s.reason}>
+                    {s.reason === "removed" ? "removed" : "patch"}
+                  </span>
+                </div>
+              ))}
+            </details>
+          )}
         </div>
       ) : (
         <div className="sub">No optimized layout yet.</div>

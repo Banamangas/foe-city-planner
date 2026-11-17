@@ -2,12 +2,15 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useCityStore } from "../stores/cityStore";
 import { fitTransform, screenToGrid, buildingAt, type Transform } from "../geometry";
 import type { BuildingView } from "../types";
+import { toggleRemove } from "../edits";
 
 export function CityMap() {
   const city = useCityStore((s) => s.city);
   const optimized = useCityStore((s) => s.optimized);
   const viewMode = useCityStore((s) => s.viewMode);
   const setViewMode = useCityStore((s) => s.setViewMode);
+  const edits = useCityStore((s) => s.edits);
+  const setEdits = useCityStore((s) => s.setEdits);
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -15,6 +18,7 @@ export function CityMap() {
   const [t, setT] = useState<Transform>({ offsetX: 0, offsetY: 0, scale: 1 });
   const [tip, setTip] = useState<{ x: number; y: number; b: BuildingView } | null>(null);
   const drag = useRef<{ x: number; y: number } | null>(null);
+  const down = useRef<{ x: number; y: number } | null>(null);
 
   const view = city?.map_view ?? null;
   const showOpt = viewMode === "optimized" && optimized !== null;
@@ -61,14 +65,33 @@ export function CityMap() {
     }
 
     const buildings = showOpt && optimized ? optimized.buildings : view.buildings;
+    // Plan E: in the current view, removed buildings stay visible, faded and hatched.
+    const removed = showOpt ? new Set<number>() : new Set(edits.remove);
     ctx.lineWidth = 1;
     ctx.strokeStyle = p.border;
     for (const b of buildings) {
+      const off = b.id !== undefined && removed.has(Number(b.id));
+      ctx.globalAlpha = off ? 0.25 : 1;
       ctx.fillStyle = b.townhall ? p.townhall : b.needs_road ? p.road_building : p.plain_building;
       ctx.fillRect(b.x, b.y, b.w, b.h);
+      ctx.globalAlpha = 1;
       ctx.strokeRect(b.x, b.y, b.w, b.h);
+      if (off) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(b.x, b.y, b.w, b.h);
+        ctx.clip();
+        ctx.strokeStyle = "#e07a5f";
+        ctx.beginPath();
+        for (let d = -b.h; d < b.w; d += cell / 2) {
+          ctx.moveTo(b.x + d, b.y + b.h);
+          ctx.lineTo(b.x + d + b.h, b.y);
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
     }
-  }, [view, t, size, optimized, showOpt]);
+  }, [view, t, size, optimized, showOpt, edits]);
 
   useEffect(() => {
     const cv = canvasRef.current;
@@ -88,8 +111,24 @@ export function CityMap() {
     return () => cv.removeEventListener("wheel", handler);
   }, []);
 
-  const onMouseDown = (e: React.MouseEvent) => { drag.current = { x: e.clientX, y: e.clientY }; };
-  const onMouseUp = () => { drag.current = null; };
+  const onMouseDown = (e: React.MouseEvent) => {
+    drag.current = { x: e.clientX, y: e.clientY };
+    down.current = { x: e.clientX, y: e.clientY };
+  };
+  // A click (no drag) on a building in the current view toggles its removal.
+  const onMouseUp = (e: React.MouseEvent) => {
+    drag.current = null;
+    const d = down.current;
+    down.current = null;
+    if (!d || !view || !city || showOpt) return;
+    if (Math.abs(e.clientX - d.x) + Math.abs(e.clientY - d.y) > 4) return;
+    const rect = canvasRef.current!.getBoundingClientRect();
+    const { gx, gy } = screenToGrid(e.clientX - rect.left, e.clientY - rect.top, t, view.cell, view.origin);
+    const b = buildingAt(gx, gy, view.buildings, view.origin, view.cell);
+    if (b && b.id !== undefined && !b.townhall) {
+      setEdits(toggleRemove(edits, Number(b.id), city.buildings));
+    }
+  };
 
   const onMouseMove = (e: React.MouseEvent) => {
     if (drag.current) {
@@ -134,6 +173,7 @@ export function CityMap() {
         {tip && (
           <div className="citymap-tip" style={{ left: tip.x + 12, top: tip.y + 12 }}>
             {tip.b.name} ({tip.b.size}) {tip.b.townhall ? "· townhall" : tip.b.needs_road ? "· needs road" : ""}
+            {!showOpt && tip.b.id !== undefined && edits.remove.includes(Number(tip.b.id)) ? " · removed (click to keep)" : ""}
           </div>
         )}
       </div>

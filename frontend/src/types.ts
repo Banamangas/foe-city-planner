@@ -1,6 +1,7 @@
 export type RoadView = { x: number; y: number; level: number };
 
 export type BuildingView = {
+  id?: number | string;
   x: number; y: number; w: number; h: number;
   name: string; size: string; needs_road: boolean; townhall: boolean;
 };
@@ -25,6 +26,50 @@ export type MapView = {
 export type BuildingSummary = {
   entity_id: string | number; name: string;
   width: number; length: number; needs_road: boolean; is_townhall: boolean;
+  cityentity_id?: string; chain_id?: string | null; is_chain_head?: boolean;
+};
+
+/** One addition: a catalog type (`cityentity_id`) or a custom size. */
+export type AddSpec = {
+  cityentity_id?: string; count: number; link_to?: number;
+  width?: number; length?: number; needs_road?: boolean; name?: string;
+  /** UI-only labels, ignored by the server. */
+  label?: string; size?: string;
+};
+
+/** Plan E edit set, per city. `relink`: removed main id -> main its patches move to. */
+export type Edits = { remove: number[]; add: AddSpec[]; relink?: Record<string, number> };
+
+export type CatalogEntry = {
+  id: string; name: string; type: string; width: number; length: number;
+  needs_road: boolean; road_level: number; chain_id: string | null; is_chain_head: boolean;
+};
+
+export type StoredBuilding = {
+  entity_id: number; cityentity_id: string; name: string; width: number; length: number;
+  reason: string; main?: number;
+};
+export type AddedBuilding = {
+  entity_id: number; cityentity_id: string; name: string; width: number; length: number;
+  needs_road: boolean; road_level: number; chain_id: string | null; link_to: number | null;
+  placed: boolean; x: number; y: number;
+};
+
+/** Server report of what an edit set does (foeopt.editing.apply_edits). */
+export type EditReport = {
+  removed: number[];
+  to_store: StoredBuilding[];
+  reattached: { removed: number; moved: number[]; to: number | null; to_name: string | null;
+                ok: boolean; relinked?: boolean }[];
+  cascades: { main: number; main_name: string; stored: number[];
+              relink_candidates: { entity_id: number; name: string }[] }[];
+  added: AddedBuilding[];
+  warnings: string[];
+  not_composable: { members: number[]; names: string[] }[];
+  seed: { possible: boolean; reason: string | null };
+  space: { region_cells: number; building_cells: number; free_cells: number;
+           removed_cells: number; added_cells: number; upload_roads: number;
+           fits_without_roads: boolean; fits_with_upload_roads: boolean; overflow: number };
 };
 
 /** Instance screen from foeopt.bounds.screen_city — advisory, never blocking.
@@ -48,12 +93,18 @@ export type LoadResponse = {
   road_estimate: number;
   screen?: CityScreen;
   map_view: MapView;
+  edits?: Edits | null;
 };
 
 export type Improvement = {
   k: number; achieved: number;
   roads: [number, number, number?][];   // [x, y, level]; level 2 = two-lane tile
   buildings: Record<string, [number, number, number, number]>;
+  /** Present when the run had edits: buildings that leave the map / were added. */
+  to_store?: StoredBuilding[];
+  added?: AddedBuilding[];
+  /** Stored with a saved layout: the edit set it was made for. */
+  edits?: Edits;
 };
 
 export type CityListItem = {

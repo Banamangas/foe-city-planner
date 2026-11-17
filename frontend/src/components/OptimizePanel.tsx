@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useCityStore } from "../stores/cityStore";
 import type { Job } from "../stores/cityStore";
 import { apiOptimize, apiOptions, apiStop, openStream } from "../api";
+import { forServer, isEmptyEdits } from "../edits";
 import {
   applyPreset, budgetWarning, byGroup, cliPreview, initialValues, isModified,
   modifiedCount, screenBanner, secondsToMinutes,
@@ -109,6 +110,8 @@ export function OptimizePanel() {
   const [spec, setSpec] = useState<OptionsResponse | null>(null);
   const [values, setValues] = useState<OptionValues>({});
   const [error, setError] = useState("");
+  const [seedNote, setSeedNote] = useState("");
+  const edits = useCityStore((s) => s.edits);
   const esRef = useRef<EventSource | null>(null);
   // The server-side run this panel owns. A ref, not store state: loading a new
   // city clears the store's job BEFORE the cleanup below runs.
@@ -147,7 +150,17 @@ export function OptimizePanel() {
     setError("");
     setJob({ id: "", cityId, state: "submitting", elapsed: 0 });
     try {
-      const { job_id } = await apiOptimize({ city_id: cityId, ...values });
+      // Plan E: an edited city sends its edit set; an unedited one sends
+      // exactly the historical body.
+      const edited = !isEmptyEdits(edits);
+      const res = await apiOptimize(edited
+        ? { city_id: cityId, ...values, edits: forServer(edits) }
+        : { city_id: cityId, ...values });
+      const job_id = res.job_id;
+      const seed = (res as { report?: { seed?: { possible: boolean; reason: string | null } } }).report?.seed;
+      setSeedNote(edited && seed && !seed.possible
+        ? `Edited city: no instant first result (${seed.reason}); the search starts from scratch.`
+        : "");
       const current = () => {
         const j = useCityStore.getState().job;
         return j !== null && j.id === job_id && j.cityId === cityId;
@@ -250,6 +263,11 @@ export function OptimizePanel() {
         </div>
       )}
 
+      {!isEmptyEdits(edits) && (
+        <div className="sub">
+          Runs on the edited city: {edits.remove.length} removed, {edits.add.reduce((n, a) => n + a.count, 0)} added.
+        </div>
+      )}
       <div className="row">
         <button onClick={start} disabled={running || !spec}>Optimize</button>
         <button onClick={stop} disabled={!running}>Stop</button>
@@ -263,6 +281,7 @@ export function OptimizePanel() {
         <div className="error">Run failed after {Math.round(job.elapsed)}s: {job.error}</div>
       )}
       {job?.state === "done" && <RunReport job={job} />}
+      {seedNote && <div className="sub">{seedNote}</div>}
       {error && <div className="error">{error}</div>}
     </div>
   );
