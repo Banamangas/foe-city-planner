@@ -72,6 +72,103 @@ def th_anchor_candidates(region: set[Cell], tw: int, tl: int,
     return [out[k] for k in sorted(out)]
 
 
+def composite_anchors(region: set[Cell], w: int, l: int,
+                      limit: int | None = None) -> list[tuple[int, int]]:
+    """Every top-left (x, y) where a w x l block fits inside `region`, in
+    (x, y) order. With `limit`, stops as soon as more than `limit` are found
+    (the caller only needs to know the count exceeds it)."""
+    x0, y0, x1, y1 = _bbox(region)
+    out = []
+    for x in range(x0, x1 - w + 2):
+        for y in range(y0, y1 - l + 2):
+            if Footprint(x, y, w, l).cells() <= region:
+                out.append((x, y))
+                if limit is not None and len(out) > limit:
+                    return out
+    return out
+
+
+def chain_pins(region: set[Cell], consumers: list[Building],
+               threshold: int) -> list[tuple]:
+    """N7: the low-freedom composite chains, to be placed like the Townhall.
+
+    A composite (linked chain, rigid) whose block fits the region in fewer
+    than `threshold` positions is almost always cut by a random skeleton
+    (agrou's Breezemill, 71x6: 14 positions). Each such composite is returned
+    as (entity_id, w, l, anchors, contact); the nonuniform generator samples
+    one anchor per skeleton, carves the block out of the region it grows roads
+    in, and the position model fixes the composite there (Pattern.params
+    "pins"). Only one-lane road-needing composites are pinned: their contact
+    edge must touch a skeleton cell, which the generator checks."""
+    out = []
+    for b in sorted(consumers, key=lambda b: b.entity_id):
+        if not b.members or b.road_level >= 2:
+            continue
+        w, l = b.footprint.width, b.footprint.length
+        anchors = composite_anchors(region, w, l, limit=threshold)
+        if len(anchors) < threshold:
+            out.append((b.entity_id, w, l, anchors,
+                        b.contact if b.contact is not None else
+                        frozenset((cx - b.footprint.x, cy - b.footprint.y)
+                                  for cx, cy in b.footprint.border_cells())))
+    return out
+
+
+def _sample_pins(pins, th_cells: frozenset[Cell] | set[Cell],
+                 rng: random.Random):
+    """One anchor per pinned composite, off the TH and off each other.
+    Returns ((eid, x, y), ...) and the carved cells, or None if some composite
+    has no anchor left for this TH."""
+    taken = set(th_cells)
+    chosen = []
+    for eid, w, l, anchors, _contact in pins:
+        ok = [a for a in anchors if not (Footprint(a[0], a[1], w, l).cells() & taken)]
+        if not ok:
+            return None
+        x, y = rng.choice(ok)
+        chosen.append((eid, x, y))
+        taken |= Footprint(x, y, w, l).cells()
+    return tuple(chosen), taken - set(th_cells)
+
+
+def _pin_paths(pinned, pins, region: set[Cell], blocked: set[Cell],
+               roads: set[Cell], cache: dict) -> set[Cell] | None:
+    """Road cells joining `roads` to each pinned composite's contact edge by a
+    shortest path through `region` off `blocked` (TH, other pins); None if a
+    path would cross `blocked`. `cache` keeps one BFS distance map per
+    (entity, anchor): from the contact cells, over the region minus the block."""
+    out: set[Cell] = set()
+    for (eid, x, y), pin in zip(pinned, pins):
+        dist = cache.get((eid, x, y))
+        if dist is None:
+            block = Footprint(x, y, pin[1], pin[2]).cells()
+            free = region - block
+            dist = {c: 0 for c in ((x + dx, y + dy) for dx, dy in pin[4]) if c in free}
+            frontier = sorted(dist)
+            while frontier:
+                nxt = []
+                for (cx, cy) in frontier:
+                    for dx, dy in _ORTHO:
+                        n = (cx + dx, cy + dy)
+                        if n in free and n not in dist:
+                            dist[n] = dist[(cx, cy)] + 1
+                            nxt.append(n)
+                frontier = nxt
+            cache[(eid, x, y)] = dist
+        have = roads | out
+        starts = [c for c in have if c in dist]
+        if not starts:
+            return None
+        c = min(starts, key=lambda c: (dist[c], c))
+        while dist[c] > 0:
+            c = min(((c[0] + dx, c[1] + dy) for dx, dy in _ORTHO),
+                    key=lambda n: (dist.get(n, 1 << 30), n))
+            if c in blocked:
+                return None
+            out.add(c)
+    return out - roads
+
+
 def _trunk(region: set[Cell], th: Footprint, side: str) -> list[Cell]:
     if side == "top":
         line = [(x, th.y - 1) for x in range(-1000, 1000)]
@@ -338,7 +435,8 @@ def generate_nonuniform_patterns(region: set[Cell], tw: int, tl: int, k: int,
                                  th_mode: str = "coarse",
                                  gaps: tuple[int, int] = NONUNIFORM_GAPS,
                                  skew: float = NONUNIFORM_SKEW,
-                                 quality_index_band: tuple[int, int] | None = None
+                                 quality_index_band: tuple[int, int] | None = None,
+                                 pins: list[tuple] | None = None
                                  ) -> list[Pattern]:
     """Trunk-and-branch skeletons with IRREGULAR seed gaps and UNEQUAL branch
     lengths -- the comb/lane topology with its two arbitrary uniformity
@@ -356,6 +454,13 @@ def generate_nonuniform_patterns(region: set[Cell], tw: int, tl: int, k: int,
     filters during generation (see `quality_index`) rather than after, so the
     cost is a cheap predicate per draw instead of scoring a materialised
     population.
+
+    `pins` (N7, from `chain_pins`): low-freedom composites placed like the TH.
+    Per draw, after the TH, each gets one anchor off the TH (and off the other
+    pins); its block is carved out of the region the roads grow in, the draw
+    is joined to the trunk by a shortest road path to its contact edge (taken
+    from the budget), and the anchors go to params["pins"] for the position
+    model. None draws nothing extra from `rng`.
     """
     out: list[Pattern] = []
     seen: set[frozenset[Cell]] = set()
@@ -365,10 +470,19 @@ def generate_nonuniform_patterns(region: set[Cell], tw: int, tl: int, k: int,
     gap_lo, gap_hi = gaps
     attempts = 0
     limit = max_patterns * 30
+    full_region = region
+    pinned: tuple = ()
+    dist_cache: dict = {}
     while len(out) < max_patterns and attempts < limit:
         attempts += 1
         th = rng.choice(anchors)
         th_cells = th.cells()
+        if pins:
+            drawn = _sample_pins(pins, th_cells, rng)
+            if drawn is None:
+                continue
+            pinned, cut = drawn
+            region = full_region - cut
         side = rng.choice(("top", "bottom", "left", "right"))
         trunk_raw = [c for c in _trunk(region, th, side) if c not in th_cells]
         if not trunk_raw:
@@ -402,6 +516,13 @@ def generate_nonuniform_patterns(region: set[Cell], tw: int, tl: int, k: int,
             continue
         roads |= set(trunk_used)
         remaining = budget - len(trunk_used)
+        if pins:
+            path = _pin_paths(pinned, pins, full_region, th_cells | (full_region - region),
+                              roads, dist_cache)
+            if path is None or len(path) >= remaining:
+                continue
+            roads |= path
+            remaining -= len(path)
 
         cand_dirs = [(0, -1), (0, 1)] if horiz else [(-1, 0), (1, 0)]
         both_prob = rng.choice((0.6, 0.85, 1.0))
@@ -450,10 +571,12 @@ def generate_nonuniform_patterns(region: set[Cell], tw: int, tl: int, k: int,
             if not (quality_index_band[0] <= qi <= quality_index_band[1]):
                 continue
         seen.add(key)
-        out.append(Pattern(th=th, roads=key, params={
-            "th": (th.x, th.y), "side": side, "gaps": f"{gap_lo}-{gap_hi}",
-            "skew": skew, "stubs": use_stubs, "n_fronts": len(fronts),
-            "trunk_len": len(trunk_used), "k": k}))
+        params = {"th": (th.x, th.y), "side": side, "gaps": f"{gap_lo}-{gap_hi}",
+                  "skew": skew, "stubs": use_stubs, "n_fronts": len(fronts),
+                  "trunk_len": len(trunk_used), "k": k}
+        if pins:
+            params["pins"] = pinned
+        out.append(Pattern(th=th, roads=key, params=params))
     return out
 
 
@@ -897,6 +1020,13 @@ def _position_model(pattern: Pattern, region: set[Cell], consumers: list[Buildin
             return None
         m.Add(sum(v for _, v in row) == len(members))
         lits[key] = row
+    # N7: a pinned composite sits at its skeleton's sampled anchor.
+    by_id = {b.entity_id: b for b in consumers}
+    for eid, x, y in (pattern.params or {}).get("pins", ()):
+        v = dict(lits[_class_key(by_id[eid])]).get((x, y))
+        if v is None:
+            return None   # no road touches it there: trivially UNSAT
+        m.Add(v == 1)
     for xy, u, _ in tiles:                 # a tile exists only to serve a building
         m.AddBoolOr(tile_users.get(xy, [])).OnlyEnforceIf(u)
     # Phase D: the buildings that need no road are placed by the model too, so a
@@ -1864,6 +1994,9 @@ def _generate_levels(layout, region, consumers, ks, rng, params, log, *,
     # never passed on this, the production path, until 2026-11-11.)
     fillers = [b for b in layout.buildings if not b.needs_road and not b.is_townhall]
     profile = getattr(params, "profile", None)
+    # N7: low-freedom composites are placed like the TH (nonuniform only).
+    pins = (chain_pins(region, consumers, params.chain_anchors)
+            if getattr(params, "chain_anchors", 0) and family == "nonuniform" else None)
     state: dict[int, dict] = {}
     for k in ks:
         t_gen = time.monotonic()
@@ -1874,6 +2007,8 @@ def _generate_levels(layout, region, consumers, ks, rng, params, log, *,
                 gen_kwargs["pitches"] = params.lane_pitches
         elif family == "nonuniform":
             gen_kwargs["quality_index_band"] = getattr(params, "quality_index_band", None)
+            if pins:
+                gen_kwargs["pins"] = pins
         elif family == "comb" and getattr(params, "comb_modes", None) is not None:
             gen_kwargs["modes"] = params.comb_modes
         pats = gen_fn(region, th.width, th.length, k, rng, params.patterns,
@@ -2112,7 +2247,8 @@ class RoadsFirstSearch:
                  mutation_polish: bool = False,
                  mutation_reserve: float = 0.0,
                  mutation_starts: int = 1,
-                 mutation_reserve_min_box: float = 0.0):
+                 mutation_reserve_min_box: float = 0.0,
+                 chain_anchors: int = 0):
         # Linked chains are placed as rigid composites so their links survive
         # (user-confirmed rule, 2026-11-11); every emitted layout is expanded
         # back to real buildings inside validate().
@@ -2155,6 +2291,14 @@ class RoadsFirstSearch:
         # it costs the walk half its time (FR17 104 -> 105), at 600 s it gains
         # (FR16 67 -> 66, FR17 103 -> 102, output/bench/m1.jsonl). 0 = always.
         self.mutation_reserve_min_box = mutation_reserve_min_box
+        # N7: a composite chain with fewer than this many positions in the
+        # region is placed like the TH -- one sampled anchor per skeleton,
+        # carved out of the skeleton's region, fixed in the position model.
+        # 0 = off. Needs the nonuniform family and the position model.
+        if chain_anchors and (pattern_family != "nonuniform" or probe_model != "position"):
+            raise ValueError("chain_anchors needs pattern_family='nonuniform' "
+                             "and probe_model='position'")
+        self.chain_anchors = chain_anchors
         self.source_layout = layout
         if military == "unconnected":
             # Explicit per-run choice: two-lane buildings are left off the road
@@ -2538,6 +2682,7 @@ class RoadsFirstSearch:
             fillers_in_model=self.fillers_in_model,
             comb_modes=self.comb_modes,
             interleave_levels=self.interleave_levels,
+            chain_anchors=self.chain_anchors,
         )
         params.profile = profile
 
