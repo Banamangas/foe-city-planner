@@ -84,3 +84,14 @@ select, input:not([type]), input[type="text"] { width: 100%; }
 .screen-reason { margin-top: 0.25rem; }
 .screen-detail { margin-top: 0.25rem; opacity: 0.75; font-size: 0.8rem; }
 .preset-best { font-weight: 600; }
+
+/* Plan E: city edits */
+.edit-summary { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: #c8c8c8; margin-bottom: 6px; }
+.edit-notice { border-left: 3px solid #2980b9; padding: 4px 8px; margin: 6px 0; font-size: 12px; background: #202020; }
+.edit-notice.warn { border-left-color: #e0b050; }
+.edit-notice button { margin-top: 4px; font-size: 11px; padding: 2px 6px; }
+.brow.removed .bname, .brow.removed .bsize { text-decoration: line-through; opacity: 0.55; }
+button.mini { font-size: 10px; padding: 1px 5px; }
+.add-buildings input[type="number"] { width: 64px; }
+.to-store { font-size: 12px; margin-top: 6px; }
+.to-store > summary { cursor: pointer; color: #e0b050; }

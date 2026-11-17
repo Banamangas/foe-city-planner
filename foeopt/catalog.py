@@ -84,3 +84,34 @@ class Catalog:
 
     def name(self, cityentity_id: str) -> str:
         return self._def(cityentity_id).get("name", cityentity_id)
+
+    def ids(self):
+        return self._defs.keys()
+
+    def entity_type(self, cityentity_id: str) -> str:
+        return self._def(cityentity_id).get("type", "")
+
+    def is_chain_head(self, cityentity_id: str) -> bool:
+        """A chain's MAIN building (the piece patches link to), as opposed to
+        a patch. Every main in the bundled catalog requires a road and no patch
+        does, except upgraded mains whose definition lost the requirement
+        (gentiana_windmill's CUP22A10 "Moulin des azalees", 5x4 like the other
+        mains, patches 1x4). So: a chain member is a main when it needs a road
+        or has the size of a road-needing member of its chain."""
+        chain = self.chain_id(cityentity_id)
+        if not chain:
+            return False
+        if self.street_requirement(cityentity_id) > 0:
+            return True
+        return self.size(cityentity_id) in self._head_sizes().get(chain, set())
+
+    def _head_sizes(self) -> dict[str, set]:
+        cached = getattr(self, "_head_sizes_cache", None)
+        if cached is None:
+            cached = {}
+            for cid in self._defs:
+                chain = self.chain_id(cid)
+                if chain and self.street_requirement(cid) > 0:
+                    cached.setdefault(chain, set()).add(self.size(cid))
+            self._head_sizes_cache = cached
+        return cached

@@ -57,4 +57,25 @@ describe("cityStore", () => {
     useCityStore.getState().applyImprovement(imp, "j1");
     expect(useCityStore.getState().optimized?.achieved).toBe(7);
   });
+
+  it("setCity restores the city's saved edits", () => {
+    useCityStore.getState().setCity({ ...resp, edits: { remove: [5], add: [] } });
+    expect(useCityStore.getState().edits).toEqual({ remove: [5], add: [], relink: {} });
+    useCityStore.getState().setCity(resp);
+    expect(useCityStore.getState().edits.remove).toEqual([]);
+  });
+
+  it("names buildings an edited run added", () => {
+    useCityStore.getState().setCity(resp);
+    const imp: Improvement = {
+      k: 10, achieved: 7, roads: [], buildings: { E1: [2, 2, 2, 2], "99": [5, 5, 1, 1] },
+      added: [{ entity_id: 99, cityentity_id: "STATUE", name: "Statue", width: 1, length: 1,
+                needs_road: false, road_level: 1, chain_id: null, link_to: null, placed: true,
+                x: 5, y: 5 }],
+      to_store: [],
+    };
+    useCityStore.getState().applyImprovement(imp);
+    const names = useCityStore.getState().optimized!.buildings.map((b) => b.name);
+    expect(names).toContain("Statue (new)");
+  });
 });

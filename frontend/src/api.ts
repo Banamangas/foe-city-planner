@@ -1,6 +1,7 @@
 import type {
   LoadResponse, CityListItem, LayoutListItem, Improvement,
   BuildingSummary, BuildingView, RoadView, Palette, OptionsResponse,
+  CatalogEntry, EditReport, Edits,
 } from "./types";
 
 export function parseSSE(buffer: string): { event: string; data: any }[] {
@@ -40,6 +41,7 @@ export function improvementToView(
     const [x, y, w, l] = imp.buildings[id];
     const meta = summaryById.get(id);
     buildings.push({
+      id,
       x: (x - ox) * cell, y: (y - oy) * cell, w: w * cell, h: l * cell,
       name: meta?.name ?? id, size: `${w}x${l}`,
       needs_road: meta?.needs_road ?? false, townhall: meta?.is_townhall ?? false,
@@ -72,6 +74,15 @@ export const apiOptions = (): Promise<OptionsResponse> => jsonGet("/api/options"
 export const apiOptimize = (
   body: { city_id: string } & Record<string, unknown>,
 ): Promise<{ job_id: string; options: Record<string, unknown> }> => jsonPost("/api/optimize", body);
+export const apiCatalog = (q: string, cityId?: string): Promise<{ results: CatalogEntry[] }> =>
+  jsonGet(`/api/catalog?q=${encodeURIComponent(q)}${cityId ? `&city_id=${encodeURIComponent(cityId)}` : ""}`);
+export const apiPreviewEdits = (cityId: string, edits: Edits): Promise<{ report: EditReport }> =>
+  jsonPost("/api/edits/preview", { city_id: cityId, edits });
+export async function apiSaveEdits(cityId: string, edits: Edits): Promise<void> {
+  await fetch(`/api/cities/${encodeURIComponent(cityId)}/edits`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(edits),
+  });
+}
 export const apiStop = (jobId: string): Promise<any> => jsonPost(`/api/stop/${jobId}`, {});
 export const apiCities = (): Promise<CityListItem[]> => jsonGet("/api/cities");
 export const apiCity = (id: string): Promise<any> => jsonGet(`/api/cities/${id}`);
