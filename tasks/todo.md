@@ -1486,13 +1486,21 @@ Machine rule: every CPU-heavy run (bench, probe studies) goes through the shared
       RESULT (600 s, 2 reps): qe better 2 / worse 0 / tie 4 -> ADOPTED (darkzig 89,91 -> 88,88;
       FR16, FR17 tie; first layout 31 s -> 1-2 s). qep (parallel polish) REJECT (worse 2).
       qeu (union polish) identical to qe in every pair -> not adopted (adds nothing).
-- [ ] N2. Q3 rooted family (`feat/q3-rooted-family`): finish the pre-flight on FR24/FR17
+- [x] N2. Q3 rooted family (`feat/q3-rooted-family`): finish the pre-flight on FR24/FR17
       (remaining k), review, merge into the integration branch (option off), A/B
       `mix:family_mix=0.5` vs qe at 600 s; FR24 `rooted:pattern_family=rooted`.
       Pre-flight (probe 20+20 skeletons/level): FR17 k121 rooted 1 SAT best 111 vs nonuniform
       4 SAT best 111; FR24 k226/k238 0 SAT for both. Merged the integration branch into
       `feat/q3-rooted-family` (full suite 736 passed). A/B queued from pinned worktree
       /home/born/Github/foe-bench-q3: output/bench/q3-600.jsonl, q3-fr24.jsonl.
+      RESULT (600 s, base qe): qemix better 3 / worse 2 -> REJECT. FR17 103,103 -> 106,106 (the
+      rooted share displaces the nonuniform skeletons that make 103); darkzig 90,90 -> 89,89;
+      FR16 67,69 -> 67,68. FR24: every arm FAMILY_TOO_WEAK (no skeleton SAT, best_k 232 = seed);
+      qe 229, qemix **219**, qeroot 229 -- all from rebased polish of the seed, so the 219 is
+      polish variance, not the family. New legal FR24 record 219, re-verified from file:
+      docs/records/fr24-219-roads-rebased.json. Note: this qe control gave darkzig 90,90 vs
+      88,88 the night before (same settings) -- darkzig noise is +-2 at 600 s.
+      Bench layout files land under the PINNED worktree's output/ (copied back by hand).
 - [ ] N3. Multi-trunk family (user idea): 1-4 main roads, one per TH side, with TH placement
       filtered by room on every used side (central TH for 3-4 trunks), level-2 combs
       and stubs serving up to 3 buildings. Offline first: achieved roads after the objective
