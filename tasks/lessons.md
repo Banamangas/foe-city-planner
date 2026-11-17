@@ -2935,3 +2935,14 @@ That is a modelling gap (fillers outside the model), not a scheduling one.
 - **Rule:** wait on a background command's completion notification, not a polling loop. If a loop
   is unavoidable, wait on a pid (`while kill -0 $PID`) or use `pgrep -f "[n]7-smoke"`, and give it a
   timeout. Check for leftover loops when a run finishes.
+
+## 2026-11-17: count the cells a topology spends on transport before probing it (N3)
+- Multi-trunk (3-4 main roads) looked like "more roads per TH side = more frontage", but each
+  flush trunk runs edge to edge and costs 25-30 cells that would otherwise be branches. At the k
+  where records live, f4 trunks ate 108 of 121 cells; coverage collapsed (mean distance to road
+  4.7 -> 6.1) and probes died at presolve. The pure-python coverage table predicted the whole
+  null result in seconds; the 3 h probe study only confirmed it.
+- Rule: for any new skeleton family, report trunk-cell share and mean distance-to-road vs
+  nonuniform at the same TH/k FIRST; gate probing on coverage no worse than nonuniform's p50.
+- Also: "a motif is missing" needs a measurement of the motif in existing layouts. 3-building
+  dead-end stubs already average ~6 per nonuniform layout (pruned branch ends).
