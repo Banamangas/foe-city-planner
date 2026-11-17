@@ -1589,7 +1589,7 @@ darkzig chains 16x3..16x5 -> ~1750; essay 11x6 -> 1448; vini ~2300. All composab
       FR24 tie 219. The leftover-only arm's FR24 220 came from rebased polish BEFORE the climb
       (run-to-run variance), not from the climb.
 
-## E — City edits: remove buildings, add new ones (DRAFT 2026-11-17, awaiting user review)
+## E — City edits: remove buildings, add new ones (BUILT 2026-11-17 on feat/e-city-edits, awaiting review)
 
 **Why:** the point of rearranging a city is to make room. The June static UI could do this
 (`foeopt/editing.py`: remove by id, add by width x length); the JSON-API rewrite (771a827)
@@ -1608,45 +1608,45 @@ tests survive, uncalled.
   catalog data.
 
 ### E1. Backend
-- [ ] `GET /api/catalog?q=&city_id=`: search the bundled catalog, plus the city's helper
+- [x] `GET /api/catalog?q=&city_id=`: search the bundled catalog, plus the city's helper
       CityEntities when present, by name or id. Returns id, name, type, w x l, road need and
       level, chain id, head/patch. Hide off-grid types and streets; limit 30 results.
-- [ ] Rewrite `apply_edits(layout, remove_ids, add)` with catalog-backed additions:
+- [x] Rewrite `apply_edits(layout, remove_ids, add)` with catalog-backed additions:
       `{"cityentity_id": id, "count": n}` gives the real size, `needs_road = street_requirement > 0`,
       `road_level`, set/chain ids. Keep `{"width","length","needs_road","name"}` for custom sizes.
       Keep the upload's roads. Townhall: never removable (existing rule).
-- [ ] Edits are per-city state, sent with `/api/optimize` as `edits: {remove: [...], add: [...]}`.
+- [x] Edits are per-city state, sent with `/api/optimize` as `edits: {remove: [...], add: [...]}`.
       They are validated (unknown id or entity -> 400) and echoed back with the options.
-- [ ] Seed with edits: removal-only keeps `seed_input` (upload minus removed). With
+- [x] Seed with edits: removal-only keeps `seed_input` (upload minus removed). With
       additions, first try greedy-placing them in free cells of the upload. On success the seed
       stays (the instant result keeps working). Otherwise skip the seed with reason
       "N new buildings not placed".
-- [ ] Space pre-check in the response: free cells after edits = region minus buildings, and a
+- [x] Space pre-check in the response: free cells after edits = region minus buildings, and a
       lower bound on roads. If the new buildings cannot fit even with zero roads, return an
       error that names the overflow, not a 10-minute FAMILY_TOO_WEAK.
-- [ ] Legality: result checked against the EDITED inventory (`check(result, edited)`), still
+- [x] Legality: result checked against the EDITED inventory (`check(result, edited)`), still
       no rotation; a run on an unedited city must give byte-identical options and behaviour.
 
 ### E2. Frontend
-- [ ] BuildingsPanel: a "remove" toggle per building, plus "remove all of this type". Click a
+- [x] BuildingsPanel: a "remove" toggle per building, plus "remove all of this type". Click a
       building on the map to toggle it. Removed buildings shown hatched or faded, not hidden.
-- [ ] Warn when removing a chain piece breaks the chain behind it (later patches lose their
+- [x] Warn when removing a chain piece breaks the chain behind it (later patches lose their
       link). Offer "remove the rest of this chain".
-- [ ] "Add buildings" panel: catalog search, count, then a list of additions with size and road
+- [x] "Add buildings" panel: catalog search, count, then a list of additions with size and road
       tags; custom size entry for anything missing from the catalog.
-- [ ] Summary bar: removed n (cells), added m (cells), free cells after edits, and the space
+- [x] Summary bar: removed n (cells), added m (cells), free cells after edits, and the space
       pre-check warning.
-- [ ] Edits saved with the city (survive reload) and stored with each saved layout, so a
+- [x] Edits saved with the city (survive reload) and stored with each saved layout, so a
       result says which edit set it was made for.
-- [ ] Result view/export: added buildings drawn at their placed position, named from the catalog.
+- [x] Result view/export: added buildings drawn at their placed position, named from the catalog.
 
 ### E3. Verify
-- [ ] Unit: apply_edits (catalog add, custom add, remove keeps roads, TH protected, bad id).
-- [ ] API: optimize with edits; unedited run unchanged; space pre-check error.
-- [ ] End-to-end: FR16, remove 3 buildings + add 2 catalog buildings (one road-needing),
+- [x] Unit: apply_edits (catalog add, custom add, remove keeps roads, TH protected, bad id).
+- [x] API: optimize with edits; unedited run unchanged; space pre-check error.
+- [x] End-to-end: FR16, remove 3 buildings + add 2 catalog buildings (one road-needing),
       300 s. Result legal against the edited inventory, nothing rotated, removed ones absent.
       Also a removal-only run: the seed is used and the first result arrives in under 2 s.
-- [ ] Browser walkthrough of the UI flow (record a GIF).
+- [ ] Browser walkthrough of the UI flow (record a GIF). NOT DONE: Chrome extension not connected.
 
 ### Decisions (user, 2026-11-17)
 1. Chain buildings are in v1. An added patch links automatically to the chain's main building
@@ -1661,3 +1661,51 @@ tests survive, uncalled.
    tail shifts with it. The UI says so ("P2, P3 will be reattached to <main>"), with "remove them
    too" as the alternative.
    Added patches use the same mechanism: they go into a free slot at the end of the chosen chain.
+5. (user, 2026-11-17, during the build) Removing a chain's MAIN building sends its patches to
+   store, unless the city has another main of that chain: the UI then offers to attach them to
+   it (same picker as for added patches; API `edits.relink = {removed_main: other_main}`).
+
+### Review (2026-11-17, branch feat/e-city-edits)
+
+**Built.** `foeopt/editing.py` rewritten (`apply_edits(layout, remove, add, catalog, relink)` ->
+(edited layout, report)); `Catalog.is_chain_head`; `loader.city_catalog_defs`; API
+`GET /api/catalog`, `POST /api/edits/preview`, `PUT /api/cities/<id>/edits` (new `cities.edits`
+column, upsert keeps edits on re-upload), `/api/optimize` with `edits` (validated, echoed with a
+report, space pre-check 400, non-composable chain 400); every published layout of an edited run
+carries `to_store` + `added`. Frontend: City edits panel (summary bar, seed note, chain notices
+with "remove them too" / "attach them to", Add buildings with catalog search, count, main picker,
+custom size), remove / remove-all-of-type in the Buildings list, click-to-toggle on the map
+(removed drawn faded + hatched), saved layouts keep their edit set, result shows added names and
+the to-store list (in the export too).
+
+**Design choices.**
+- Main vs patch: a chain member is a main iff it needs a road, or has the size of a road-needing
+  member of its chain. Checked on all 11 bundled chains (every chain has >= 1 main and >= 1
+  patch); the only road-less main is gentiana CUP22A10 (5x4 like the mains, patches 1x4).
+  darkzig / essay / agrou groups: the detected main is exactly the linked group's road-needing
+  root. magicness has 9 unlinked mains and no patches.
+- Seed with additions: new buildings (or the chain block an added patch joined, or a relinked
+  tail) are greedy-placed in the upload's free cells, road-needing ones touching the upload's own
+  connected road of their level; final `legality.check(edited, edited)` decides. Unplaced ones are
+  parked outside the region (the search ignores input positions except chain shape), and the
+  report says "N new or relinked building(s) do not fit".
+- Unedited requests (no `edits`, or empty lists) take the historical code path; test asserts the
+  same submit kwargs.
+
+**Measured (BEST_PRESET, under output/bench/.lock).**
+| run | box | first result | roads | legality vs edited | notes |
+|---|---|---|---|---|---|
+| FR16 remove 3 (60 cells) + add Obelisk 2x2 road + Bal macabre 4x3 | 300 s | 0.18 s (seed, 92) | **68** | valid (server + independent recheck) | removed absent, added present, nothing rotated |
+| FR16 remove the same 3 only | 60 s | 0.17 s (seed, 92) | 68 | valid | |
+| darkzig remove pirate patch 1275 + gentiana patch 3480 | 120 s | 0.18 s (seed, 250 cells) | 88 | valid | both tails reattached; 20/20 chain links kept |
+Smoke (not locked, 1 worker): FR16 + a custom 7x7 road building that does not fit the upload ->
+seed skipped with the reason, legal 81 in 10 s.
+
+**Tests.** Python 791 passed, 4 skipped (20 apply_edits + 8 API tests new). Frontend 56 passed
+(8 edits helpers + 2 store tests new). `npm run build` clean.
+
+**Not done.** Browser walkthrough: the Chrome extension was not connected; checked instead that
+the built bundle is served and contains the new panels, and drove /api/catalog and
+/api/edits/preview on a live server (darkzig: link_to required with both pirate mains listed).
+Tree-shaped chains (Mughals: TH is the main, never removable) and hippodrome (two mains) are
+handled generically but untested on real data.
