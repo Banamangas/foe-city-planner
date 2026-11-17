@@ -1511,3 +1511,11 @@ Machine rule: every CPU-heavy run (bench, probe studies) goes through the shared
   land near one (mean coverage 0.04-0.09 for both). The bottleneck is sampling, not grammar.
   Candidate next mechanism: directed skeleton search (mutate the incumbent/best SAT skeleton:
   move/extend/add a trunk or branch, re-probe) instead of more random families.
+- [x] N5. Directed skeleton mutation (`feat/n5-skeleton-mutation`, offline experiment, no
+      production change): hill climb over concrete road sets (extend/shorten/remove/shift/
+      add/spoke/merge/prune), each mutant judged by `_run_probe` + a parent-hinted objective
+      (12 threads), ties accepted. RESULT: **darkzig 87** (from the 88 record network, at
+      1009 s; repeat seed: 88) and **FR17 102** (from a 104 walk skeleton, at 592 s); both
+      new legal records, verified from file. FR24 untestable at these limits (88/91 mutants
+      UNKNOWN/UNSAT). Next: paired A/B as a polish phase (preset 600 s +- mutation polish),
+      FR16 included. Review: `docs/reviews/2026-11-17-n5-skeleton-mutation.md`.
