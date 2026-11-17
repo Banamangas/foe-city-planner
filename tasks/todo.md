@@ -1648,8 +1648,11 @@ tests survive, uncalled.
       Also a removal-only run: the seed is used and the first result arrives in under 2 s.
 - [ ] Browser walkthrough of the UI flow (record a GIF).
 
-### Open questions for the user
-1. Adding chain buildings: v1 = heads and non-chain only, with patches added as a full linked
-   set later? (A lone new patch would be placed unlinked.)
-2. Removed buildings: just absent from the result, or listed as "to store" in the export?
-3. Keep the custom width x height entry, or catalog-only?
+### Decisions (user, 2026-11-17)
+1. Chain buildings are in v1. An added patch links automatically to the chain's main building
+   when the city has exactly one of that chain; with several, the UI asks which one. The linked
+   set is then composed as one rigid block, like the upload's chains.
+2. Removed buildings are listed as "to store" in the export.
+3. Keep custom width x height (in case the catalog lags behind the game).
+4. Chain-piece removal warning: explanation sent to the user, awaiting their answer before
+   building it.
