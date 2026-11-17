@@ -190,3 +190,14 @@ def test_off_by_default_and_reserve_needs_the_switch(monkeypatch):
     order, ends, res = _wired_run(monkeypatch, mutation_reserve=50)
     assert order == ["objective", "rebase"] and res["mutation_polish"] is None
     assert ends["rebase"] == pytest.approx(100, abs=0.5)   # no reserve taken
+
+
+def test_reserve_only_from_the_minimum_box(monkeypatch):
+    """The 100 s test box is below a 300 s threshold: no reserve, leftover only;
+    at or above it the reserve applies as before."""
+    _, short, _ = _wired_run(monkeypatch, mutation_polish=True, mutation_reserve=20,
+                             mutation_reserve_min_box=300)
+    assert short["rebase"] == pytest.approx(100, abs=0.5)
+    _, long_, _ = _wired_run(monkeypatch, mutation_polish=True, mutation_reserve=20,
+                             mutation_reserve_min_box=100)
+    assert long_["mutation"] - long_["rebase"] == pytest.approx(20, abs=0.5)
