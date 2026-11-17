@@ -1559,3 +1559,15 @@ Machine rule: every CPU-heavy run (bench, probe studies) goes through the shared
   FR16 66 new legal record (docs/records/fr16-66-roads-n6-mutation.json), FR17 102 inside a
   normal 600 s run. Confirmation on the MERGED code (now with rebase_iterate in the preset),
   120 + 600 s, pinned /home/born/Github/foe-bench-m1: output/bench/m1.jsonl, m1-fr24.jsonl.
+
+## 2026-11-17: v3 city format + catalog chain fix
+- v3 FoE Helper exports load (13 user cities under cities/, gitignored). Bundled catalog
+  foeopt/data/catalog.json. Webapp upload worker updated.
+- **Chain detection fix changes darkzig and agrou**: component-style chains were invisible.
+  darkzig 8 -> 28 chain buildings; ALL darkzig records (87, 88, 89, 90) now fail legality
+  (chain_broken: gentiana_windmill, pirates_hideout; 16 links). agrou 0 -> 34 (Breezemill
+  + 33 parcels). FR16/FR17/FR24/user unchanged, so their records stand. darkzig numbers in
+  every A/B so far were measured under the incomplete chain rule.
+- [ ] Re-baseline darkzig under the full chain rule (new legal record), re-run darkzig arms.
+- [ ] Ask user: GR25 "Niv. 2" buildings (no street requirement in catalog) treated as
+      road-needing by the CityMap `connected` rule (FR17 x3, FR24 x1).

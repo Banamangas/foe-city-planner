@@ -129,3 +129,16 @@ def test_webapp_loads_a_v3_upload(tmp_path):
     body = r.get_json()
     r2 = client.get(f"/api/cities/{body['city_id']}")
     assert r2.status_code == 200
+
+
+def test_chain_declared_in_components_block():
+    """Newer definitions put the chain in components.<age>.chain (e.g. the
+    Gentiana windmill, Breezemill); the ability-only reader missed them."""
+    cat = Catalog({"W": {"components": {"AllAge": {"chain": {
+        "chainId": "gentiana_windmill",
+        "linkPositions": [{"topLeftPoint": {"x": 5}, "bottomRightPoint": {"x": 6, "y": 5}}]}}}}})
+    assert cat.chain_id("W") == "gentiana_windmill"
+    assert cat.link_positions("W") == ((5, 0, 6, 5),)
+    bundled = Catalog(_bundled_catalog())
+    assert bundled.chain_id("W_MultiAge_FALL25A11") == "fall25a_chain"
+    assert bundled.chain_id("W_MultiAge_CUP22D1") == "gentiana_windmill"

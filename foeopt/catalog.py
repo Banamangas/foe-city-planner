@@ -53,13 +53,24 @@ class Catalog:
     def set_id(self, cityentity_id: str) -> str | None:
         return _ability_value(self._def(cityentity_id), "setId")
 
+    def _chain_block(self, cityentity_id: str) -> dict:
+        """Newer definitions declare a chain in `components.<age>.chain`
+        ({chainId, linkPositions}) instead of an ability."""
+        for comp in (self._def(cityentity_id).get("components") or {}).values():
+            block = comp.get("chain") if isinstance(comp, dict) else None
+            if isinstance(block, dict):
+                return block
+        return {}
+
     def chain_id(self, cityentity_id: str) -> str | None:
-        return _ability_value(self._def(cityentity_id), "chainId")
+        return (_ability_value(self._def(cityentity_id), "chainId")
+                or self._chain_block(cityentity_id).get("chainId"))
 
     def link_positions(self, cityentity_id: str) -> tuple[tuple[int, int, int, int], ...]:
         """Chain linkPositions as inclusive (dx0, dy0, dx1, dy1) rectangles
         relative to the building's top-left; FoE omits zero coordinates."""
-        rects = _ability_value(self._def(cityentity_id), "linkPositions") or []
+        rects = (_ability_value(self._def(cityentity_id), "linkPositions")
+                 or self._chain_block(cityentity_id).get("linkPositions") or [])
         out = []
         for r in rects:
             tl, br = r.get("topLeftPoint") or {}, r.get("bottomRightPoint") or {}
