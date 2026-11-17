@@ -108,7 +108,7 @@ export type Improvement = {
 };
 
 export type CityListItem = {
-  id: string; region_cells: number; road_estimate: number; created_at: string;
+  id: string; label: string; region_cells: number; road_estimate: number; created_at: string;
 };
 
 /** One run parameter, as declared by webapp/params.py and served by /api/options. */

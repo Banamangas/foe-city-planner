@@ -111,3 +111,17 @@ def test_cache_usable_from_other_thread(cache):
     assert result.get("error") is None, result["error"]
     assert result["city"]["id"] == "t1"
     assert cache.get_city("t2") is not None
+
+
+def test_list_labels_use_the_file_name_numbered_when_shared(cache):
+    """Oldest upload keeps the bare file stem; later ones with the same stem
+    get _2, _3...; a city cached without a name falls back to its short id."""
+    cache.store_city("aaaa1111", b'{}', [], 1, 1, name="CityMap-FR16.json")
+    cache.store_city("bbbb2222", b'{}', [], 1, 1, name="essay.json")
+    cache.store_city("cccc3333", b'{}', [], 1, 1, name="CityMap-FR16.json")
+    cache.store_city("dddd4444", b'{}', [], 1, 1)
+    cache.store_city("eeee5555", b'{}', [], 1, 1, name="CityMap-FR16")
+    labels = {c["id"]: c["label"] for c in cache.list_cities()}
+    assert labels == {"aaaa1111": "CityMap-FR16", "bbbb2222": "essay",
+                      "cccc3333": "CityMap-FR16_2", "dddd4444": "city dddd4444",
+                      "eeee5555": "CityMap-FR16_3"}

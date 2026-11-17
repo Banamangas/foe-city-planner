@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 
@@ -83,13 +84,25 @@ class CityCache:
             self._conn.commit()
 
     def list_cities(self) -> list[dict]:
+        """Newest first. `label` is the uploaded file's stem; when several
+        cities share it, the oldest keeps it bare and later ones get _2, _3..."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT id, region_cells, road_estimate, created_at FROM cities ORDER BY created_at DESC"
+                "SELECT id, name, region_cells, road_estimate, created_at FROM cities "
+                "ORDER BY created_at, rowid"
             ).fetchall()
-        return [{"id": r["id"], "region_cells": r["region_cells"],
-                 "road_estimate": r["road_estimate"], "created_at": r["created_at"]}
-                for r in rows]
+        seen: dict[str, int] = {}
+        out = []
+        for r in rows:
+            stem = os.path.splitext(os.path.basename(r["name"] or ""))[0]
+            if stem:
+                seen[stem] = seen.get(stem, 0) + 1
+                label = stem if seen[stem] == 1 else f"{stem}_{seen[stem]}"
+            else:
+                label = f"city {r['id'][:8]}"
+            out.append({"id": r["id"], "label": label, "region_cells": r["region_cells"],
+                        "road_estimate": r["road_estimate"], "created_at": r["created_at"]})
+        return out[::-1]
 
     def store_layout(self, layout_id: str, city_id: str, k: int,
                      achieved: int, layout: dict, roads_count: int) -> None:

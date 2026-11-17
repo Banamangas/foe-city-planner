@@ -44,7 +44,7 @@ export function LoadPanel() {
     setError("");
     try {
       const slim = JSON.parse(await file.text());
-      loadSlim(slim);
+      loadSlim(slim, file.name);
     } catch (err) {
       setError(String(err));
     }
@@ -78,7 +78,7 @@ export function LoadPanel() {
         <select defaultValue="" onChange={(e) => loadCached(e.target.value)}>
           <option value="">Load cached city…</option>
           {cities.map((c) => (
-            <option key={c.id} value={c.id}>{c.id} ({c.region_cells} cells)</option>
+            <option key={c.id} value={c.id} title={c.id}>{c.label} ({c.region_cells} cells)</option>
           ))}
         </select>
       )}
