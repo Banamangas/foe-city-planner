@@ -1654,5 +1654,10 @@ tests survive, uncalled.
    set is then composed as one rigid block, like the upload's chains.
 2. Removed buildings are listed as "to store" in the export.
 3. Keep custom width x height (in case the catalog lags behind the game).
-4. Chain-piece removal warning: explanation sent to the user, awaiting their answer before
-   building it.
+4. Removing a chain piece REATTACHES the pieces behind it (user's choice). In-game the cut-off
+   tail stays together but gives nothing, and the game does NOT relink it. The tool assumes the
+   player will relink it, so one removed patch does not cost the whole tail. Mechanism: the tail
+   piece that sat in the removed piece's slot moves into that freed slot (same slot size), and the
+   tail shifts with it. The UI says so ("P2, P3 will be reattached to <main>"), with "remove them
+   too" as the alternative.
+   Added patches use the same mechanism: they go into a free slot at the end of the chosen chain.
