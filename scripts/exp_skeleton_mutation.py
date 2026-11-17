@@ -64,7 +64,7 @@ def save_layout(path: pathlib.Path, city: str, achieved: int, lay, pat, extra: d
         "pattern_roads": sorted([x, y] for (x, y) in pat.roads), **extra}))
 
 
-def warm(layout, pat, hint, *, limit, threads, exact_repair):
+def warm(layout, pat, hint, *, limit, threads, exact_repair, fillers=None):
     """The production objective (minimize_needed, position model) hinted from
     the PARENT's placement and the mutant's cells, as rebased polish does, then
     validate with the road witness. Run in the parent with all threads: with 2
@@ -73,7 +73,8 @@ def warm(layout, pat, hint, *, limit, threads, exact_repair):
     region, consumers = set(layout.region.cells), layout.road_needing()
     d: dict = {}
     opos = rf.minimize_needed(pat, region, consumers, hint, limit=limit, workers=threads,
-                              model="position", diag=d, hint_roads=set(pat.roads))
+                              model="position", diag=d, hint_roads=set(pat.roads),
+                              **({"fillers": fillers} if fillers else {}))
     if opos is None:
         return d.get("objective_status") or "NONE", None, None, None
     vst, vlay, vach = rf.validate(layout, pat, opos, exact_repair=min(exact_repair, limit),
@@ -100,7 +101,9 @@ class Runner:
         self.pool = cf.ProcessPoolExecutor(
             a.workers, mp_context=ctx, initializer=rf._worker_init,
             initargs=(layout, a.probe_limit, a.probe_workers, False, None, False, None,
-                      a.exact_repair, a.objective_limit, "position", True, False))
+                      a.exact_repair, a.objective_limit, "position", True,
+                      a.fillers_in_model))
+        self.fillers = rf.model_fillers(layout, a.fillers_in_model, "position")
         self.t0 = time.monotonic()
         self.n_eval = 0
         self.log = open(a.log, "a")
@@ -127,7 +130,8 @@ class Runner:
             st, ach, lay, pos = warm(self.layout, r["pattern"], hint,
                                      limit=self.a.warm_limit,
                                      threads=self.a.workers * self.a.probe_workers,
-                                     exact_repair=self.a.exact_repair)
+                                     exact_repair=self.a.exact_repair,
+                                     fillers=self.fillers)
             r.update(warm=st, warm_achieved=ach, warm_s=round(time.monotonic() - t0, 1))
             if st == "SAT" and (r["status"] != "SAT" or ach < r["achieved"]):
                 r.update(status=st, achieved=ach, layout=lay, pos=pos, mode="warm")
@@ -186,6 +190,9 @@ def main(argv=None):
     p.add_argument("--exact-repair", type=float, default=5.0)
     p.add_argument("--rebase-s", type=float, default=60.0)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--fillers-in-model", action="store_true",
+                   help="place the non-road buildings in the CP-SAT model (Phase D); "
+                        "FR24's upload network fails filler repacking without it")
     p.add_argument("--warm-limit", type=float, default=10.0,
                    help="seconds per warm solve (sequential, all threads)")
     p.add_argument("--warm", default="always", choices=["always", "fallback", "off"],
@@ -209,13 +216,13 @@ def main(argv=None):
     if a.start == "upload":
         th, roads = src.townhall.footprint, frozenset(src.roads)
         start = [(Pattern(th, roads, {"n5": "upload"}), ["start"])]
-        hint0 = incumbent_positions(layout, src)
+        hint0 = incumbent_positions(layout, src, run.fillers)
     else:
         rec = load_saved(src, json.loads(pathlib.Path(a.record).read_text()))
         th = rec.townhall.footprint
         if a.start == "record":
             start = [(Pattern(th, frozenset(rec.roads), {"n5": "record"}), ["start"])]
-            hint0 = incumbent_positions(layout, rec)
+            hint0 = incumbent_positions(layout, rec, run.fillers)
     if a.start == "walk":
         res = walk_start(run, th, a.walk_k, a.walk_n, a.walk_budget, a.seed)
         if res is None:
@@ -292,7 +299,7 @@ def main(argv=None):
         # one rebased polish on the best layout, as production does after its walk
         ns = SimpleNamespace(layout=layout, workers=a.workers, probe_workers=a.probe_workers,
                              exact_repair=a.exact_repair, closure="bfs", road_witness=True,
-                             fillers_in_model=False)
+                             fillers_in_model=a.fillers_in_model)
         holder = {"lay": best["layout"], "ach": best["achieved"]}
         rep = polish_rebased(ns, best["layout"], best["achieved"], time.monotonic() + a.rebase_s,
                              on_improvement=lambda lay, k, ach: holder.update(lay=lay, ach=ach))
