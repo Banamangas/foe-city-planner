@@ -29,15 +29,21 @@ class CityCache:
                 created_at TEXT DEFAULT (datetime('now'))
             );
         """)
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(cities)")}
+        if "edits" not in cols:   # databases created before plan E
+            self._conn.execute("ALTER TABLE cities ADD COLUMN edits TEXT")
         self._conn.commit()
 
     def store_city(self, city_id: str, payload: bytes,
                    buildings: list[dict], region_cells: int,
                    road_estimate: int) -> None:
         with self._lock:
+            # Upsert, not REPLACE: re-loading the same file keeps its saved edits.
             self._conn.execute(
-                "INSERT OR REPLACE INTO cities (id, payload, buildings, region_cells, road_estimate) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO cities (id, payload, buildings, region_cells, road_estimate) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+                "payload = excluded.payload, buildings = excluded.buildings, "
+                "region_cells = excluded.region_cells, road_estimate = excluded.road_estimate",
                 (city_id, payload, json.dumps(buildings), region_cells, road_estimate)
             )
             self._conn.commit()
@@ -56,7 +62,20 @@ class CityCache:
             "region_cells": row["region_cells"],
             "road_estimate": row["road_estimate"],
             "created_at": row["created_at"],
+            "edits": json.loads(row["edits"]) if row["edits"] else None,
         }
+
+    def get_edits(self, city_id: str) -> dict | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT edits FROM cities WHERE id = ?", (city_id,)).fetchone()
+        return json.loads(row["edits"]) if row is not None and row["edits"] else None
+
+    def set_edits(self, city_id: str, edits: dict | None) -> None:
+        with self._lock:
+            self._conn.execute("UPDATE cities SET edits = ? WHERE id = ?",
+                               (json.dumps(edits) if edits else None, city_id))
+            self._conn.commit()
 
     def list_cities(self) -> list[dict]:
         with self._lock:
