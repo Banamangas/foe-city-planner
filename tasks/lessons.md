@@ -2897,3 +2897,16 @@ That is a modelling gap (fillers outside the model), not a scheduling one.
   rebase size and starts from a complete hint (placement + roads + flow).
 - Unions with genuinely different same-TH networks were PROVEN at the incumbent on FR16
   (67) and FR17 (103). The gap is not "mix two halves at a fixed TH" either.
+
+## 2026-11-17: N5 skeleton mutation -- a "sharp neighbourhood" verdict measured on feasibility did not transfer
+- The 2026-07-30 closure "perturbing a good skeleton is 0/64, the neighbourhood is sharp"
+  moved 25-50 random leaf cells and asked only "still feasible at the same k". One-arm moves
+  judged by achieved roads after the objective form a wide plateau (20-31 accepted moves per
+  25-41 generations, most mutants within 0-2 roads), and drifting along ties gave darkzig 87
+  and FR17 102. Rule: a closure measured with a weaker judge (feasibility, no objective) is
+  not evidence against the same moves under the objective; re-check its judge before citing it.
+- The per-candidate judge decides a local search. Cold probe + 30 s objective scored record
+  mutants 4 roads worse than the incumbent's own quality, so the first smoke climbed noise.
+  And a HINTED CP-SAT objective with 2 threads did not recover even a complete hint in 20 s,
+  while 12 threads proved the optimum in 5 s. Rule: before an experiment trusts a hinted
+  solve, feed it a known solution and check it returns that value at the thread count used.
