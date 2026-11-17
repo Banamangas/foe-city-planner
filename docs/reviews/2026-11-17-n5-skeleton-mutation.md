@@ -104,8 +104,8 @@ What moved:
 
 ## Verdict
 
-- **Mechanism: PASS on darkzig and FR17** (one new record each; FR17 102 reproduced by the seed-1 repeat from a different walk start; each run 25-30 min
-), **null on darkzig's repeat**, **untestable on FR24** at these solve limits.
+- **Mechanism: PASS on darkzig and FR17** (one new record each; FR17 102 reproduced by the seed-1 repeat from a different walk start; each run 25-30 min),
+  **null on darkzig's repeat**, **untestable on FR24** at these solve limits.
   The Q3-gen diagnosis holds: the grammar was not the bottleneck; a directed search from
   a good skeleton finds better networks that random draws do not.
 - The old "neighbourhood of a good skeleton is sharp (0/64)" closure does not transfer:
