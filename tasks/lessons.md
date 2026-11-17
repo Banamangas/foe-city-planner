@@ -2946,3 +2946,12 @@ That is a modelling gap (fillers outside the model), not a scheduling one.
   nonuniform at the same TH/k FIRST; gate probing on coverage no worse than nonuniform's p50.
 - Also: "a motif is missing" needs a measurement of the motif in existing layouts. 3-building
   dead-end stubs already average ~6 per nonuniform layout (pruned branch ends).
+
+## 2026-11-17: a content hash of browser-sent JSON depends on JavaScript's key order (plan X)
+- The webapp's city_id is sha256(json.dumps(payload)). A browser's JSON.parse enumerates
+  integer-like keys ASCENDING (cityData "1","2",...,"100"), whatever the file's order; Flask's
+  test client sends keys SORTED (so "100" < "2"). The same city therefore hashes differently
+  depending on the transport. Plan X keeps old ids by hashing the slim projection with cityData
+  keys in JS order (verified: essay and antivol reproduce their cached ids).
+- Rule: when an id is a hash of JSON, define the canonical order explicitly, and test
+  it with a reordered input, not only with the client the tests happen to use.

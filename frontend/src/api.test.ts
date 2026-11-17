@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { parseSSE, improvementToView } from "./api";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { parseSSE, improvementToView, attachmentName, apiExportV3, apiLoad } from "./api";
 import type { BuildingSummary, Improvement, Palette } from "./types";
 
 describe("parseSSE", () => {
@@ -44,5 +44,43 @@ describe("improvementToView", () => {
       { k: 1, achieved: 1, roads: [[4, 6, 2]], buildings: {} } as never,
       new Map(), [0, 0], 3, {} as never);
     expect(out.optimized_roads[0].level).toBe(2);
+  });
+});
+
+describe("Forge Hammer export (plan X)", () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it("reads the file name from Content-Disposition", () => {
+    expect(attachmentName('attachment; filename="essay-optimized.json"', "x")).toBe("essay-optimized.json");
+    expect(attachmentName(null, "fallback.json")).toBe("fallback.json");
+  });
+
+  it("posts city_id + layout and returns the file, its name and the warnings", async () => {
+    const fetchMock = vi.fn(async () => new Response('{"version":3}', {
+      status: 200,
+      headers: { "Content-Disposition": 'attachment; filename="essay-optimized.json"',
+                 "X-Export-Warnings": '["custom 2x2 not exported"]' },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const out = await apiExportV3("abc", { roads: [], buildings: {} });
+    expect(fetchMock).toHaveBeenCalledWith("/api/export/v3", expect.objectContaining({ method: "POST" }));
+    const body = JSON.parse((fetchMock.mock.calls[0] as any)[1].body);
+    expect(body).toEqual({ city_id: "abc", layout: { roads: [], buildings: {} } });
+    expect(out.filename).toBe("essay-optimized.json");
+    expect(out.warnings).toEqual(["custom 2x2 not exported"]);
+    expect(await out.blob.text()).toBe('{"version":3}');
+  });
+
+  it("throws the server's error (e.g. re-upload a slim cache)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(
+      JSON.stringify({ error: "re-upload the city file" }), { status: 400 })));
+    await expect(apiExportV3("abc", {})).rejects.toThrow("re-upload the city file");
+  });
+
+  it("sends the upload's file name with the city", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await apiLoad({ cityData: {} }, "my city.json");
+    expect((fetchMock.mock.calls[0] as any)[0]).toBe("/api/load?name=my%20city.json");
   });
 });

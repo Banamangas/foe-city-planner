@@ -58,19 +58,14 @@ describe("stripCity", () => {
     expect(e.components).toEqual({ AllAge: { streetConnectionRequirement: { requiredLevel: 2 } } });
   });
 
-  it("slims a v3 export to version, cityData and mapData", () => {
-    const slim = stripCity({
+  it("keeps a v3 export whole (the Forge Hammer export needs every field)", () => {
+    const v3 = {
       version: 3, player: { id: 1, name: "p" }, region: "fr", camX: 1,
       cityData: { "1": { id: 1, cityentity_id: "H", type: "main_building", bonuses: [], era: "E" },
                   "2": { id: 2, cityentity_id: "S", type: "street", x: 3, y: 0, level: 1 } },
       mapData: [{ width: 4, length: 4 }],
-      mapBuildings: [{ metaId: "H" }],
-    });
-    expect(slim).toEqual({
-      version: 3,
-      cityData: { "1": { id: 1, cityentity_id: "H", type: "main_building" },
-                  "2": { id: 2, cityentity_id: "S", type: "street", x: 3, y: 0 } },
-      mapData: [{ width: 4, length: 4 }],
-    });
+      mapBuildings: [{ metaId: "H" }], storedBuildings: [], currentEra: "E",
+    };
+    expect(stripCity(v3)).toEqual(v3);
   });
 });

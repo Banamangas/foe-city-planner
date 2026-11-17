@@ -38,20 +38,12 @@ function slimEntity(entity: AnyObj): AnyObj {
 }
 
 // FoE Helper v3 export: `cityData` + `mapData`, no catalog (the server supplies
-// it). Keep only what the loader reads; drop camera, player and bonus data.
-function stripV3(data: AnyObj): AnyObj {
-  const cityData: AnyObj = {};
-  for (const [key, e] of Object.entries<AnyObj>(data.cityData ?? {})) {
-    const out: AnyObj = { id: e.id, cityentity_id: e.cityentity_id, type: e.type };
-    if ("x" in e) out.x = e.x;
-    if ("y" in e) out.y = e.y;
-    cityData[key] = out;
-  }
-  return { version: data.version, cityData, mapData: data.mapData ?? [] };
-}
-
+// it). Kept WHOLE (70-260 KB): the Forge Hammer export (plan X) writes the
+// optimized layout back into the original file. The server identifies the city
+// by its cityData/mapData part only, so this file keeps the id it had when the
+// worker still slimmed it.
 export function stripCity(data: AnyObj): AnyObj {
-  if (data.cityData && data.mapData) return stripV3(data);
+  if (data.cityData && data.mapData) return data;
   const entities: AnyObj = {};
   const src = data.CityEntities ?? {};
   for (const id of Object.keys(src)) {
