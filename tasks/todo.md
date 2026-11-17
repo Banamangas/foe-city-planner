@@ -1501,12 +1501,18 @@ Machine rule: every CPU-heavy run (bench, probe studies) goes through the shared
       docs/records/fr24-219-roads-rebased.json. Note: this qe control gave darkzig 90,90 vs
       88,88 the night before (same settings) -- darkzig noise is +-2 at 600 s.
       Bench layout files land under the PINNED worktree's output/ (copied back by hand).
-- [ ] N3. Multi-trunk family (user idea): 1-4 main roads, one per TH side, with TH placement
+- [x] N3. Multi-trunk family (user idea): 1-4 main roads, one per TH side, with TH placement
       filtered by room on every used side (central TH for 3-4 trunks), level-2 combs
       and stubs serving up to 3 buildings. Offline first: achieved roads after the objective
       vs nonuniform at the same TH and k on darkzig/FR16/FR17/FR24/user. Data note: none of
       the 5 uploads uses more than 2 TH sides (Q3 table, `sd` column), so 3-4 trunks are
       untested, not refuted.
+      RESULT (branch feat/n3-multi-trunk, docs/reviews/2026-11-17-n3-multi-trunk.md there): NULL.
+      Best legal roads after objective, record/central TH pooled -- darkzig nonu 92 vs r2 98,
+      r3 99, r4 none (0/32); FR16 70 vs 73/79/none; FR17 105 vs none; FR24 and user: no SAT
+      for any arm. Edge-to-edge trunks eat 25-30 cells each that branches need; mean distance
+      to road rises (FR17 4.7 -> 6.1). 3-building stubs already occur (~6 per nonuniform
+      layout). Next if revisited: length-capped trunks with a coverage pre-check.
 - [x] N4. More optimized city layouts: search public sources (FoE Helper exports, city
       planner shares) for optimized layouts in a format the loader accepts; the user can
       supply more on 2026-11-17.
