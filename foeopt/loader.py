@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from functools import lru_cache
+from pathlib import Path
 
 from foeopt.build import build_layout
 from foeopt.catalog import Catalog
@@ -37,7 +39,48 @@ def _street_level(e: dict, catalog: Catalog) -> int:
     return catalog.provided_level(_cid(e))
 
 
-def _build_combined(data: dict) -> Layout:
+CATALOG_PATH = Path(__file__).with_name("data") / "catalog.json"
+
+
+@lru_cache(maxsize=1)
+def _bundled_catalog() -> dict:
+    """Catalog for exports that carry none (v3); built by scripts/build_catalog.py."""
+    return json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+
+
+def is_v3(data: dict) -> bool:
+    """FoE Helper city export, version 3: `cityData` (entities) + `mapData`
+    (unlocked areas), and no building catalog."""
+    return "cityData" in data and "mapData" in data
+
+
+def _build_v3(data: dict, helper_data: dict | None = None) -> Layout:
+    """v3 has no CityEntities and no per-entity `connected` flag. The catalog is
+    the bundled one, extended by an optional helper export's CityEntities. A
+    building needs a road iff its definition requires one AND it touches a road
+    in the upload -- the same "keep the player's connectivity" rule the
+    `connected`-key path applies (a building the player left unconnected stays
+    unconnected)."""
+    defs = {**_bundled_catalog(), **((helper_data or {}).get("CityEntities") or {})}
+    entities = data["cityData"]
+    missing = sorted({_cid(e) for e in entities.values() if e.get("type") not in _OFF_GRID_TYPES
+                      and _cid(e) not in defs})
+    if missing:
+        raise ValueError(
+            f"{len(missing)} building types are not in the catalog "
+            f"({', '.join(missing[:5])}{'...' if len(missing) > 5 else ''}); "
+            "pass a FoE Helper CityMap export as the helper file, or rebuild "
+            "foeopt/data/catalog.json with scripts/build_catalog.py")
+    return _build_combined({"CityMapData": entities, "UnlockedAreas": data["mapData"],
+                            "CityEntities": defs}, needs_from_catalog=True)
+
+
+# Never on the buildable grid; skipped before the catalog check so an unknown
+# expansion/ship id cannot block a load (the region test drops them anyway).
+_OFF_GRID_TYPES = {"off_grid", "outpost_ship", "friends_tavern", "hub_main", "hub_part"}
+
+
+def _build_combined(data: dict, needs_from_catalog: bool = False) -> Layout:
     catalog = Catalog(data.get("CityEntities", {}))
     region = build_region(data["UnlockedAreas"])
 
@@ -69,6 +112,10 @@ def _build_combined(data: dict) -> Layout:
         if "needsStreet" in e:
             lvl = e["needsStreet"] or 0
             needs_road, road_level = (lvl > 0, lvl if lvl > 0 else 1)
+        elif needs_from_catalog:
+            needs_road = (catalog.street_requirement(cid) > 0
+                          and bool(fp.border_cells() & road_cells))
+            road_level = catalog.required_level(cid)
         else:
             needs_road = ("connected" in e) and bool(fp.border_cells() & road_cells)
             road_level = catalog.required_level(cid)
@@ -109,6 +156,8 @@ def load_layout_from_dict(data: dict, helper_data: dict | None = None) -> Layout
                 "this city file is the split format; a helper file is required"
             )
         return build_layout(data, helper_data)
+    if is_v3(data):
+        return _build_v3(data, helper_data or data.get("helper_data"))
     if "CityMapData" in data:
         return _build_combined(data)
     raise ValueError("unrecognized city file format")
@@ -122,6 +171,8 @@ def load_layout(city_path: str, helper_path: str | None = None) -> Layout:
                 "this city file is the split format; a helper file is required"
             )
         return build_layout(data, read_json(helper_path))
+    if is_v3(data):
+        return _build_v3(data, read_json(helper_path) if helper_path else None)
     if "CityMapData" in data:
         return _build_combined(data)
     raise ValueError("unrecognized city file format")

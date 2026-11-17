@@ -9,7 +9,7 @@ import uuid
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 
-from foeopt.loader import load_layout_from_dict, load_layout
+from foeopt.loader import is_v3, load_layout_from_dict, load_layout
 from foeopt.report import road_estimate
 from foeopt.viz import layout_to_view
 from webapp.cache import CityCache
@@ -48,7 +48,7 @@ def create_app(db_path: str | None = None) -> Flask:
     def _parse_and_cache(data, helper_data: dict | None = None) -> dict:
         if not isinstance(data, dict):
             raise ValueError("expected a JSON object")
-        if helper_data is not None and "entities" in data:
+        if helper_data is not None and ("entities" in data or is_v3(data)):
             # Split export: keep the helper's catalog INSIDE the cached payload
             # so later loads (optimize, export, re-import) still resolve sizes,
             # road levels and chains. Only CityEntities is needed.
