@@ -77,7 +77,7 @@ All runs under `flock output/bench/.lock`, 6x2 workers, <= 33 min each. Data:
 | darkzig s0 | record network (88) | 88 | 88 | 34: 88, **1009: 87** | **87** (verified) | 151 |
 | darkzig s1 | record network (88) | 88 | 88 | 37: 88 (flat to 1841) | 88 | 151 |
 | FR17 s0 | best of 24-skeleton walk at record TH, k=116 | 103 | 104 | 124: 104, 208: 103, **592: 102** | **102** (verified) | 270 |
-| FR17 s1 | same, seed 1 | 103 | FR17S1START | FR17S1TRAJ | FR17S1FINAL | FR17S1EVALS |
+| FR17 s1 | same, seed 1 | 103 | 105 | 123: 105, 163: 104, 276: 103, **1436: 102** | **102** (verified in-run) | 240 |
 | FR24 s0 | upload network (232), fillers in model | 220 | 230 (warm) | 51: 230 (flat to 1905) | 228 | 91 |
 
 New legal records: **darkzig 87** (`docs/records/darkzig-87-roads-n5-mutation.json`) and
@@ -93,7 +93,7 @@ What moved:
 - FR17 102: 65 of 102 cells shared with the 103 record, at the same TH. A walk skeleton
   (104) went to 103 by a `spoke` (k 116 -> 112), was pruned to k=103, and a `shorten` gave
   102 at 592 s. The final rebased polish proves 102 optimal on that network in 0.3 s.
-- Acceptance rates: darkzig 20 and 22 accepted moves in 25 generations; FR17 31 in 41. The
+- Acceptance rates: darkzig 20 and 22 accepted moves in 25 generations; FR17 31 in 41 and 33 in 36. The
   objective landscape is a wide plateau with many ties, not "sharp": most one-arm
   mutants are within 0-2 roads of the parent.
 - FR24: inconclusive, evaluator-limited. 88 of 91 mutants were UNKNOWN or UNSAT (cold
@@ -104,8 +104,8 @@ What moved:
 
 ## Verdict
 
-- **Mechanism: PASS on darkzig and FR17** (one new record each, from a single 25-30 min
-  run each), **null on darkzig's repeat**, **untestable on FR24** at these solve limits.
+- **Mechanism: PASS on darkzig and FR17** (one new record each; FR17 102 reproduced by the seed-1 repeat from a different walk start; each run 25-30 min
+), **null on darkzig's repeat**, **untestable on FR24** at these solve limits.
   The Q3-gen diagnosis holds: the grammar was not the bottleneck; a directed search from
   a good skeleton finds better networks that random draws do not.
 - The old "neighbourhood of a good skeleton is sharp (0/64)" closure does not transfer:
