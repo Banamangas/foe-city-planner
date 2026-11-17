@@ -44,6 +44,7 @@ from foeopt.roads_first import Pattern, _check_pattern  # noqa: E402
 from scripts.bench import CITIES, verify  # noqa: E402
 from scripts.verify_layout_file import load_saved  # noqa: E402
 
+WARM_ALWAYS = True    # set from --warm in main() before the pool forks
 RECORDS = {"darkzig": 88, "FR16": 67, "FR17": 103, "FR24": 220}
 
 
@@ -73,7 +74,8 @@ def _warm(pat, hint):
     region, consumers = set(layout.region.cells), layout.road_needing()
     d: dict = {}
     opos = rf.minimize_needed(pat, region, consumers, hint, limit=rf._WORKER_OBJECTIVE_LIMIT,
-                              workers=rf._WORKER_PROBE_WORKERS, model="position", diag=d)
+                              workers=rf._WORKER_PROBE_WORKERS, model="position", diag=d,
+                              hint_roads=set(pat.roads))
     if opos is None:
         return d.get("objective_status") or "NONE", None, None, None
     vst, vlay, vach = rf.validate(layout, pat, opos, exact_repair=rf._WORKER_EXACT_REPAIR,
@@ -91,9 +93,12 @@ def _eval(payload):
     out = {"idx": idx, "ops": ops, "k": k, "status": r["status"], "cold": r["status"],
            "mode": "cold", "achieved": r["achieved"], "layout": r["layout"],
            "pos": r["pos"] if r["status"] == "SAT" else None, "pattern": pat}
-    if r["status"] != "SAT" and hint is not None:
+    out["cold_achieved"] = r["achieved"]
+    if hint is not None and (WARM_ALWAYS or r["status"] != "SAT"):
         st, ach, lay, pos = _warm(pat, hint)
-        out.update(status=st, achieved=ach, layout=lay, pos=pos, mode="warm")
+        out["warm"], out["warm_achieved"] = st, ach
+        if st == "SAT" and (out["status"] != "SAT" or ach < out["achieved"]):
+            out.update(status=st, achieved=ach, layout=lay, pos=pos, mode="warm")
     out["secs"] = round(time.monotonic() - t0, 1)
     return out
 
@@ -117,7 +122,7 @@ class Runner:
     def evaluate(self, items, hint=None):
         """items: [(Pattern, ops)] -> results in input order. `hint`: the
         parent's positions for the warm fallback (None = cold only)."""
-        hint = hint if self.a.warm else None
+        hint = hint if self.a.warm != "off" else None
         dl = time.monotonic() + self.a.probe_limit + self.a.objective_limit + 60
         futs = []
         for pat, ops in items:
@@ -181,11 +186,14 @@ def main(argv=None):
     p.add_argument("--exact-repair", type=float, default=5.0)
     p.add_argument("--rebase-s", type=float, default=60.0)
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--cold-only", dest="warm", action="store_false",
-                   help="no warm fallback (parent-hinted objective) when the cold probe fails")
+    p.add_argument("--warm", default="always", choices=["always", "fallback", "off"],
+                   help="parent-hinted objective per mutant: always (keep the better of "
+                        "cold and warm), only when the cold probe is not SAT, or never")
     p.add_argument("--out", default=str(ROOT / "output/n5"))
     a = p.parse_args(argv)
     lam = a.lam or a.workers
+    global WARM_ALWAYS
+    WARM_ALWAYS = a.warm == "always"
     out = pathlib.Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     tag = f"{a.city}-{a.start}-s{a.seed}-{_dt.datetime.now():%m%d-%H%M}"
