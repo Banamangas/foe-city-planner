@@ -1285,8 +1285,20 @@ def _minimize_needed_position(m, needed, pattern, region, consumers, positions,
     solver.parameters.random_seed = seed
     solver.parameters.max_time_in_seconds = limit
     t0 = time.monotonic()
+    cb = None
+    if diag is not None and isinstance(diag.get("trail"), list):
+        # Q4: every improving solution as (objective, positions, witness), so a caller
+        # can fall back to a less tight one (e.g. when the fillers do not fit)
+        trail = diag["trail"]
+
+        class _Trail(cp_model.CpSolverSolutionCallback):
+            def on_solution_callback(self):
+                trail.append((self.ObjectiveValue(),
+                              _position_solution(self, lits, classes),
+                              frozenset(c for c, v in needed.items() if self.Value(v))))
+        cb = _Trail()
     with _cancellable(solver):
-        st = solver.Solve(m)
+        st = solver.Solve(m, cb)
     ok = st in (cp_model.OPTIMAL, cp_model.FEASIBLE)
     if diag is not None:
         diag.update(objective_status=solver.status_name(st),
@@ -2088,6 +2100,7 @@ class RoadsFirstSearch:
                  keep_chains: bool = True,
                  military: str = "connect",
                  rebase_s: float = 0.0,
+                 rebase_iterate: bool = False,
                  road_witness: bool = False,
                  fillers_in_model: bool = False,
                  seed_input: bool = False,
@@ -2105,6 +2118,8 @@ class RoadsFirstSearch:
         # Codex T4: seconds of the objective-polish window given to re-solving on
         # the incumbent's accepted road network (foeopt/incumbent_polish.py).
         self.rebase_s = rebase_s
+        # Q4: rebased polish runs to a fixed point instead of MAX_SOLVES.
+        self.rebase_iterate = rebase_iterate
         # Codex T1: validate() also tries the objective's selected roads.
         self.road_witness = road_witness
         # Phase D: the position model places the no-road buildings too.
