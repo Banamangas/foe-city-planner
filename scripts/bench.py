@@ -49,6 +49,10 @@ CITIES = {
     "user": ("city-user-data.json", "city-user-data-foe-helper.json"),
     "agrou": ("agrou-city.json",),
 }
+# FoE Helper v3 exports (2026-11-17), kept untracked under cities/ (they carry
+# player names). Benchmark name = file stem, e.g. --cities bigw,kosova.
+CITIES.update({p.stem: (f"cities/{p.name}",)
+               for p in sorted((pathlib.Path(__file__).resolve().parents[1] / "cities").glob("*.json"))})
 MILITARY = "connect"
 # harness-level defaults the webapp also uses for BEST_PRESET runs
 BASE_KWARGS = {"workers": 6, "probe_workers": 2}

@@ -45,4 +45,32 @@ describe("stripCity", () => {
     expect(e.requirements).toBeUndefined();
     expect(e.components).toEqual({ c: { placement: { size: { x: 2, y: 3 } } } });
   });
+
+  it("keeps chain links and new-style street requirements", () => {
+    const e = stripCity({
+      CityMapData: {}, UnlockedAreas: [],
+      CityEntities: { E: {
+        abilities: [{ chainId: "C", linkPositions: [{ topLeftPoint: { x: 1 } }], junk: 1 }],
+        components: { AllAge: { streetConnectionRequirement: { requiredLevel: 2 }, tags: [] } },
+      } },
+    }).CityEntities.E;
+    expect(e.abilities).toEqual([{ chainId: "C", linkPositions: [{ topLeftPoint: { x: 1 } }] }]);
+    expect(e.components).toEqual({ AllAge: { streetConnectionRequirement: { requiredLevel: 2 } } });
+  });
+
+  it("slims a v3 export to version, cityData and mapData", () => {
+    const slim = stripCity({
+      version: 3, player: { id: 1, name: "p" }, region: "fr", camX: 1,
+      cityData: { "1": { id: 1, cityentity_id: "H", type: "main_building", bonuses: [], era: "E" },
+                  "2": { id: 2, cityentity_id: "S", type: "street", x: 3, y: 0, level: 1 } },
+      mapData: [{ width: 4, length: 4 }],
+      mapBuildings: [{ metaId: "H" }],
+    });
+    expect(slim).toEqual({
+      version: 3,
+      cityData: { "1": { id: 1, cityentity_id: "H", type: "main_building" },
+                  "2": { id: 2, cityentity_id: "S", type: "street", x: 3, y: 0 } },
+      mapData: [{ width: 4, length: 4 }],
+    });
+  });
 });

@@ -30,11 +30,22 @@ class Catalog:
                     return (sz["x"], sz["y"])
         return None
 
+    def street_requirement(self, cityentity_id: str) -> int:
+        """The road level this entity requires, 0 if none. Older definitions
+        declare it in `requirements.street_connection_level`, newer ones in a
+        `components.<age>.streetConnectionRequirement` block."""
+        defn = self._def(cityentity_id)
+        lvl = (defn.get("requirements") or {}).get("street_connection_level")
+        if lvl:
+            return lvl
+        for comp in (defn.get("components") or {}).values():
+            req = comp.get("streetConnectionRequirement") if isinstance(comp, dict) else None
+            if isinstance(req, dict):
+                return req.get("requiredLevel") or 1
+        return 0
+
     def required_level(self, cityentity_id: str) -> int:
-        lvl = self._def(cityentity_id).get("requirements", {}).get(
-            "street_connection_level"
-        )
-        return lvl if lvl else 1
+        return self.street_requirement(cityentity_id) or 1
 
     # Streets carry their provided level in the same field.
     provided_level = required_level

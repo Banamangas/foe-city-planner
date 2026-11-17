@@ -32,3 +32,6 @@ scripts/_slicerepeats.jsonl
 # untracked city exports / local state
 agrou-city.json
 webapp/cities.db
+
+# Player city exports (contain player names/ids; never commit)
+cities/
