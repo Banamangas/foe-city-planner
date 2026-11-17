@@ -1,6 +1,9 @@
 import { create } from "zustand";
-import type { LoadResponse, BuildingSummary, Improvement, RoadView, BuildingView } from "../types";
+import type {
+  LoadResponse, BuildingSummary, Improvement, RoadView, BuildingView, Edits, EditReport,
+} from "../types";
 import { improvementToView } from "../api";
+import { normalizeEdits, withAdded } from "../edits";
 
 type Optimized = { roads: RoadView[]; buildings: BuildingView[]; k: number; achieved: number };
 /** Terminal report from the server's `done` event (webapp/app.py). */
@@ -23,6 +26,13 @@ type CityState = {
   optimizedRaw: Improvement | null;
   job: Job | null;
   viewMode: ViewMode;
+  /** Plan E: this city's edit set (saved with the city on the server). */
+  edits: Edits;
+  /** Server preview of `edits` (null while none / loading). */
+  editReport: EditReport | null;
+  editError: string;
+  setEdits: (edits: Edits) => void;
+  setEditReport: (report: EditReport | null, error?: string) => void;
   setCity: (resp: LoadResponse) => void;
   /** `jobId`: drop the improvement unless it belongs to the current job of the
    *  current city (a stream from a previous city/run must not leak in). */
@@ -40,9 +50,17 @@ export const useCityStore = create<CityState>((set, get) => ({
   optimizedRaw: null,
   job: null,
   viewMode: "current",
+  edits: normalizeEdits(null),
+  editReport: null,
+  editError: "",
+  setEdits: (edits) => set({ edits }),
+  setEditReport: (report, error = "") => set({ editReport: report, editError: error }),
   setCity: (resp) =>
     set({
       city: resp,
+      edits: normalizeEdits(resp.edits),
+      editReport: null,
+      editError: "",
       summaryById: new Map(resp.buildings.map((b) => [String(b.entity_id), b])),
       optimized: null,
       optimizedRaw: null,
@@ -58,7 +76,7 @@ export const useCityStore = create<CityState>((set, get) => ({
     }
     const mv = city.map_view;
     const { optimized_roads, buildings } = improvementToView(
-      imp, get().summaryById, mv.origin, mv.cell, mv.palette,
+      imp, withAdded(get().summaryById, imp.added), mv.origin, mv.cell, mv.palette,
     );
     set({
       optimized: { roads: optimized_roads, buildings, k: imp.k, achieved: imp.achieved },
@@ -72,6 +90,7 @@ export const useCityStore = create<CityState>((set, get) => ({
   reset: () =>
     set({
       city: null, summaryById: new Map(), optimized: null, optimizedRaw: null,
-      job: null, viewMode: "current",
+      job: null, viewMode: "current", edits: normalizeEdits(null), editReport: null,
+      editError: "",
     }),
 }));
