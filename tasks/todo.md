@@ -1569,8 +1569,7 @@ Machine rule: every CPU-heavy run (bench, probe studies) goes through the shared
   + 33 parcels). FR16/FR17/FR24/user unchanged, so their records stand. darkzig numbers in
   every A/B so far were measured under the incomplete chain rule.
 - [ ] Re-baseline darkzig under the full chain rule (new legal record), re-run darkzig arms.
-- [ ] Ask user: GR25 "Niv. 2" buildings (no street requirement in catalog) treated as
-      road-needing by the CityMap `connected` rule (FR17 x3, FR24 x1).
+- [x] GR25 "Niv. 2" need no road (user-confirmed): loader now uses the catalog rule; FR17 77->74, FR24 146->145 consumers.
 
 ### N7. Low-freedom chain blocks placed like the TH  [M, user direction 2026-11-17]
 User: chain main buildings do not need to touch each other, only patches (already true: links
