@@ -1554,3 +1554,8 @@ Machine rule: every CPU-heavy run (bench, probe studies) goes through the shared
       **FR16 66 new legal record** (docs/records/fr16-66-roads-n6-mutation.json, verified).
       darkzig preset also ends early (~430 s), not at the box. Not yet in BEST_PRESET:
       repeat at 120 s first (reserve takes up to half the box).
+- N6 merged into feat/backlog-2026-11 (1cd94b8, suite 756 passed). A/B on its own branch (600 s):
+  mut better 2/worse 0, mutr (reserve 120 s) better 4/worse 0 -> both ADOPT candidates;
+  FR16 66 new legal record (docs/records/fr16-66-roads-n6-mutation.json), FR17 102 inside a
+  normal 600 s run. Confirmation on the MERGED code (now with rebase_iterate in the preset),
+  120 + 600 s, pinned /home/born/Github/foe-bench-m1: output/bench/m1.jsonl, m1-fr24.jsonl.
