@@ -32,6 +32,9 @@ def trim(defn: dict) -> dict:
         if not isinstance(comp, dict):
             continue
         keep = {k: comp[k] for k in ("placement", "streetConnectionRequirement") if k in comp}
+        if isinstance(comp.get("chain"), dict):
+            keep["chain"] = {k: comp["chain"][k] for k in ("chainId", "linkPositions")
+                             if k in comp["chain"]}
         if "placement" in keep:
             keep["placement"] = {"size": (keep["placement"] or {}).get("size")}
         if keep:

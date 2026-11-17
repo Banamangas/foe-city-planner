@@ -2910,3 +2910,13 @@ That is a modelling gap (fillers outside the model), not a scheduling one.
   And a HINTED CP-SAT objective with 2 threads did not recover even a complete hint in 20 s,
   while 12 threads proved the optimum in 5 s. Rule: before an experiment trusts a hinted
   solve, feed it a known solution and check it returns that value at the thread count used.
+
+## 2026-11-17: newer FoE catalog entries declare chains and road needs in `components`
+- **Mistake:** `Catalog.chain_id/link_positions` read only `abilities[].chainId`; newer entities
+  declare `components.<age>.chain {chainId, linkPositions}` and
+  `components.<age>.streetConnectionRequirement`. 171 chain definitions were invisible, so darkzig
+  had 28 chain buildings, not 8 (Gentiana windmill, Pirates' hideout), and every darkzig record
+  87-90 breaks 16 chain links. Found only because the user named a chain (Breezemill) we missed.
+- **Rule:** when reading a catalog field, survey ALL entities for every place that field can
+  live (abilities AND components AND top-level) before trusting a count of zero. A "0 chains"
+  or "0 two-lane" result on a city with event buildings is a red flag, not a finding.
