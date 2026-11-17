@@ -1571,3 +1571,16 @@ Machine rule: every CPU-heavy run (bench, probe studies) goes through the shared
 - [ ] Re-baseline darkzig under the full chain rule (new legal record), re-run darkzig arms.
 - [ ] Ask user: GR25 "Niv. 2" buildings (no street requirement in catalog) treated as
       road-needing by the CityMap `connected` rule (FR17 x3, FR24 x1).
+
+### N7. Low-freedom chain blocks placed like the TH  [M, user direction 2026-11-17]
+User: chain main buildings do not need to touch each other, only patches (already true: links
+are linkPositions slots; heads have no head-sized slot). Big chains fit in very few positions,
+so the city's own row/column widths decide where they can go.
+Data (empty-grid positions of each composite): agrou Breezemill 34 pieces 71x6 -> 14 positions;
+darkzig chains 16x3..16x5 -> ~1750; essay 11x6 -> 1448; vini ~2300. All composable.
+- [ ] Per composite: feasible anchors from the region shape (excluding TH cells per TH anchor).
+- [ ] If anchors < threshold (~50): sample one per skeleton (like th_anchors), carve its cells
+      from the skeleton generator's region, fix it in the position model at that anchor.
+- [ ] Gate: agrou gets a skeleton-made layout (today expected FAMILY_TOO_WEAK -> seed only);
+      essay/darkzig not worse. All results pass full legality (chains linked).
+- [ ] Re-baseline darkzig under the full chain rule (records 87-90 break component chains).
