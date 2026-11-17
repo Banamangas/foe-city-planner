@@ -18,9 +18,11 @@ def test_nonuniform_k_start_margin_is_zero_not_minus_four():
 
 def test_fr17_now_starts_where_results_actually_live():
     """FR17's productive start is 121. The old margin put it at 117, from which
-    the walk spent its whole box ascending and returned FAMILY_TOO_WEAK."""
+    the walk spent its whole box ascending and returned FAMILY_TOO_WEAK.
+    2026-11-17: 3 GR25 "Niv. 2" buildings need no road (catalog rule), so
+    sigma/2 drops by 4 and the same-margin start is now 117."""
     lay = load_layout('CityMap-Born-FR17-2026-07-07.json')
-    assert pick_k_start(lay, "nonuniform") == 121
+    assert pick_k_start(lay, "nonuniform") == 117
 
 
 def test_fr16_start_moves_by_exactly_the_margin_change():
