@@ -105,6 +105,7 @@ def layout_to_view(
     for b in layout.buildings:
         bx, by = px(b.footprint.x, b.footprint.y)
         buildings.append({
+            "id": b.entity_id,
             "x": bx, "y": by,
             "w": b.footprint.width * _CELL,
             "h": b.footprint.length * _CELL,

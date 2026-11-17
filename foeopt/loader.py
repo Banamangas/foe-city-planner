@@ -180,3 +180,11 @@ def load_layout(city_path: str, helper_path: str | None = None) -> Layout:
     if "CityMapData" in data:
         return _build_combined(data)
     raise ValueError("unrecognized city file format")
+
+
+def city_catalog_defs(data: dict) -> dict:
+    """The building definitions a cached city resolves against: the bundled
+    catalog, overridden by the city's own CityEntities (combined exports) or
+    its embedded helper's (split and v3 uploads)."""
+    own = data.get("CityEntities") or (data.get("helper_data") or {}).get("CityEntities") or {}
+    return {**_bundled_catalog(), **own}

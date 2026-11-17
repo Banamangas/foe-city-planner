@@ -95,11 +95,15 @@ class JobManager:
                mutation_polish: bool = False,
                mutation_reserve: float = 0.0,
                mutation_starts: int = 1,
-               mutation_reserve_min_box: float = 0.0) -> str:
+               mutation_reserve_min_box: float = 0.0,
+               edit_info: dict | None = None) -> str:
         """Start a RoadsFirstSearch in a background thread and return its id.
 
         Keyword names match webapp.params.OPTION_SPECS one for one, so the
-        Flask layer can splat parse_options() straight in here.
+        Flask layer can splat parse_options() straight in here. `edit_info`
+        (plan E: buildings to store, buildings added) rides along on every
+        published layout and on the result; `layout` is then the EDITED city,
+        which every result is legality-checked against.
         """
         job_id = uuid.uuid4().hex
         stop_event = threading.Event()
@@ -126,10 +130,11 @@ class JobManager:
             leg["military"] = military
             last_legality.clear()
             last_legality.update(leg)
-            improvements.put({
-                "k": k, "achieved": achieved, "legality": leg,
-                **layout_to_dict(best_layout),
-            })
+            imp = {"k": k, "achieved": achieved, "legality": leg,
+                   **layout_to_dict(best_layout)}
+            if edit_info:
+                imp.update(edit_info)
+            improvements.put(imp)
 
         def on_status(k, level_status, probes_done, probes_total):
             pass
@@ -194,6 +199,8 @@ class JobManager:
                                  should_stop=should_stop)
                 if last_legality:
                     res["legality"] = dict(last_legality)
+                if edit_info:
+                    res["edits"] = edit_info
                 self._finish(state, "done", result=res)
             except Exception as exc:
                 self._finish(state, "error", error=f"{type(exc).__name__}: {exc}")
