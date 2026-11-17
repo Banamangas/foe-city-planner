@@ -147,6 +147,14 @@ OPTION_SPECS: list[dict] = [
                 "(usually well under a second) and keep it if it uses fewer roads.",
     },
     {
+        "name": "rebase_iterate", "cli": "--rebase-iterate", "type": "bool",
+        "default": False, "advanced": True,
+        "group": "budget", "label": "Rebased polish: repeat until no gain",
+        "help": "Repeat the rebased polish on every better layout it finds, "
+                "until a pass gains nothing or time runs out (default: at most "
+                "two passes).",
+    },
+    {
         "name": "closure", "cli": "--closure", "type": "choice",
         "default": "bfs", "choices": ["bfs", "layered", "flow"], "advanced": True,
         "group": "budget", "label": "Polish: road connectivity rule",
