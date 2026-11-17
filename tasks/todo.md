@@ -1533,5 +1533,15 @@ Machine rule: every CPU-heavy run (bench, probe studies) goes through the shared
       Records re-verified on the integration branch (legality, exact reroute optimal, inventory,
       0 rotated, 0 overlap): docs/records/darkzig-87-roads-n5-mutation.json,
       fr17-102-roads-n5-mutation.json. Not yet shown to beat production at equal wall time.
-- [ ] N6. Mutation search as an end-of-run phase (option, off by default), paired A/B at
+- [x] N6. Mutation search as an end-of-run phase (option, off by default), paired A/B at
       600 s vs BEST_PRESET on darkzig/FR16/FR17.
+      DONE on `feat/n6-mutation-phase` (review docs/reviews/2026-11-17-n6-mutation-phase.md):
+      options `mutation_polish`, `mutation_reserve` (s; shifts walk + polish window earlier,
+      window length unchanged), `mutation_starts`. Runs after rebase, before seed polish/exact
+      finish; N5 operators + evaluator (cold probe + warm hinted solve), legality-gated.
+      A/B 600 s x2 (output/bench/n6-mut.jsonl in /home/born/Github/foe-bench-n6):
+      mut (leftover) better 2 / worse 0 / tie 4; mutr (reserve 120) better 4 / worse 0 /
+      tie 2 -> both ADOPT by the rule. FR17 103 -> 102 (2 runs), darkzig 90 -> 88,
+      **FR16 66 new legal record** (docs/records/fr16-66-roads-n6-mutation.json, verified).
+      darkzig preset also ends early (~430 s), not at the box. Not yet in BEST_PRESET:
+      repeat at 120 s first (reserve takes up to half the box).
