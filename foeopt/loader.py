@@ -81,6 +81,10 @@ _OFF_GRID_TYPES = {"off_grid", "outpost_ship", "friends_tavern", "hub_main", "hu
 
 
 def _build_combined(data: dict, needs_from_catalog: bool = False) -> Layout:
+    # needs_road: the catalog's street requirement AND road-adjacent in the upload.
+    # The per-entity `connected` key is only the fallback for catalog-less files:
+    # the game sets it on buildings that need no road (e.g. GR25 "Niv. 2", user-
+    # confirmed 2026-11-17), which made FR17/FR24 over-constrained.
     catalog = Catalog(data.get("CityEntities", {}))
     region = build_region(data["UnlockedAreas"])
 
@@ -112,7 +116,7 @@ def _build_combined(data: dict, needs_from_catalog: bool = False) -> Layout:
         if "needsStreet" in e:
             lvl = e["needsStreet"] or 0
             needs_road, road_level = (lvl > 0, lvl if lvl > 0 else 1)
-        elif needs_from_catalog:
+        elif needs_from_catalog or catalog.known:
             needs_road = (catalog.street_requirement(cid) > 0
                           and bool(fp.border_cells() & road_cells))
             road_level = catalog.required_level(cid)
