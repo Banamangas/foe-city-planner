@@ -183,6 +183,31 @@ OPTION_SPECS: list[dict] = [
                 "first union combines.",
     },
     {
+        "name": "mutation_polish", "cli": "--mutation-polish", "type": "bool",
+        "default": False, "advanced": True,
+        "group": "budget", "label": "Mutation polish",
+        "help": "After every other polish, use the time that is left to change "
+                "the best road network one arm at a time (extend, shorten, "
+                "remove, shift, add a branch) and re-place the buildings on "
+                "each change; keep a change that is no worse and show a "
+                "strictly better, fully valid layout.",
+    },
+    {
+        "name": "mutation_reserve", "cli": "--mutation-reserve", "type": "float",
+        "default": 0.0, "min": 0.0, "max": 600.0, "advanced": True,
+        "group": "budget", "label": "Mutation polish: reserved s",
+        "help": "With mutation polish: hold back this many seconds of the box "
+                "for it, so it also runs when the search would use the whole "
+                "box. 0 = only the time left over.",
+    },
+    {
+        "name": "mutation_starts", "cli": "--mutation-starts", "type": "int",
+        "default": 1, "min": 1, "max": 8, "advanced": True,
+        "group": "budget", "label": "Mutation polish: start networks",
+        "help": "1 = start from the best layout's roads only; more also starts "
+                "from the next-best road skeletons, splitting the time.",
+    },
+    {
         "name": "polish_top", "cli": "--polish-top", "type": "int",
         "default": 3, "min": 1, "max": 32, "advanced": True,
         "group": "budget", "label": "Objective polish: skeletons",
