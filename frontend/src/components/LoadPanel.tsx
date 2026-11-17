@@ -13,10 +13,10 @@ export function LoadPanel() {
   const refreshCities = () => apiCities().then(setCities).catch(() => {});
   useEffect(() => { refreshCities(); }, []);
 
-  const loadSlim = async (slim: unknown) => {
+  const loadSlim = async (slim: unknown, fileName?: string) => {
     setPhase("uploading");
     try {
-      const resp = await apiLoad(slim);
+      const resp = await apiLoad(slim, fileName);
       setCity(resp);
       setPhase("");
       refreshCities();
@@ -34,7 +34,7 @@ export function LoadPanel() {
     worker.onmessage = (e: MessageEvent<any>) => {
       const msg = e.data;
       if (msg.phase === "error") { setError(msg.message); setPhase(""); worker.terminate(); return; }
-      if (msg.phase === "done") { worker.terminate(); loadSlim(msg.slim); return; }
+      if (msg.phase === "done") { worker.terminate(); loadSlim(msg.slim, file.name); return; }
       setPhase(msg.phase);
     };
     worker.postMessage(file);

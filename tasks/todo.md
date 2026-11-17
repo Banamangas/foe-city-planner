@@ -1721,7 +1721,7 @@ the built bundle is served and contains the new panels, and drove /api/catalog a
 Tree-shaped chains (Mughals: TH is the main, never removable) and hippodrome (two mains) are
 handled generically but untested on real data.
 
-## X — Export the result as a v3 city file (Forge Hammer planner format)  (APPROVED 2026-11-17, in progress)
+## X — Export the result as a v3 city file (Forge Hammer planner format)  (APPROVED 2026-11-17; BUILT on feat/x-v3-export, awaiting review)
 
 **Today:** "Export" in the result panel downloads the optimizer's internal JSON (`<city>-k<k>.layout.json`:
 roads as [x,y,level] + building positions by entity id). The city export (`.city`) is the cached
@@ -1739,9 +1739,9 @@ and mapData), so it can't rebuild a full v3 file either.
   `mapBuildings`, removed buildings into `storedBuildings`.
 
 ### Plan
-- [ ] Cache the FULL v3 upload (70-260 KB; stays local in webapp/cities.db, never sent anywhere);
+- [x] Cache the FULL v3 upload (70-260 KB; stays local in webapp/cities.db, never sent anywhere);
       the optimizer still loads from cityData. Old slim caches: export says "re-upload the file".
-- [ ] `foeopt/export_v3.py`: `to_v3(original, result_layout, to_store, added)`:
+- [x] `foeopt/export_v3.py`: `to_v3(original, result_layout, to_store, added)`:
       - mapBuildings: one entry per placed building (metaId = cityentity_id, x/y = new position,
         era = the entity's cityData era, custom = false), plus one per road cell with the street
         metaId the city already uses for that level (level 1 / two-lane read from cityData; two-lane
@@ -1749,11 +1749,11 @@ and mapData), so it can't rebuild a full v3 file either.
       - added buildings: custom = true, era = currentEra.
       - storedBuildings: removed buildings (+ whatever was already stored? see question 2).
       - off-grid entities untouched; every other top-level field copied verbatim.
-- [ ] Round trip: load the exported file's mapBuildings as a city and get the same layout back
+- [x] Round trip: load the exported file's mapBuildings as a city and get the same layout back
       (positions, roads, legality valid); for an unedited, unoptimized city, export == upload's mapBuildings.
-- [ ] `GET /api/layouts/<id>/export.v3` (and for the live result) + an "Export for FoE Helper" button;
+- [x] `GET /api/layouts/<id>/export.v3` (and for the live result) + an "Export for FoE Helper" button;
       keep the internal JSON export as "Export (debug)".
-- [ ] Tests: unit (entries, era, custom, roads per level, stored), API, round trip on 3 real cities.
+- [x] Tests: unit (entries, era, custom, roads per level, stored), API, round trip on 3 real cities.
 
 ### Decisions (user, 2026-11-17)
 1. Target: the Forge Hammer city planner. The v3 files ARE its export/import format.
@@ -1761,3 +1761,36 @@ and mapData), so it can't rebuild a full v3 file either.
    copies of buildings in the actual city). Recommended: REPLACE with exactly our removed buildings,
    since the export replaces the plan.)
 3. Always optimize from the actual city (cityData), never from the plan (mapBuildings).
+
+### Review (2026-11-17, branch feat/x-v3-export, NOT merged)
+- **Format evidence (13 uploads):** the mapBuildings entries are `{metaId, x, y, era, custom}`, in that
+  key order. x/y is the top-left, same as cityData, and a zero coordinate is OMITTED, as in cityData
+  (My-City-V2, a plan Forge Hammer edited, writes explicit 0s, so FH reads both). era = the entity's
+  cityData era (13/13). Off-grid types (hub_main/part, friends_tavern, outpost_ship, off_grid) are
+  not in it. Two-lane: every `*CarStreet*` in the catalog is 2x2 and provides level 2. cityData and
+  mapBuildings both store ONE entity per tile, at its top-left (essay: 36 CarStreet2 = 144 cells).
+- **Export:** `foeopt/export_v3.py` `to_v3()`. Buildings follow cityData order. Streets: one 1x1
+  entity per level-1 cell and one 2x2 entity per two-lane tile (the tiling is unique, greedy
+  row-major). A street keeps the metaId/era of the city's street at that cell or tile anchor; a new
+  one gets the city's most used street of that level, or a catalog street of that level (same age
+  as the other street kind, else currentEra). Cells that cannot be tiled raise a clear error. A
+  building added by size only (no catalog id) is left out, with a warning.
+- **Unedited export reproduces mapBuildings exactly (as a multiset) on 12/12 mirroring cities**,
+  including vini's 3 mixed street types. My-City-V2 differs by design (its plan is replaced).
+- **Webapp:** the full v3 file is cached. The city id = hash of the old slim projection (cityData
+  keys in JS order), so re-uploading keeps the id, its edits and saved layouts (checked: essay
+  and antivol reproduce their cached ids, edits included). Old slim caches: export returns 400
+  `reupload: true`. Endpoints: `POST /api/export/v3 {city_id, layout}` and
+  `GET /api/layouts/<id>/export.v3`. File name `<upload-name>-optimized.json` (the name is sent with
+  /api/load?name=, ASCII-only, falls back to the city id). The result panel has "Export for Forge
+  Hammer" (primary) and "Export (debug)".
+- **Tests:** 16 unit/round-trip (3 real cities, unedited and edited) + 8 API. Full suite 825
+  passed / 4 skipped. Frontend 60 passed, build OK.
+- **End to end** (scripts/e2e_export_v3.py, BEST preset, 60 s, under the bench lock; checks: export
+  plan reloaded, legality valid, roads/levels equal, positions equal, stored equal, other fields
+  untouched): essay 64 roads OK. moune with 2 removed + 1 added: 33 roads, 2 stored, 1 custom, OK.
+  durza 66 cells (4 two-lane = 1 CarStreet tile) -> 63 street entities, OK.
+- **For the user to check in Forge Hammer:** (1) import one export and check that the streets and
+  buildings land where the optimizer drew them (positions have only been checked against our own
+  reading of the format). (2) essay's 36 two-lane tiles serve no building, so the optimized city
+  has only level-1 roads. (3) storedBuildings are written at their old cityData position, custom=false.

@@ -68,7 +68,9 @@ async function jsonGet(path: string): Promise<any> {
   return data;
 }
 
-export const apiLoad = (slim: unknown): Promise<LoadResponse> => jsonPost("/api/load", slim);
+/** `fileName` names the Forge Hammer export (`<name>-optimized.json`). */
+export const apiLoad = (slim: unknown, fileName?: string): Promise<LoadResponse> =>
+  jsonPost(fileName ? `/api/load?name=${encodeURIComponent(fileName)}` : "/api/load", slim);
 export const apiOptions = (): Promise<OptionsResponse> => jsonGet("/api/options");
 /** Run parameters ride along untyped: /api/options declares them, the server validates them. */
 export const apiOptimize = (
@@ -92,6 +94,35 @@ export const apiLayout = (id: string): Promise<any> => jsonGet(`/api/layouts/${i
 export const apiSaveLayout = (body: unknown): Promise<{ id: string }> => jsonPost("/api/layouts", body);
 export const apiDeleteLayout = (id: string): Promise<any> =>
   fetch(`/api/layouts/${id}`, { method: "DELETE" }).then((r) => r.json());
+
+/** The file name in a Content-Disposition header, or `fallback`. */
+export function attachmentName(header: string | null, fallback: string): string {
+  const m = /filename="([^"]+)"/.exec(header ?? "");
+  return m ? m[1] : fallback;
+}
+
+/** The result as a v3 city file for Forge Hammer (plan X): the original upload
+ *  with mapBuildings = this layout and storedBuildings = the buildings to store. */
+export async function apiExportV3(
+  cityId: string, layout: unknown,
+): Promise<{ blob: Blob; filename: string; warnings: string[] }> {
+  const r = await fetch("/api/export/v3", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ city_id: cityId, layout }),
+  });
+  if (!r.ok) {
+    const data = await r.json().catch(() => ({}));
+    throw new Error(data.error ?? `export failed (${r.status})`);
+  }
+  let warnings: string[] = [];
+  try { warnings = JSON.parse(r.headers.get("X-Export-Warnings") ?? "[]"); } catch { /* none */ }
+  return {
+    blob: await r.blob(),
+    filename: attachmentName(r.headers.get("Content-Disposition"), `${cityId}-optimized.json`),
+    warnings,
+  };
+}
 
 export function openStream(
   jobId: string,

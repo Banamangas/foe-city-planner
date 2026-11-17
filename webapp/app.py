@@ -11,6 +11,7 @@ from flask import Flask, Response, jsonify, request, send_from_directory
 
 from foeopt.catalog import Catalog
 from foeopt.editing import UNPLACEABLE_TYPES, EditError, apply_edits
+from foeopt.export_v3 import ExportError, can_export, to_v3
 from foeopt.loader import city_catalog_defs, is_v3, load_layout_from_dict, load_layout
 from foeopt.report import road_estimate
 from foeopt.viz import layout_to_view
@@ -26,6 +27,44 @@ _DIST = os.path.join(os.path.dirname(__file__), "dist")
 
 def _city_hash(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()[:16]
+
+
+def _v3_slim(data: dict) -> dict:
+    """What the upload worker cached of a v3 file before plan X (its old
+    stripV3, same key order): the part the optimizer reads. cityData keys go in
+    JavaScript's order (integer-like keys ascending, then the rest as given),
+    which is the order every browser upload arrived in, whatever the file's."""
+    src = data.get("cityData") or {}
+    ints = sorted((k for k in src if k.isdigit() and (k == "0" or k[0] != "0")), key=int)
+    int_set = set(ints)
+    keys = ints + [k for k in src if k not in int_set]
+    city = {}
+    for key in keys:
+        e = src[key]
+        out = {"id": e.get("id"), "cityentity_id": e.get("cityentity_id"), "type": e.get("type")}
+        for c in ("x", "y"):
+            if c in e:
+                out[c] = e[c]
+        city[key] = out
+    slim = {"version": data.get("version"), "cityData": city, "mapData": data.get("mapData") or []}
+    if "helper_data" in data:
+        slim["helper_data"] = data["helper_data"]
+    return slim
+
+
+def city_id_for(data: dict) -> str:
+    """A v3 city is identified by its slim part, so the full file (cached since
+    plan X) gets the SAME id as its slim cache from before: re-uploading keeps
+    the saved edits and layouts, and upgrades the cache to the full file."""
+    return _city_hash(json.dumps(_v3_slim(data) if is_v3(data) else data).encode())
+
+
+def _safe_stem(name: str | None, fallback: str) -> str:
+    stem = os.path.splitext(os.path.basename(name or ""))[0]
+    # ASCII only: the name goes into a Content-Disposition header.
+    stem = "".join(ch for ch in stem
+                   if ch.isascii() and (ch.isalnum() or ch in "-_. ")).strip()
+    return stem or fallback
 
 
 def _buildings_summary(layout, catalog: Catalog | None = None) -> list[dict]:
@@ -89,7 +128,8 @@ def create_app(db_path: str | None = None) -> Flask:
         file_storage.save(path)
         return path
 
-    def _parse_and_cache(data, helper_data: dict | None = None) -> dict:
+    def _parse_and_cache(data, helper_data: dict | None = None,
+                         name: str | None = None) -> dict:
         if not isinstance(data, dict):
             raise ValueError("expected a JSON object")
         if helper_data is not None and ("entities" in data or is_v3(data)):
@@ -99,10 +139,10 @@ def create_app(db_path: str | None = None) -> Flask:
             data = {**data, "helper_data": {"CityEntities": helper_data.get("CityEntities", {})}}
         layout = load_layout_from_dict(data)
         payload = json.dumps(data).encode()
-        city_id = _city_hash(payload)
+        city_id = city_id_for(data)
         buildings = _buildings_summary(layout, Catalog(city_catalog_defs(data)))
         cache.store_city(city_id, payload, buildings,
-                         len(layout.region.cells), road_estimate(layout))
+                         len(layout.region.cells), road_estimate(layout), name=name)
         return {
             "city_id": city_id,
             "buildings": buildings,
@@ -150,7 +190,7 @@ def create_app(db_path: str | None = None) -> Flask:
         if data is None:
             return jsonify(error="invalid JSON body"), 400
         try:
-            return jsonify(_parse_and_cache(data))
+            return jsonify(_parse_and_cache(data, name=request.args.get("name") or None))
         except Exception as exc:
             return jsonify(error=f"could not parse city: {exc}"), 400
 
@@ -158,6 +198,7 @@ def create_app(db_path: str | None = None) -> Flask:
     def api_load_raw():
         if "city" not in request.files:
             return jsonify(error="no city file"), 400
+        city_name = request.files["city"].filename or None
         city_path = _save_tmp(request.files["city"])
         helper_path = _save_tmp(request.files["helper"]) if "helper" in request.files else None
         try:
@@ -171,7 +212,7 @@ def create_app(db_path: str | None = None) -> Flask:
                 if p:
                     os.unlink(p)
         try:
-            return jsonify(_parse_and_cache(data, helper_data))
+            return jsonify(_parse_and_cache(data, helper_data, name=city_name))
         except Exception as exc:
             return jsonify(error=f"could not parse city: {exc}"), 400
 
@@ -377,6 +418,45 @@ def create_app(db_path: str | None = None) -> Flask:
         if ok:
             return jsonify(ok=True)
         return jsonify(error="not found"), 404
+
+    def _export_v3(city: dict, layout_json):
+        """Download the result as a v3 city file for Forge Hammer (plan X)."""
+        if not isinstance(layout_json, dict):
+            return jsonify(error="layout must be an object"), 400
+        warnings: list[str] = []
+        try:
+            doc = to_v3(city["payload"], layout_json, layout_json.get("to_store") or [],
+                        layout_json.get("added") or [], catalog=_catalog_for(city),
+                        warnings=warnings)
+        except ExportError as exc:
+            return jsonify(error=str(exc),
+                           reupload=not can_export(city["payload"])), 400
+        stem = _safe_stem(city.get("name"), city["id"])
+        resp = Response(json.dumps(doc), mimetype="application/json")
+        resp.headers["Content-Disposition"] = f'attachment; filename="{stem}-optimized.json"'
+        if warnings:
+            resp.headers["X-Export-Warnings"] = json.dumps(warnings)   # ASCII-escaped
+        return resp
+
+    @app.post("/api/export/v3")
+    def api_export_v3():
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict) or not data.get("city_id"):
+            return jsonify(error="city_id is required"), 400
+        city = cache.get_city(data["city_id"])
+        if city is None:
+            return jsonify(error="city not found, load it first"), 400
+        return _export_v3(city, data.get("layout"))
+
+    @app.get("/api/layouts/<layout_id>/export.v3")
+    def api_layouts_export_v3(layout_id):
+        rec = cache.get_layout(layout_id)
+        if rec is None:
+            return jsonify(error="not found"), 404
+        city = cache.get_city(rec["city_id"])
+        if city is None:
+            return jsonify(error="the layout's city is no longer cached"), 400
+        return _export_v3(city, rec["layout"])
 
     @app.get("/assets/<path:filename>")
     def spa_assets(filename):

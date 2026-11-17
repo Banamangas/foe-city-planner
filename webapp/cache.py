@@ -32,19 +32,23 @@ class CityCache:
         cols = {r[1] for r in self._conn.execute("PRAGMA table_info(cities)")}
         if "edits" not in cols:   # databases created before plan E
             self._conn.execute("ALTER TABLE cities ADD COLUMN edits TEXT")
+        if "name" not in cols:    # databases created before plan X
+            self._conn.execute("ALTER TABLE cities ADD COLUMN name TEXT")
         self._conn.commit()
 
     def store_city(self, city_id: str, payload: bytes,
                    buildings: list[dict], region_cells: int,
-                   road_estimate: int) -> None:
+                   road_estimate: int, name: str | None = None) -> None:
         with self._lock:
-            # Upsert, not REPLACE: re-loading the same file keeps its saved edits.
+            # Upsert, not REPLACE: re-loading the same file keeps its saved edits
+            # (and its file name when the reload does not say one).
             self._conn.execute(
-                "INSERT INTO cities (id, payload, buildings, region_cells, road_estimate) "
-                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+                "INSERT INTO cities (id, payload, buildings, region_cells, road_estimate, name) "
+                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
                 "payload = excluded.payload, buildings = excluded.buildings, "
-                "region_cells = excluded.region_cells, road_estimate = excluded.road_estimate",
-                (city_id, payload, json.dumps(buildings), region_cells, road_estimate)
+                "region_cells = excluded.region_cells, road_estimate = excluded.road_estimate, "
+                "name = COALESCE(excluded.name, cities.name)",
+                (city_id, payload, json.dumps(buildings), region_cells, road_estimate, name)
             )
             self._conn.commit()
 
@@ -63,6 +67,7 @@ class CityCache:
             "road_estimate": row["road_estimate"],
             "created_at": row["created_at"],
             "edits": json.loads(row["edits"]) if row["edits"] else None,
+            "name": row["name"],
         }
 
     def get_edits(self, city_id: str) -> dict | None:

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useCityStore } from "../stores/cityStore";
-import { apiSaveLayout, apiLayouts, apiLayout } from "../api";
+import { apiSaveLayout, apiLayouts, apiLayout, apiExportV3 } from "../api";
 import type { LayoutListItem } from "../types";
 import { forServer } from "../edits";
 
@@ -39,15 +39,32 @@ export function ResultPanel() {
     refresh();
   };
 
-  const exportLayout = () => {
-    if (!optimizedRaw) return;
-    const blob = new Blob([JSON.stringify(optimizedRaw)], { type: "application/json" });
+  const download = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${city.city_id}-k${optimizedRaw.k}.layout.json`;
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  // The optimizer's internal JSON (roads + positions by entity id).
+  const exportDebug = () => {
+    if (!optimizedRaw) return;
+    download(new Blob([JSON.stringify(optimizedRaw)], { type: "application/json" }),
+      `${city.city_id}-k${optimizedRaw.k}.layout.json`);
+  };
+
+  // A v3 city file to import into Forge Hammer's city planner.
+  const exportForgeHammer = async () => {
+    if (!optimizedRaw) return;
+    try {
+      const { blob, filename, warnings } = await apiExportV3(city.city_id, optimizedRaw);
+      download(blob, filename);
+      setMsg(warnings.length ? `exported; ${warnings.join("; ")}` : `exported ${filename}`);
+    } catch (err) {
+      setMsg(String(err instanceof Error ? err.message : err));
+    }
   };
 
   const loadHistory = async (id: string) => {
@@ -67,8 +84,12 @@ export function ResultPanel() {
           <div className="big">{optimized.achieved} roads</div>
           <div className="sub">was ~{estimate} · k={optimized.k}</div>
           <div className="row">
+            <button className="primary" onClick={exportForgeHammer}
+              title="v3 city file: import it into Forge Hammer's city planner">
+              Export for Forge Hammer
+            </button>
             <button onClick={save}>Save</button>
-            <button onClick={exportLayout}>Export</button>
+            <button onClick={exportDebug} title="the optimizer's internal JSON">Export (debug)</button>
           </div>
           {msg && <div className="status">{msg}</div>}
           {optimizedRaw?.added && optimizedRaw.added.length > 0 && (
