@@ -40,6 +40,8 @@ from foeopt import skeleton_mutation as sm  # noqa: E402
 from foeopt.chains import compose  # noqa: E402
 from foeopt.incumbent_polish import incumbent_positions, polish_rebased  # noqa: E402
 from foeopt.loader import load_layout  # noqa: E402
+# the warm half of the evaluator lives with the production phase (N6)
+from foeopt.mutation_polish import warm_solve as warm  # noqa: E402
 from foeopt.roads_first import Pattern, _check_pattern  # noqa: E402
 from scripts.bench import CITIES, verify  # noqa: E402
 from scripts.verify_layout_file import load_saved  # noqa: E402
@@ -62,24 +64,6 @@ def save_layout(path: pathlib.Path, city: str, achieved: int, lay, pat, extra: d
                       for b in lay.buildings},
         "pattern_th": [pat.th.x, pat.th.y, pat.th.width, pat.th.length],
         "pattern_roads": sorted([x, y] for (x, y) in pat.roads), **extra}))
-
-
-def warm(layout, pat, hint, *, limit, threads, exact_repair, fillers=None):
-    """The production objective (minimize_needed, position model) hinted from
-    the PARENT's placement and the mutant's cells, as rebased polish does, then
-    validate with the road witness. Run in the parent with all threads: with 2
-    threads the hinted model did not even recover the hint in 20 s (darkzig
-    record network: UNKNOWN), with 12 it proved the optimum in 5 s."""
-    region, consumers = set(layout.region.cells), layout.road_needing()
-    d: dict = {}
-    opos = rf.minimize_needed(pat, region, consumers, hint, limit=limit, workers=threads,
-                              model="position", diag=d, hint_roads=set(pat.roads),
-                              **({"fillers": fillers} if fillers else {}))
-    if opos is None:
-        return d.get("objective_status") or "NONE", None, None, None
-    vst, vlay, vach = rf.validate(layout, pat, opos, exact_repair=min(exact_repair, limit),
-                                  exact_workers=threads, witness=d.get("witness"))
-    return ("SAT", vach, vlay, opos) if vst == "OK" else (vst, None, None, None)
 
 
 def _eval(payload):
