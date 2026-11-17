@@ -1721,7 +1721,7 @@ the built bundle is served and contains the new panels, and drove /api/catalog a
 Tree-shaped chains (Mughals: TH is the main, never removable) and hippodrome (two mains) are
 handled generically but untested on real data.
 
-## X — Export the result as a v3 city file (FoE Helper planner format)  (DRAFT 2026-11-17, awaiting user review)
+## X — Export the result as a v3 city file (Forge Hammer planner format)  (DRAFT 2026-11-17, awaiting user review)
 
 **Today:** "Export" in the result panel downloads the optimizer's internal JSON (`<city>-k<k>.layout.json`:
 roads as [x,y,level] + building positions by entity id). The city export (`.city`) is the cached
@@ -1755,8 +1755,9 @@ and mapData), so it can't rebuild a full v3 file either.
       keep the internal JSON export as "Export (debug)".
 - [ ] Tests: unit (entries, era, custom, roads per level, stored), API, round trip on 3 real cities.
 
-### Questions for the user
-1. Is the target the FoE Helper city planner (import the file there and rebuild in-game from its overlay)?
-2. `storedBuildings`: replace with exactly the removed buildings, or append to what the planner already stored?
-3. My-City-V2's file holds a plan that differs from the city. The optimizer works on the city
-   (`cityData`). Should it ever start from the plan (`mapBuildings`) instead?
+### Decisions (user, 2026-11-17)
+1. Target: the Forge Hammer city planner. The v3 files ARE its export/import format.
+2. storedBuildings: explained to the user (My-City-V2 has 192 = its own plan's storage, 144 of them
+   copies of buildings in the actual city). Recommended: REPLACE with exactly our removed buildings,
+   since the export replaces the plan. Awaiting the user's answer.
+3. Always optimize from the actual city (cityData), never from the plan (mapBuildings).
