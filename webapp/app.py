@@ -9,7 +9,9 @@ import uuid
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 
-from foeopt.loader import is_v3, load_layout_from_dict, load_layout
+from foeopt.catalog import Catalog
+from foeopt.editing import UNPLACEABLE_TYPES, EditError, apply_edits
+from foeopt.loader import city_catalog_defs, is_v3, load_layout_from_dict, load_layout
 from foeopt.report import road_estimate
 from foeopt.viz import layout_to_view
 from webapp.cache import CityCache
@@ -26,12 +28,54 @@ def _city_hash(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()[:16]
 
 
-def _buildings_summary(layout) -> list[dict]:
+def _buildings_summary(layout, catalog: Catalog | None = None) -> list[dict]:
+    """Per-building rows for the UI. The chain fields drive the edit panel
+    (chain removal notices, the main-building picker for added patches)."""
+    def head(b):
+        return bool(b.chain_id) and catalog is not None and catalog.is_chain_head(b.cityentity_id)
     return [{
         "entity_id": b.entity_id, "name": b.name,
         "width": b.footprint.width, "length": b.footprint.length,
         "needs_road": b.needs_road, "is_townhall": b.is_townhall,
+        "cityentity_id": b.cityentity_id, "chain_id": b.chain_id,
+        "is_chain_head": head(b),
     } for b in layout.buildings]
+
+
+MAX_CATALOG_RESULTS = 30
+
+
+def _catalog_row(catalog: Catalog, cid: str) -> dict | None:
+    etype = catalog.entity_type(cid)
+    size = catalog.size(cid)
+    if size is None or etype in UNPLACEABLE_TYPES or etype == "main_building":
+        return None
+    req = catalog.street_requirement(cid)
+    chain = catalog.chain_id(cid)
+    return {"id": cid, "name": catalog.name(cid), "type": etype,
+            "width": size[0], "length": size[1], "needs_road": req > 0,
+            "road_level": catalog.required_level(cid) if req > 0 else 0,
+            "chain_id": chain, "is_chain_head": bool(chain) and catalog.is_chain_head(cid)}
+
+
+def search_catalog(catalog: Catalog, q: str, limit: int = MAX_CATALOG_RESULTS) -> list[dict]:
+    """Placeable catalog entries whose name or id contains `q` (case-insensitive).
+    Name matches rank before id-only matches, prefix matches first."""
+    ql = q.strip().lower()
+    if not ql:
+        return []
+    hits = []
+    for cid in catalog.ids():
+        name = str(catalog.name(cid)).lower()
+        in_name, in_id = ql in name, ql in cid.lower()
+        if not (in_name or in_id):
+            continue
+        row = _catalog_row(catalog, cid)
+        if row is not None:
+            rank = 0 if name.startswith(ql) else 1 if in_name else 2
+            hits.append((rank, len(name), name, cid, row))
+    hits.sort(key=lambda h: h[:4])
+    return [h[4] for h in hits[:limit]]
 
 
 def create_app(db_path: str | None = None) -> Flask:
@@ -56,7 +100,7 @@ def create_app(db_path: str | None = None) -> Flask:
         layout = load_layout_from_dict(data)
         payload = json.dumps(data).encode()
         city_id = _city_hash(payload)
-        buildings = _buildings_summary(layout)
+        buildings = _buildings_summary(layout, Catalog(city_catalog_defs(data)))
         cache.store_city(city_id, payload, buildings,
                          len(layout.region.cells), road_estimate(layout))
         return {
@@ -71,7 +115,28 @@ def create_app(db_path: str | None = None) -> Flask:
             # Advisory only -- the UI must never use it to block a run.
             "screen": screen_city(layout),
             "map_view": layout_to_view(layout),
+            # Edits saved for this city (survive a reload of the same file).
+            "edits": cache.get_edits(city_id),
         }
+
+    _catalogs: dict[str, Catalog] = {}
+
+    def _catalog_for(city: dict) -> Catalog:
+        cat = _catalogs.get(city["id"])
+        if cat is None:
+            cat = _catalogs[city["id"]] = Catalog(city_catalog_defs(city["payload"]))
+        return cat
+
+    def _edit_city(city: dict, edits) -> tuple:
+        """(edited layout, report) for a cached city, or raise EditError."""
+        if not isinstance(edits, dict):
+            raise EditError("edits must be an object {remove: [...], add: [...]}")
+        layout = load_layout_from_dict(city["payload"])
+        return apply_edits(layout, edits.get("remove") or [], edits.get("add") or [],
+                           catalog=_catalog_for(city), relink=edits.get("relink") or {})
+
+    def _edit_error(exc: EditError):
+        return jsonify(error=str(exc), **exc.detail), 400
 
     @app.get("/")
     def index():
@@ -135,13 +200,79 @@ def create_app(db_path: str | None = None) -> Flask:
             options = parse_options(data)
         except OptionError as exc:
             return jsonify(error=str(exc)), 400
-        layout = load_layout_from_dict(city["payload"])
+        edits = data.get("edits")
+        if not edits or (isinstance(edits, dict) and not edits.get("remove")
+                         and not edits.get("add")):
+            # Unedited city: exactly the historical path.
+            layout = load_layout_from_dict(city["payload"])
+            try:
+                job_id = jobs.submit(layout, **options)
+            except JobBusy as exc:
+                return jsonify(error=str(exc), active_job_id=exc.job_id), 409
+            # Echo the resolved options so the client can show exactly what ran.
+            return jsonify(job_id=job_id, options=options)
         try:
-            job_id = jobs.submit(layout, **options)
+            layout, report = _edit_city(city, edits)
+        except EditError as exc:
+            return _edit_error(exc)
+        space = report["space"]
+        if not space["fits_without_roads"]:
+            return jsonify(
+                error=(f"the new buildings do not fit: they need {space['overflow']} more "
+                       f"cells than the city has free, even with zero roads"),
+                space=space, report=report), 400
+        if report["not_composable"]:
+            return jsonify(error="; ".join(w for w in report["warnings"]
+                                           if "rigid block" in w),
+                           report=report), 400
+        # Every published result carries what leaves the map and what was added,
+        # so the export lists the buildings to store.
+        edit_info = {"to_store": report["to_store"], "added": report["added"]}
+        try:
+            job_id = jobs.submit(layout, edit_info=edit_info, **options)
         except JobBusy as exc:
             return jsonify(error=str(exc), active_job_id=exc.job_id), 409
-        # Echo the resolved options so the client can show exactly what ran.
-        return jsonify(job_id=job_id, options=options)
+        return jsonify(job_id=job_id, options=options, edits=edits, report=report)
+
+    @app.get("/api/catalog")
+    def api_catalog():
+        """Search placeable building types: the bundled catalog plus the
+        city's own definitions when `city_id` names a cached city."""
+        city_id = request.args.get("city_id")
+        if city_id:
+            city = cache.get_city(city_id)
+            if city is None:
+                return jsonify(error="city not found"), 404
+            catalog = _catalog_for(city)
+        else:
+            catalog = Catalog(city_catalog_defs({}))
+        return jsonify(results=search_catalog(catalog, request.args.get("q", "")))
+
+    @app.post("/api/edits/preview")
+    def api_edits_preview():
+        """What an edit set would do, without running anything: buildings to
+        store, chain reattachments, the space pre-check and the seed verdict."""
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict) or not data.get("city_id"):
+            return jsonify(error="city_id is required"), 400
+        city = cache.get_city(data["city_id"])
+        if city is None:
+            return jsonify(error="city not found, load it first"), 400
+        try:
+            _, report = _edit_city(city, data.get("edits") or {})
+        except EditError as exc:
+            return _edit_error(exc)
+        return jsonify(report=report)
+
+    @app.put("/api/cities/<city_id>/edits")
+    def api_cities_edits(city_id):
+        if cache.get_city(city_id) is None:
+            return jsonify(error="not found"), 404
+        edits = request.get_json(silent=True)
+        if not isinstance(edits, dict):
+            return jsonify(error="expected a JSON object"), 400
+        cache.set_edits(city_id, edits)
+        return jsonify(ok=True)
 
     @app.get("/api/stream/<job_id>")
     def api_stream(job_id):
