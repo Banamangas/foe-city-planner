@@ -2108,7 +2108,10 @@ class RoadsFirstSearch:
                  early_publish: bool = False,
                  closure: str = "bfs",
                  union_polish: float = 0.0,
-                 union_m: int = 3):
+                 union_m: int = 3,
+                 mutation_polish: bool = False,
+                 mutation_reserve: float = 0.0,
+                 mutation_starts: int = 1):
         # Linked chains are placed as rigid composites so their links survive
         # (user-confirmed rule, 2026-11-11); every emitted layout is expanded
         # back to real buildings inside validate().
@@ -2138,6 +2141,15 @@ class RoadsFirstSearch:
         self.union_polish = union_polish
         self.union_m = union_m
         self.solved_networks: list = []   # (roads, layout, skeleton) from polish
+        # N6: skeleton-mutation hill climb (foeopt/mutation_polish.py) after
+        # every other polish phase, in the time left before the deadline.
+        # mutation_reserve seconds come off the walk AND the polish window's
+        # end (the window keeps its length), so a city that uses its whole box
+        # still gets a climb; 0 = leftover time only. mutation_starts: the
+        # incumbent's network, plus up to N-1 skeletons objective polish solved.
+        self.mutation_polish = mutation_polish
+        self.mutation_reserve = mutation_reserve if mutation_polish else 0.0
+        self.mutation_starts = mutation_starts
         self.source_layout = layout
         if military == "unconnected":
             # Explicit per-run choice: two-lane buildings are left off the road
@@ -2473,8 +2485,11 @@ class RoadsFirstSearch:
         # exact_finish runs last, inside the box: reserve its (small) solve.
         exact_reserve = min(EXACT_FINISH_S, self.time_box * 0.05) if self.exact_finish else 0.0
         deadline = time.monotonic() + self.time_box - exact_reserve
-        walk_deadline = deadline - polish_reserve - objective_reserve
-        polish_deadline = deadline - polish_reserve  # objective polish ends here
+        mutation_reserve = min(self.mutation_reserve, self.time_box * 0.5)
+        walk_deadline = deadline - polish_reserve - objective_reserve - mutation_reserve
+        # objective polish ends here; the mutation climb may run to mutation_end
+        polish_deadline = deadline - polish_reserve - mutation_reserve
+        mutation_end = deadline - polish_reserve
         hard_deadline = deadline + exact_reserve
         filler_stats = new_filler_stats()
         level_coverage: dict[int, dict] = {}
@@ -2706,6 +2721,18 @@ class RoadsFirstSearch:
 
         boundary_info: dict = {"probed": []}
 
+        def _mutation():
+            """N6: the skeleton-mutation climb, last polish before seed polish
+            and the exact finish, until mutation_end. None when off or idle."""
+            if not self.mutation_polish or latest["layout"] is None:
+                return None
+            from foeopt.mutation_polish import polish_mutation
+            with profile.timed("finish_mutation_polish"):
+                return polish_mutation(self, latest["layout"], latest["achieved"],
+                                       mutation_end, list(self.solved_networks),
+                                       on_improvement, should_stop,
+                                       starts=self.mutation_starts, init_args=init_args)
+
         try:
             if self.corpus_dir:
                 corpus = CorpusWriter(self.corpus_dir, layout)
@@ -2795,6 +2822,7 @@ class RoadsFirstSearch:
                             rebase_info = polish_rebased(
                                 self, latest["layout"], latest["achieved"], polish_deadline,
                                 on_improvement, should_stop, k=latest["k"])
+                    mutation_info = _mutation()
                     if self.exact_finish and latest["layout"] is not None:
                         with profile.timed("finish_exact"):
                             exact_info = self._apply_exact_finish(
@@ -2802,6 +2830,7 @@ class RoadsFirstSearch:
                     return {"verdict": "FAMILY_TOO_WEAK", "walk_complete": not truncated,
                             "best_achieved": latest["achieved"], "seed_input": seed_info,
                             "rebased_polish": rebase_info, "exact_finish": exact_info,
+                            "mutation_polish": mutation_info,
                             "deadline_hit": _should_stop(), "results": results,
                             "boundary_descent": boundary_info["probed"],
                             "profile": profile.as_dict(self.workers),
@@ -2893,6 +2922,7 @@ class RoadsFirstSearch:
                     rebase_info = polish_rebased(self, latest["layout"], latest["achieved"],
                                                  polish_deadline, on_improvement,
                                                  should_stop, k=latest["k"])
+            mutation_info = _mutation()
             polish_info = None
             if best is not None and self.seed_polish > 0:
                 with profile.timed("finish_seed_polish"):
@@ -2920,6 +2950,7 @@ class RoadsFirstSearch:
                     "objective_polish": objective_info,
                     "rebased_polish": rebase_info,
                     "union_polish": union_info,
+                    "mutation_polish": mutation_info,
                     "seed_input": seed_info,
                     "exact_finish": exact_info,
                     "filler_failures": summarise_fillers(filler_stats),
