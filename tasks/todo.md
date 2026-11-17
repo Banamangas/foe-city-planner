@@ -1721,7 +1721,7 @@ the built bundle is served and contains the new panels, and drove /api/catalog a
 Tree-shaped chains (Mughals: TH is the main, never removable) and hippodrome (two mains) are
 handled generically but untested on real data.
 
-## X — Export the result as a v3 city file (Forge Hammer planner format)  (DRAFT 2026-11-17, awaiting user review)
+## X — Export the result as a v3 city file (Forge Hammer planner format)  (APPROVED 2026-11-17, in progress)
 
 **Today:** "Export" in the result panel downloads the optimizer's internal JSON (`<city>-k<k>.layout.json`:
 roads as [x,y,level] + building positions by entity id). The city export (`.city`) is the cached
@@ -1757,7 +1757,7 @@ and mapData), so it can't rebuild a full v3 file either.
 
 ### Decisions (user, 2026-11-17)
 1. Target: the Forge Hammer city planner. The v3 files ARE its export/import format.
-2. storedBuildings: explained to the user (My-City-V2 has 192 = its own plan's storage, 144 of them
+2. storedBuildings: REPLACE with exactly our removed buildings (user: yes). (My-City-V2 has 192 = its own plan's storage, 144 of them
    copies of buildings in the actual city). Recommended: REPLACE with exactly our removed buildings,
-   since the export replaces the plan. Awaiting the user's answer.
+   since the export replaces the plan.)
 3. Always optimize from the actual city (cityData), never from the plan (mapBuildings).
