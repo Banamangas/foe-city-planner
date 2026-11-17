@@ -1720,3 +1720,43 @@ the built bundle is served and contains the new panels, and drove /api/catalog a
 /api/edits/preview on a live server (darkzig: link_to required with both pirate mains listed).
 Tree-shaped chains (Mughals: TH is the main, never removable) and hippodrome (two mains) are
 handled generically but untested on real data.
+
+## X — Export the result as a v3 city file (FoE Helper planner format)  (DRAFT 2026-11-17, awaiting user review)
+
+**Today:** "Export" in the result panel downloads the optimizer's internal JSON (`<city>-k<k>.layout.json`:
+roads as [x,y,level] + building positions by entity id). The city export (`.city`) is the cached
+UPLOAD, not the result. The cache stores a slimmed upload (stripV3 keeps only id/cityentity_id/type/x/y
+and mapData), so it can't rebuild a full v3 file either.
+
+**What the v3 format is (measured on the 13 files):**
+- `cityData` = the city as it is in-game (with era, level, bonuses per entity).
+- `mapBuildings` = the FoE Helper PLANNER layout: `{metaId, x, y, era, custom}` per building INCLUDING
+  streets. For 12 cities it mirrors cityData exactly (vini 588/588, sinj 479/479; the gap to cityData is
+  off-grid entities). My-City-V2 is a plan in progress: only 17 of 325 entries match the city,
+  116 are `custom: true` (not owned yet) and 192 sit in `storedBuildings`.
+- `storedBuildings` = the planner's storage, same `{metaId, x, y, era, custom}` shape.
+- So the right export is: same file, `cityData` untouched, the optimized layout written into
+  `mapBuildings`, removed buildings into `storedBuildings`.
+
+### Plan
+- [ ] Cache the FULL v3 upload (70-260 KB; stays local in webapp/cities.db, never sent anywhere);
+      the optimizer still loads from cityData. Old slim caches: export says "re-upload the file".
+- [ ] `foeopt/export_v3.py`: `to_v3(original, result_layout, to_store, added)`:
+      - mapBuildings: one entry per placed building (metaId = cityentity_id, x/y = new position,
+        era = the entity's cityData era, custom = false), plus one per road cell with the street
+        metaId the city already uses for that level (level 1 / two-lane read from cityData; two-lane
+        tiles are 2x2: one entry per tile, not per cell — verify against an upload).
+      - added buildings: custom = true, era = currentEra.
+      - storedBuildings: removed buildings (+ whatever was already stored? see question 2).
+      - off-grid entities untouched; every other top-level field copied verbatim.
+- [ ] Round trip: load the exported file's mapBuildings as a city and get the same layout back
+      (positions, roads, legality valid); for an unedited, unoptimized city, export == upload's mapBuildings.
+- [ ] `GET /api/layouts/<id>/export.v3` (and for the live result) + an "Export for FoE Helper" button;
+      keep the internal JSON export as "Export (debug)".
+- [ ] Tests: unit (entries, era, custom, roads per level, stored), API, round trip on 3 real cities.
+
+### Questions for the user
+1. Is the target the FoE Helper city planner (import the file there and rebuild in-game from its overlay)?
+2. `storedBuildings`: replace with exactly the removed buildings, or append to what the planner already stored?
+3. My-City-V2's file holds a plan that differs from the city. The optimizer works on the city
+   (`cityData`). Should it ever start from the plan (`mapBuildings`) instead?
