@@ -98,8 +98,10 @@ def test_pick_k_start_on_user_city(repo_root):
 
 @pytest.mark.parametrize("name,expected", [
     ("CityMap-Born-FR16-2026-07-07.json", 96),    # k_max=206, sigma/2=88 -> min(206, 96) = 96
-    ("CityMap-Born-FR17-2026-07-07.json", 129),   # k_max=193, sigma/2=121 -> min(193, 129) = 129
-    ("CityMap-Born-FR24-2026-07-07.json", 246),   # k_max=268, sigma/2=238 -> min(268, 246) = 246
+    # FR17/FR24: 3 / 1 GR25 "Niv. 2" buildings need no road (catalog rule, 2026-11-17),
+    # so sigma/2 drops 121 -> 117 and 238 -> 236; the start keeps the same margin.
+    ("CityMap-Born-FR17-2026-07-07.json", 125),   # sigma/2=117 -> min(k_max, 125) = 125
+    ("CityMap-Born-FR24-2026-07-07.json", 244),   # sigma/2=236 -> min(k_max, 244) = 244
 ])
 def test_pick_k_start_on_fr_cities(repo_root, name, expected):
     """Three CityMap-Born-FRxx cities (added 2026-07-07): k_start = min(k_max, ceil(sigma/2)+8)."""
