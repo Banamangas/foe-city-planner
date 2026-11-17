@@ -2920,3 +2920,10 @@ That is a modelling gap (fillers outside the model), not a scheduling one.
 - **Rule:** when reading a catalog field, survey ALL entities for every place that field can
   live (abilities AND components AND top-level) before trusting a count of zero. A "0 chains"
   or "0 two-lane" result on a city with event buildings is a red flag, not a finding.
+
+## 2026-11-17: killing a benchmark by command line also matched its parent shell
+- **Mistake:** `pgrep -f "bench.py run --name m1 "` returned the wrapping `bash -c "...; next cmd"`
+  first, so killing that tree also dropped the queued follow-up run (FR24).
+- **Rule:** to stop one bench, match the python process exactly (`pgrep -f "^.*python scripts/bench.py run --name m1 "`
+  or read the pid from output/bench/.lock), and never chain follow-up runs in the same shell as
+  a run you may need to stop. Queue each run as its own background command (the lock serialises them).
