@@ -462,6 +462,11 @@ SMOKE_PRESET: dict = {
 # 600 s never worse (better 2, tie 4). 120 s has one darkzig pair worse by 1 (its +-2
 # noise) against FR17 -2 in both pairs. First solver layout 31 s -> 1-2 s; walk idle
 # 38-71% -> 2-4%. Mechanism: the batch walk overran into the polish reserve.
+# rebase_iterate (Q4) -- adopted 2026-11-17, preset vs iter, 600 s (output/bench/q4-iter*):
+#     FR24 229,229 -> 219,219   user 142,142 -> 142,142
+#     darkzig 90 -> 89   FR16 67 -> 67   FR17 103 -> 103   (never worse in 7 pairs)
+# Rebases on each improvement until no gain (60 s cap per consumer-only solve) and
+# tries the solver's earlier solutions when fillers do not fit.
 BEST_PRESET: dict = {
     "pattern_family": "nonuniform",
     "quality_index_band": "3,4",
@@ -481,6 +486,7 @@ BEST_PRESET: dict = {
     "seed_input": True,
     "scheduler": "queue",
     "early_publish": True,
+    "rebase_iterate": True,
 }
 
 DEFAULTS: dict = {s["name"]: s["default"] for s in OPTION_SPECS}
