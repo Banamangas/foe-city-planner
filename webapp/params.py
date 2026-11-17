@@ -500,6 +500,12 @@ SMOKE_PRESET: dict = {
 #     darkzig 90 -> 89   FR16 67 -> 67   FR17 103 -> 103   (never worse in 7 pairs)
 # Rebases on each improvement until no gain (60 s cap per consumer-only solve) and
 # tries the solver's earlier solutions when fillers do not fit.
+# mutation polish (N5/N6) -- adopted 2026-11-17 with the reserve gated to long boxes,
+# confirmation on the merged code (output/bench/m1*.jsonl; darkzig excluded: run before
+# the component-chain fix, its layouts break chains):
+#     120 s (= leftover only)  FR16 68,67 -> 67,67   FR17 104,104 -> 102,103
+#     600 s (= reserve 120 s)  FR16 67,67 -> 66,66   FR17 103,103 -> 102,102   FR24 219 -> 219
+# Never worse on every applicable pair. At 120 s the reserve itself lost FR17 104 -> 105.
 BEST_PRESET: dict = {
     "pattern_family": "nonuniform",
     "quality_index_band": "3,4",
@@ -520,6 +526,9 @@ BEST_PRESET: dict = {
     "scheduler": "queue",
     "early_publish": True,
     "rebase_iterate": True,
+    "mutation_polish": True,
+    "mutation_reserve": 120.0,
+    "mutation_reserve_min_box": 300.0,
 }
 
 DEFAULTS: dict = {s["name"]: s["default"] for s in OPTION_SPECS}

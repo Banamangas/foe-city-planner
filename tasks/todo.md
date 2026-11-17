@@ -1583,3 +1583,8 @@ darkzig chains 16x3..16x5 -> ~1750; essay 11x6 -> 1448; vini ~2300. All composab
 - [ ] Gate: agrou gets a skeleton-made layout (today expected FAMILY_TOO_WEAK -> seed only);
       essay/darkzig not worse. All results pass full legality (chains linked).
 - [ ] Re-baseline darkzig under the full chain rule (records 87-90 break component chains).
+- [x] N6 ADOPTED (2026-11-17): BEST_PRESET mutation_polish + reserve 120 s for boxes >= 300 s
+      (mutation_reserve_min_box). m1 confirmation, darkzig excluded (pre-chain-fix):
+      120 s leftover-only better 3/worse 0; 600 s reserve FR16 66,66 FR17 102,102 (4/4 better),
+      FR24 tie 219. The leftover-only arm's FR24 220 came from rebased polish BEFORE the climb
+      (run-to-run variance), not from the climb.
