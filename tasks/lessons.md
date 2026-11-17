@@ -2927,3 +2927,11 @@ That is a modelling gap (fillers outside the model), not a scheduling one.
 - **Rule:** to stop one bench, match the python process exactly (`pgrep -f "^.*python scripts/bench.py run --name m1 "`
   or read the pid from output/bench/.lock), and never chain follow-up runs in the same shell as
   a run you may need to stop. Queue each run as its own background command (the lock serialises them).
+
+## 2026-11-17: wait loops that never end
+- **Mistake:** `until ! pgrep -f "n7-smoke"; do sleep 30; done` and `while pgrep -f "pytest -q ..."`
+  match their OWN `zsh -c` command line, so they loop forever; `until grep -q passed FILE` loops
+  forever when the run ends another way. Four such loops ran 2-8 h after their target finished.
+- **Rule:** wait on a background command's completion notification, not a polling loop. If a loop
+  is unavoidable, wait on a pid (`while kill -0 $PID`) or use `pgrep -f "[n]7-smoke"`, and give it a
+  timeout. Check for leftover loops when a run finishes.
