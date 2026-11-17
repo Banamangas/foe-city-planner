@@ -1588,3 +1588,68 @@ darkzig chains 16x3..16x5 -> ~1750; essay 11x6 -> 1448; vini ~2300. All composab
       120 s leftover-only better 3/worse 0; 600 s reserve FR16 66,66 FR17 102,102 (4/4 better),
       FR24 tie 219. The leftover-only arm's FR24 220 came from rebased polish BEFORE the climb
       (run-to-run variance), not from the climb.
+
+## E — City edits: remove buildings, add new ones (DRAFT 2026-11-17, awaiting user review)
+
+**Why:** the point of rearranging a city is to make room. The June static UI could do this
+(`foeopt/editing.py`: remove by id, add by width x length); the JSON-API rewrite (771a827)
+and the React SPA (dae5f3c) dropped the endpoint and the UI. Only `apply_edits` and its
+tests survive, uncalled.
+
+**Facts that shape the design (checked in code):**
+- Chain links are derived from the positions in the (edited) layout (`chains.linked_groups`,
+  `legality.chain_links`). So removing pieces needs no special case in the optimizer, but a new
+  chain piece has no position, so no link to keep: it would be placed unlinked.
+- `seed_input` publishes the upload only if it passes the full legality check
+  (`_seed_from_input`). The upload minus removed buildings stays legal, so the instant result
+  and the rebased polish still work. Unplaced additions would fail that check.
+- `apply_edits` sets roads={} (made for the old repacker), so it would silently switch off the
+  seed even for a removal-only edit. It also creates added buildings as type "custom", with no
+  catalog data.
+
+### E1. Backend
+- [ ] `GET /api/catalog?q=&city_id=`: search the bundled catalog, plus the city's helper
+      CityEntities when present, by name or id. Returns id, name, type, w x l, road need and
+      level, chain id, head/patch. Hide off-grid types and streets; limit 30 results.
+- [ ] Rewrite `apply_edits(layout, remove_ids, add)` with catalog-backed additions:
+      `{"cityentity_id": id, "count": n}` gives the real size, `needs_road = street_requirement > 0`,
+      `road_level`, set/chain ids. Keep `{"width","length","needs_road","name"}` for custom sizes.
+      Keep the upload's roads. Townhall: never removable (existing rule).
+- [ ] Edits are per-city state, sent with `/api/optimize` as `edits: {remove: [...], add: [...]}`.
+      They are validated (unknown id or entity -> 400) and echoed back with the options.
+- [ ] Seed with edits: removal-only keeps `seed_input` (upload minus removed). With
+      additions, first try greedy-placing them in free cells of the upload. On success the seed
+      stays (the instant result keeps working). Otherwise skip the seed with reason
+      "N new buildings not placed".
+- [ ] Space pre-check in the response: free cells after edits = region minus buildings, and a
+      lower bound on roads. If the new buildings cannot fit even with zero roads, return an
+      error that names the overflow, not a 10-minute FAMILY_TOO_WEAK.
+- [ ] Legality: result checked against the EDITED inventory (`check(result, edited)`), still
+      no rotation; a run on an unedited city must give byte-identical options and behaviour.
+
+### E2. Frontend
+- [ ] BuildingsPanel: a "remove" toggle per building, plus "remove all of this type". Click a
+      building on the map to toggle it. Removed buildings shown hatched or faded, not hidden.
+- [ ] Warn when removing a chain piece breaks the chain behind it (later patches lose their
+      link). Offer "remove the rest of this chain".
+- [ ] "Add buildings" panel: catalog search, count, then a list of additions with size and road
+      tags; custom size entry for anything missing from the catalog.
+- [ ] Summary bar: removed n (cells), added m (cells), free cells after edits, and the space
+      pre-check warning.
+- [ ] Edits saved with the city (survive reload) and stored with each saved layout, so a
+      result says which edit set it was made for.
+- [ ] Result view/export: added buildings drawn at their placed position, named from the catalog.
+
+### E3. Verify
+- [ ] Unit: apply_edits (catalog add, custom add, remove keeps roads, TH protected, bad id).
+- [ ] API: optimize with edits; unedited run unchanged; space pre-check error.
+- [ ] End-to-end: FR16, remove 3 buildings + add 2 catalog buildings (one road-needing),
+      300 s. Result legal against the edited inventory, nothing rotated, removed ones absent.
+      Also a removal-only run: the seed is used and the first result arrives in under 2 s.
+- [ ] Browser walkthrough of the UI flow (record a GIF).
+
+### Open questions for the user
+1. Adding chain buildings: v1 = heads and non-chain only, with patches added as a full linked
+   set later? (A lone new patch would be placed unlinked.)
+2. Removed buildings: just absent from the result, or listed as "to store" in the export?
+3. Keep the custom width x height entry, or catalog-only?
