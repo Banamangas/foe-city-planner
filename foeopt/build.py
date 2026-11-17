@@ -39,7 +39,11 @@ def build_layout(city_data: dict, helper_data: dict) -> Layout:
     for e, fp in candidates:
         cid = e["cityentity_id"]
         is_th = e["type"] == "main_building"
-        needs_road = ("connected" in e) and bool(fp.border_cells() & road_cells)
+        adjacent = bool(fp.border_cells() & road_cells)
+        # Catalog requirement when known (see loader._build_combined); `connected`
+        # is the catalog-less fallback.
+        needs_road = adjacent and (catalog.street_requirement(cid) > 0 if catalog.known
+                                   else "connected" in e)
         building = Building(
             entity_id=e["id"],
             cityentity_id=cid,
