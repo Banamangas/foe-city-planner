@@ -1589,7 +1589,7 @@ darkzig chains 16x3..16x5 -> ~1750; essay 11x6 -> 1448; vini ~2300. All composab
       FR24 tie 219. The leftover-only arm's FR24 220 came from rebased polish BEFORE the climb
       (run-to-run variance), not from the climb.
 
-## E — City edits: remove buildings, add new ones (BUILT 2026-11-17 on feat/e-city-edits, awaiting review)
+## E — City edits: remove buildings, add new ones (DONE 2026-11-17, merged into feat/backlog-2026-11; user tried the UI: works)
 
 **Why:** the point of rearranging a city is to make room. The June static UI could do this
 (`foeopt/editing.py`: remove by id, add by width x length); the JSON-API rewrite (771a827)
