@@ -1410,8 +1410,17 @@ city is legal at 232 and polishes to 220.
 
 ### Q4. Seed from the incumbent more aggressively on dense cities  [M]
 `seed_input` took FR24 232 -> 220 in one 16 s solve; then the second solve failed fillers.
-- [ ] Iterate rebased polish to a fixed point with the model-filler retry, alternating with
+- [x] Iterate rebased polish to a fixed point with the model-filler retry, alternating with
       the Q2 union (incumbent network ∪ best partial skeleton).
+      DONE 2026-11-17 on `feat/q4-iterated-rebase`, option `rebase_iterate` (off by default).
+      Review: docs/reviews/2026-11-17-q4-iterated-rebase.md. Measured: the consumer-only solve
+      hits about 220 on FR24 every time, but whether the fillers then fit is luck (the
+      219-229 spread). MAX_SOLVES=2 cut a chain that was still improving (86 s unused), and an
+      unbounded fast solve could eat the whole window. Fix: loop to a fixed point, 60 s fast
+      slices, and on a filler failure validate the solve's trail of earlier solutions
+      before the model-filler retry. Union alternation NOT added: no union members on
+      FR24/user. A/B 600 s: FR24 229,229 -> **219,219**, user 142 = 142, darkzig 90 -> 89
+      (noise), FR16 67 =, FR17 103 = -> never worse, ADOPT recommended (BEST_PRESET untouched).
 - [ ] User city (97% full, 142): run Q1's bound first -- it may already be near-optimal.
 
 ### Q5. Hints across skeletons for the position probe  [S]
