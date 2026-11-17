@@ -1577,8 +1577,8 @@ are linkPositions slots; heads have no head-sized slot). Big chains fit in very 
 so the city's own row/column widths decide where they can go.
 Data (empty-grid positions of each composite): agrou Breezemill 34 pieces 71x6 -> 14 positions;
 darkzig chains 16x3..16x5 -> ~1750; essay 11x6 -> 1448; vini ~2300. All composable.
-- [ ] Per composite: feasible anchors from the region shape (excluding TH cells per TH anchor).
-- [ ] If anchors < threshold (~50): sample one per skeleton (like th_anchors), carve its cells
+- [x] Per composite: feasible anchors from the region shape (excluding TH cells per TH anchor).
+- [x] If anchors < threshold (~50): sample one per skeleton (like th_anchors), carve its cells
       from the skeleton generator's region, fix it in the position model at that anchor.
 - [ ] Gate: agrou gets a skeleton-made layout (today expected FAMILY_TOO_WEAK -> seed only);
       essay/darkzig not worse. All results pass full legality (chains linked).
@@ -1661,3 +1661,14 @@ tests survive, uncalled.
    tail shifts with it. The UI says so ("P2, P3 will be reattached to <main>"), with "remove them
    too" as the alternative.
    Added patches use the same mechanism: they go into a free slot at the end of the chosen chain.
+- [x] Re-baseline darkzig under the full chain rule (records 87-90 break component chains).
+- 2026-11-17 done on `feat/n7-chain-anchors` (9a211a6; docs/reviews/2026-11-17-n7-chain-anchors.md).
+  Option `chain_anchors` (default 0 = off, byte-identical; 50 recommended: anchor counts are
+  14 for agrou and >= 1490 everywhere else). Pinned composites get one anchor per nonuniform
+  skeleton, carved out of the roads' region, joined to the trunk by a shortest path to the
+  contact edge, and fixed in the position model. A/B 600 s x2 (output/bench/2026-11-17-n7 in
+  /home/born/Github/foe-bench-n7): agrou 67,67 = 67,67; darkzig 90,88 = 90,88; essay 62,61 ->
+  61,61 (noise: nothing is pinned there). Verdict NEUTRAL, keep it off. The agrou gate is NOT
+  met: the walk SATs went from 0 to 27, but filler packing fails (fillers + consumers + TH fill
+  4293/4368 cells, so k <= 75 with zero slack). Next lever for agrou: pins + fillers_in_model.
+  New legal baselines: darkzig 88 (full chain rule), essay 61 (docs/records/).
