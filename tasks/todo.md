@@ -1525,3 +1525,13 @@ Machine rule: every CPU-heavy run (bench, probe studies) goes through the shared
   land near one (mean coverage 0.04-0.09 for both). The bottleneck is sampling, not grammar.
   Candidate next mechanism: directed skeleton search (mutate the incumbent/best SAT skeleton:
   move/extend/add a trunk or branch, re-probe) instead of more random families.
+- [x] N5. Directed skeleton mutation (branch `feat/n5-skeleton-mutation`, review
+      docs/reviews/2026-11-17-n5-skeleton-mutation.md there): one-arm mutations of a concrete
+      skeleton, judged by roads after the objective (probe + parent-hinted 12-thread solve).
+      **New legal records: darkzig 87 (was 88), FR17 102 (was 103; reproduced in 2 of 2
+      runs)**; darkzig repeat stayed 88. FR24: evaluator too weak (88/91 mutants UNKNOWN/UNSAT).
+      Records re-verified on the integration branch (legality, exact reroute optimal, inventory,
+      0 rotated, 0 overlap): docs/records/darkzig-87-roads-n5-mutation.json,
+      fr17-102-roads-n5-mutation.json. Not yet shown to beat production at equal wall time.
+- [ ] N6. Mutation search as an end-of-run phase (option, off by default), paired A/B at
+      600 s vs BEST_PRESET on darkzig/FR16/FR17.
