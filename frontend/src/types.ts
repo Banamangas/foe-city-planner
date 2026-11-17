@@ -60,7 +60,7 @@ export type EditReport = {
   removed: number[];
   to_store: StoredBuilding[];
   reattached: { removed: number; moved: number[]; to: number | null; to_name: string | null;
-                ok: boolean; relinked?: boolean }[];
+                ok: boolean; relinked?: boolean; offset?: [number, number] }[];
   cascades: { main: number; main_name: string; stored: number[];
               relink_candidates: { entity_id: number; name: string }[] }[];
   added: AddedBuilding[];

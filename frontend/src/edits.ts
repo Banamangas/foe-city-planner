@@ -2,7 +2,7 @@
  *  The chain logic (reattach, store, end-of-chain slots) lives on the server
  *  (foeopt/editing.py); the UI only builds the edit set and shows the report. */
 import type {
-  AddSpec, AddedBuilding, BuildingSummary, CatalogEntry, EditReport, Edits,
+  AddSpec, AddedBuilding, BuildingSummary, BuildingView, CatalogEntry, EditReport, Edits,
 } from "./types";
 
 export const emptyEdits = (): Edits => ({ remove: [], add: [], relink: {} });
@@ -136,4 +136,52 @@ export function withAdded(
     });
   }
   return m;
+}
+
+/** The current map under an edit set. Removed buildings and the patches a
+ *  removed main sends to store are `off` (drawn hatched). A removed patch's
+ *  tail slides into its slot (`moved`), so the space that frees up is at the
+ *  END of the chain, not where the user clicked: `freed` lists those cells
+ *  (view coordinates, one per grid cell). The report is used only when it was
+ *  made for exactly this removal set; otherwise just the removals show. */
+export function editedView(
+  buildings: BuildingView[], edits: Edits, report: EditReport | null, cell: number,
+): { buildings: (BuildingView & { off?: boolean; moved?: boolean })[]; freed: [number, number][] } {
+  const removed = new Set(edits.remove);
+  const fresh = report !== null && report.removed.length === removed.size
+    && report.removed.every((id) => removed.has(id));
+  const off = new Set(removed);
+  const shift = new Map<number, [number, number]>();
+  if (fresh) {
+    for (const c of report.cascades) for (const id of c.stored) off.add(id);
+    for (const r of report.reattached) {
+      if (!r.ok || !r.offset) continue;
+      for (const id of r.moved) shift.set(id, r.offset);
+    }
+  }
+  const out: (BuildingView & { off?: boolean; moved?: boolean })[] = [];
+  const cellsOf = (b: BuildingView) => {
+    const cs: string[] = [];
+    for (let x = b.x; x < b.x + b.w; x += cell) for (let y = b.y; y < b.y + b.h; y += cell) cs.push(`${x},${y}`);
+    return cs;
+  };
+  const before = new Set<string>(), after = new Set<string>();
+  for (const b of buildings) {
+    const id = Number(b.id);
+    const d = shift.get(id);
+    if (d) {
+      const nb = { ...b, x: b.x + d[0] * cell, y: b.y + d[1] * cell, moved: true };
+      cellsOf(b).forEach((c) => before.add(c));
+      cellsOf(nb).forEach((c) => after.add(c));
+      out.push(nb);
+    } else if (shift.size && removed.has(id) && fresh
+               && report!.reattached.some((r) => r.ok && r.offset && r.removed === id)) {
+      cellsOf(b).forEach((c) => before.add(c));   // its slot is taken by the tail
+    } else {
+      out.push(off.has(id) ? { ...b, off: true } : b);
+    }
+  }
+  const freed = [...before].filter((c) => !after.has(c))
+    .map((c) => c.split(",").map(Number) as [number, number]);
+  return { buildings: out, freed };
 }
