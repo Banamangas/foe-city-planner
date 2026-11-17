@@ -94,7 +94,8 @@ class JobManager:
                union_m: int = 3,
                mutation_polish: bool = False,
                mutation_reserve: float = 0.0,
-               mutation_starts: int = 1) -> str:
+               mutation_starts: int = 1,
+               mutation_reserve_min_box: float = 0.0) -> str:
         """Start a RoadsFirstSearch in a background thread and return its id.
 
         Keyword names match webapp.params.OPTION_SPECS one for one, so the
@@ -186,6 +187,7 @@ class JobManager:
                     mutation_polish=mutation_polish,
                     mutation_reserve=mutation_reserve,
                     mutation_starts=mutation_starts,
+                    mutation_reserve_min_box=mutation_reserve_min_box,
                 )
                 res = search.run(on_improvement=on_improvement,
                                  on_status=on_status,

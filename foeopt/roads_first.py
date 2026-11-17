@@ -2111,7 +2111,8 @@ class RoadsFirstSearch:
                  union_m: int = 3,
                  mutation_polish: bool = False,
                  mutation_reserve: float = 0.0,
-                 mutation_starts: int = 1):
+                 mutation_starts: int = 1,
+                 mutation_reserve_min_box: float = 0.0):
         # Linked chains are placed as rigid composites so their links survive
         # (user-confirmed rule, 2026-11-11); every emitted layout is expanded
         # back to real buildings inside validate().
@@ -2150,6 +2151,10 @@ class RoadsFirstSearch:
         self.mutation_polish = mutation_polish
         self.mutation_reserve = mutation_reserve if mutation_polish else 0.0
         self.mutation_starts = mutation_starts
+        # The reserve applies only to boxes of at least this many seconds: at 120 s
+        # it costs the walk half its time (FR17 104 -> 105), at 600 s it gains
+        # (FR16 67 -> 66, FR17 103 -> 102, output/bench/m1.jsonl). 0 = always.
+        self.mutation_reserve_min_box = mutation_reserve_min_box
         self.source_layout = layout
         if military == "unconnected":
             # Explicit per-run choice: two-lane buildings are left off the road
@@ -2485,7 +2490,8 @@ class RoadsFirstSearch:
         # exact_finish runs last, inside the box: reserve its (small) solve.
         exact_reserve = min(EXACT_FINISH_S, self.time_box * 0.05) if self.exact_finish else 0.0
         deadline = time.monotonic() + self.time_box - exact_reserve
-        mutation_reserve = min(self.mutation_reserve, self.time_box * 0.5)
+        mutation_reserve = (min(self.mutation_reserve, self.time_box * 0.5)
+                            if self.time_box >= self.mutation_reserve_min_box else 0.0)
         walk_deadline = deadline - polish_reserve - objective_reserve - mutation_reserve
         # objective polish ends here; the mutation climb may run to mutation_end
         polish_deadline = deadline - polish_reserve - mutation_reserve

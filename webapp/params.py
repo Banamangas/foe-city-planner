@@ -201,6 +201,14 @@ OPTION_SPECS: list[dict] = [
                 "box. 0 = only the time left over.",
     },
     {
+        "name": "mutation_reserve_min_box", "cli": "--mutation-reserve-min-box",
+        "type": "float", "default": 0.0, "min": 0.0, "max": 3600.0, "advanced": True,
+        "group": "budget", "label": "Mutation polish: reserve from box (s)",
+        "help": "Hold back the reserved seconds only when the time box is at "
+                "least this long; shorter boxes give the search all their time. "
+                "0 = always reserve.",
+    },
+    {
         "name": "mutation_starts", "cli": "--mutation-starts", "type": "int",
         "default": 1, "min": 1, "max": 8, "advanced": True,
         "group": "budget", "label": "Mutation polish: start networks",
