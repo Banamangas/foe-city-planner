@@ -2955,3 +2955,8 @@ That is a modelling gap (fillers outside the model), not a scheduling one.
   keys in JS order (verified: essay and antivol reproduce their cached ids).
 - Rule: when an id is a hash of JSON, define the canonical order explicitly, and test
   it with a reordered input, not only with the client the tests happen to use.
+
+## Profiling: py-spy hides CP-SAT time by default (2026-11-18)
+- A Python thread inside `CpSolver.solve` is blocked waiting on CP-SAT's C++ threads, so py-spy's default (idle samples dropped) shows almost no solver time and makes Python look dominant. CP-SAT's own threads are never sampled at all.
+- **Rule:** to split Python vs solver cost, run `py-spy record --idle --subprocesses` AND measure real CPU per process from /proc (utime+stime, all threads, every descendant). Forkserver pool workers are not your children, so `RUSAGE_CHILDREN` reports 0 for them.
+- Never `pkill -f <pattern>` where the pattern also appears in the calling shell's command line: it kills the shell (exit 144). Kill by pid.
