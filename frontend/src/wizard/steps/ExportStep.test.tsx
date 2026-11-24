@@ -5,6 +5,7 @@ import * as api from "../../api";
 import { useCityStore } from "../../stores/cityStore";
 import { layoutForExport } from "../stats";
 import type { LayoutEntry } from "../types";
+import * as session from "../session";
 import { useWizardStore } from "../wizardStore";
 import { ExportStep } from "./ExportStep";
 
@@ -44,5 +45,13 @@ describe("ExportStep", () => {
     await waitFor(() => expect(screen.getByText("The file could not be created.")).toBeTruthy());
     expect(document.body.textContent).not.toContain("Traceback");
     expect(screen.getByText("Copy details for a bug report")).toBeTruthy();
+  });
+
+  it("Start again forgets the saved session", () => {
+    const forget = vi.spyOn(session, "forgetSession").mockImplementation(() => {});
+    render(<ExportStep />);
+    fireEvent.click(screen.getByText("Start again with another city"));
+    expect(forget).toHaveBeenCalled();
+    expect(useWizardStore.getState().step).toBe(1);
   });
 });

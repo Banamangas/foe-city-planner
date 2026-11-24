@@ -225,4 +225,28 @@ describe("LoadStep continue card", () => {
     await waitFor(() => expect(useCityStore.getState().city?.city_id).toBe("c9"));
     expect(useWizardStore.getState().fileName).toBe("town.json");
   });
+
+  it("is hidden while a dropped file is being read", async () => {
+    vi.stubGlobal("Worker", class {
+      onmessage: ((e: any) => void) | null = null;
+      postMessage() { queueMicrotask(() => this.onmessage?.({ data: { phase: "done", slim: {} } })); }
+      terminate() {}
+    });
+    vi.spyOn(api, "apiLoadResult").mockReturnValue(new Promise(() => {}));
+    render(<LoadStep />);
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    Object.defineProperty(input, "files", { value: [new File(["x"], "town.json")], configurable: true });
+    fireEvent.change(input);
+    await screen.findByText("Reading your city…");
+    act(() => useWizardStore.getState().setResume({ ...saved }));
+    expect(screen.queryByText("Continue where you left off")).toBeNull();
+    expect(screen.getByText("Drop your city file here")).toBeTruthy();
+  });
+
+  it("is hidden once a city is loaded", () => {
+    useCityStore.setState({ city: { city_id: "c2", buildings: [] } as any });
+    useWizardStore.getState().setResume({ ...saved });
+    render(<LoadStep />);
+    expect(screen.queryByText("Continue where you left off")).toBeNull();
+  });
 });

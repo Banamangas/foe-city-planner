@@ -4,7 +4,7 @@ import * as api from "../api";
 import { useCityStore } from "../stores/cityStore";
 import { runKey } from "./run";
 import {
-  parseSession, restoreSession, SESSION_VERSION, startDesktopSession, toSession, type Session,
+  forgetSession, parseSession, restoreSession, SESSION_VERSION, startDesktopSession, toSession, type Session,
 } from "./session";
 import type { LayoutEntry } from "./types";
 import { useWizardStore } from "./wizardStore";
@@ -206,6 +206,44 @@ describe("startDesktopSession", () => {
     expect(puts()).toHaveLength(1);
     expect(puts()[0][0]).toBe("/api/session");
     expect(JSON.parse(puts()[0][1].body).cityId).toBe("c1");
+    stop();
+  });
+
+  it("keeps saving during a search (changes every 200 ms)", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string) =>
+      url === "/api/session" ? respond(404, '{"error": "no session"}') : respond(204, ""));
+    vi.stubGlobal("fetch", fetchMock);
+    const stop = startDesktopSession();
+    await vi.waitFor(() =>
+      expect(fetchMock.mock.calls.map((c) => c[0])).toContain("/api/ping"));
+    vi.useFakeTimers();
+    useCityStore.getState().setCity(city("c1"));
+    for (let i = 0; i < 15; i++) {
+      useWizardStore.setState({ run: { key: "k", elapsed: i } as any });
+      await vi.advanceTimersByTimeAsync(200);
+    }
+    const puts = fetchMock.mock.calls.filter((c) => c[1]?.method === "PUT");
+    expect(puts.length).toBeGreaterThanOrEqual(2);
+    stop();
+  });
+
+  it("forgetSession deletes the saved session only in desktop mode", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(respond(404, "<html></html>", "text/html"));
+    vi.stubGlobal("fetch", fetchMock);
+    let stop = startDesktopSession();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 0));
+    forgetSession();
+    expect(fetchMock.mock.calls.filter((c) => c[1]?.method === "DELETE")).toHaveLength(0);
+    stop();
+
+    fetchMock.mockImplementation(async (url: string) =>
+      url === "/api/session" ? respond(404, '{"error": "no session"}') : respond(204, ""));
+    stop = startDesktopSession();
+    await vi.waitFor(() =>
+      expect(fetchMock.mock.calls.map((c) => c[0])).toContain("/api/ping"));
+    forgetSession();
+    expect(fetchMock.mock.calls.filter((c) => c[1]?.method === "DELETE")).toHaveLength(1);
     stop();
   });
 });

@@ -3,6 +3,7 @@ import { apiExportV3 } from "../../api";
 import { useCityStore } from "../../stores/cityStore";
 import { Guide } from "../Guide";
 import { StepNav } from "../StepNav";
+import { forgetSession } from "../session";
 import { layoutForExport } from "../stats";
 import { useT, useWizardStore } from "../wizardStore";
 
@@ -83,7 +84,7 @@ export function ExportStep() {
         <button type="button" className="link" onClick={() => setGuide(true)}>{t("export.howImport")}</button>
       </p>
       <p>
-        <button type="button" className="btn" onClick={reset}>{t("export.again")}</button>
+        <button type="button" className="btn" onClick={() => { forgetSession(); reset(); }}>{t("export.again")}</button>
       </p>
       {guide && <Guide kind="import" onClose={() => setGuide(false)} />}
       <StepNav canBack={true} canNext={false} onBack={() => go(4)} onNext={() => go(5)} />

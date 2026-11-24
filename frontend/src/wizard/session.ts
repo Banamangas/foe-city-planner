@@ -1,7 +1,7 @@
 // Desktop app: "continue where you left off". The wizard's state is saved on the server
 // (one file, overwritten) and offered back on the next start. In the developer setup the
 // session routes don't exist and all of this is skipped silently.
-import { apiCities, apiCity, apiLoadResult, apiSessionGet, apiSessionPut } from "../api";
+import { apiCities, apiCity, apiLoadResult, apiSessionDelete, apiSessionGet, apiSessionPut } from "../api";
 import { normalizeEdits } from "../edits";
 import { useCityStore } from "../stores/cityStore";
 import type { Edits } from "../types";
@@ -96,21 +96,26 @@ export async function restoreSession(s: Session, lang: string): Promise<boolean>
   return true;
 }
 
-/** Saves toSession() one second after the last change of either store (identical saves skipped). */
+/** True once GET /api/session showed this is the desktop app (until the wizard stops). */
+let desktopMode = false;
+/** JSON of the last session saved, so identical saves are skipped. */
+let lastSaved = "";
+
+/** Throttled: saves toSession() at most once a second, reading the stores when the timer fires
+ *  (a debounce would never fire during a search, whose heartbeat changes the store constantly). */
 function startSaving(): () => void {
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let last = "";
   const schedule = () => {
-    if (timer) clearTimeout(timer);
+    if (timer) return;
     timer = setTimeout(() => {
       timer = null;
       const s = toSession();
       if (!s) return;
       const json = JSON.stringify(s);
-      if (json === last) return;
-      last = json;
+      if (json === lastSaved) return;
+      lastSaved = json;
       apiSessionPut(s).catch(() => {
-        last = "";
+        lastSaved = "";
       });
     }, SAVE_DEBOUNCE_MS);
   };
@@ -131,6 +136,7 @@ export function startDesktopSession(): () => void {
   void (async () => {
     const r = await apiSessionGet();
     if (stopped || !r.desktop) return;
+    desktopMode = true;
     stops.push(startPinging(), startSaving());
     if (r.session === null) return;
     const ids = await apiCities().then((list) => list.map((c) => c.id)).catch(() => [] as string[]);
@@ -140,6 +146,14 @@ export function startDesktopSession(): () => void {
   })();
   return () => {
     stopped = true;
+    desktopMode = false;
     stops.forEach((stop) => stop());
   };
+}
+
+/** The player starts over: the next launch must not offer the city they just left. */
+export function forgetSession(): void {
+  if (!desktopMode) return;
+  lastSaved = "";
+  void apiSessionDelete().catch(() => undefined);
 }

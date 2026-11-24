@@ -132,6 +132,7 @@ export function LoadStep() {
     const seq = ++seqRef.current;
     setProblem(null);
     setBusy(true);
+    useWizardStore.getState().setResume(null);
     useCityStore.getState().reset();
     useWizardStore.getState().invalidateRun();
     useWizardStore.setState({ keepUnconnected: null });
@@ -172,7 +173,7 @@ export function LoadStep() {
   return (
     <section className="step-body">
       <h2>{t("load.title")}</h2>
-      {resume && !city ? (
+      {resume && !city && !busy ? (
         <div className="resume-card">
           <h3>{t("resume.title")}</h3>
           <p>{t("resume.file", { name: resume.fileName })}</p>
