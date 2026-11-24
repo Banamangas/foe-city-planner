@@ -351,9 +351,15 @@ def create_app(db_path: str | None = None) -> Flask:
         if not jobs.exists(job_id):
             return jsonify(error="unknown job"), 404
 
+        def layout_events():
+            # Every kept layout (webapp.collector), as soon as it is found.
+            while (entry := jobs.pop_layout(job_id)) is not None:
+                yield f"event: layout\ndata: {json.dumps(entry)}\n\n"
+
         def generate():
             while not jobs.is_done(job_id):
                 imp = jobs.pop_improvement(job_id, timeout=0.2)
+                yield from layout_events()
                 if imp is not None:
                     yield f"event: improvement\ndata: {json.dumps(imp)}\n\n"
                 else:
@@ -361,6 +367,7 @@ def create_app(db_path: str | None = None) -> Flask:
                     yield f"event: heartbeat\ndata: {json.dumps(st)}\n\n"
             while True:
                 imp = jobs.pop_improvement(job_id, timeout=0.05)
+                yield from layout_events()
                 if imp is None:
                     break
                 yield f"event: improvement\ndata: {json.dumps(imp)}\n\n"

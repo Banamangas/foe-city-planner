@@ -9,6 +9,7 @@ from foeopt.legality import check as check_legality
 from foeopt.model import Layout
 from foeopt.stats import city_stats
 from foeopt.roads_first import RoadsFirstSearch
+from webapp.collector import LayoutCollector, layout_to_dict
 
 
 def _parse_range(spec: str):
@@ -33,18 +34,6 @@ def _parse_modes(spec: str):
     if not spec or spec == "off":
         return None
     return (spec,)
-
-
-def layout_to_dict(layout: Layout) -> dict:
-    """Serialize a validated Layout to the compact dict format for SSE/API."""
-    return {
-        # [x, y, level]: level 2 marks a two-lane tile cell (older readers
-        # that destructure [x, y] keep working).
-        "roads": [[x, y, lvl] for (x, y), lvl in sorted(layout.roads.items())],
-        "buildings": {str(b.entity_id): [b.footprint.x, b.footprint.y,
-                                         b.footprint.width, b.footprint.length]
-                      for b in layout.buildings},
-    }
 
 
 class JobBusy(RuntimeError):
@@ -112,6 +101,7 @@ class JobManager:
         job_id = uuid.uuid4().hex
         stop_event = threading.Event()
         improvements: queue.Queue = queue.Queue()
+        layouts: queue.Queue = queue.Queue()
         state = {"state": "running", "start": time.monotonic(), "end": None,
                  "result": None, "error": None,
                  "phase": None, "layouts_found": 0}
@@ -124,9 +114,19 @@ class JobManager:
                 "state": state,
                 "stop_event": stop_event,
                 "improvements": improvements,
+                "layouts": layouts,
             }
 
         last_legality: dict = {}
+        collector = LayoutCollector(layout, military=military, off_road=off_road)
+
+        def on_layout(lay, k, achieved):
+            # Every validated layout the search finds, not only improvements;
+            # each kept one is streamed as a "layout" event.
+            entry = collector.offer(lay, k, achieved)
+            state["layouts_found"] = collector.count
+            if entry is not None:
+                layouts.put(entry)
 
         def on_improvement(best_layout, k, achieved):
             # Every published layout carries its full game-legality verdict
@@ -137,7 +137,7 @@ class JobManager:
             last_legality.clear()
             last_legality.update(leg)
             imp = {"k": k, "achieved": achieved, "legality": leg,
-                   "stats": city_stats(best_layout),
+                   "stats": city_stats(best_layout, reference=layout),
                    **layout_to_dict(best_layout)}
             if edit_info:
                 imp.update(edit_info)
@@ -208,7 +208,9 @@ class JobManager:
                 res = search.run(on_improvement=on_improvement,
                                  on_status=on_status,
                                  should_stop=should_stop,
-                                 on_phase=on_phase)
+                                 on_phase=on_phase,
+                                 on_layout=on_layout)
+                res["layouts"] = collector.entries()
                 if last_legality:
                     res["legality"] = dict(last_legality)
                 if edit_info:
@@ -241,12 +243,21 @@ class JobManager:
                     "phase": st["phase"], "layouts_found": st["layouts_found"]}
 
     def pop_improvement(self, job_id: str, timeout: float = 0.1) -> dict | None:
+        return self._pop(job_id, "improvements", timeout)
+
+    def pop_layout(self, job_id: str, timeout: float = 0.0) -> dict | None:
+        """The next kept layout entry (see LayoutCollector), or None."""
+        return self._pop(job_id, "layouts", timeout)
+
+    def _pop(self, job_id: str, channel: str, timeout: float) -> dict | None:
         with self._lock:
             job = self._jobs.get(job_id)
         if job is None:
             return None
         try:
-            return job["improvements"].get(timeout=timeout)
+            if timeout <= 0:
+                return job[channel].get_nowait()
+            return job[channel].get(timeout=timeout)
         except queue.Empty:
             return None
 

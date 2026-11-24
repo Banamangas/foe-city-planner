@@ -35,7 +35,7 @@ from foeopt.incumbent_polish import incumbent_positions
 from foeopt.legality import check as legality_check
 from foeopt.model import Layout
 from foeopt.roads_first import (OBJECTIVE_MARGIN_S, OBJECTIVE_MIN_S, Pattern,
-                                minimize_needed, model_fillers, validate)
+                                minimize_needed, model_fillers, report_layout, validate)
 
 MAX_ANCHORS = 150_000   # anchor literals; a bigger union is skipped and logged
 MAX_UNIONS = 6          # attempts per run
@@ -190,6 +190,8 @@ def polish_union(search, incumbent: Layout, achieved: int, end: float,
         row, lay = solve_union(search, plan, limit=limit, threads=threads,
                                closure=closure)
         report["tried"].append(row)
+        if lay is not None:
+            report_layout(search, lay, k, row["after"])
         if lay is not None and row["after"] < cur:
             cur = row["after"]
             report["after"] = cur

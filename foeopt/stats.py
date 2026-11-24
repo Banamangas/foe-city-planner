@@ -1,6 +1,8 @@
 """City statistics shown to the player: roads, road efficiency, coverage."""
 from __future__ import annotations
 
+from dataclasses import replace
+
 from foeopt.model import Layout
 from foeopt.validate import unsatisfied
 
@@ -9,7 +11,17 @@ def _pct(n: float, d: float) -> float:
     return round(100 * n / d, 1)
 
 
-def city_stats(layout: Layout) -> dict:
+def city_stats(layout: Layout, reference: Layout | None = None) -> dict:
+    """`reference`: the player's city. Published layouts carry needs_road=False
+    for off-road and military-unconnected buildings (the search's own flags);
+    the reference restores the player's road needs and levels by entity id."""
+    if reference is not None:
+        ref = {b.entity_id: b for b in reference.buildings}
+        layout = Layout(layout.region,
+                        [replace(b, needs_road=ref[b.entity_id].needs_road,
+                                 road_level=ref[b.entity_id].road_level)
+                         if b.entity_id in ref else b for b in layout.buildings],
+                        layout.townhall, layout.roads)
     cells = layout.region.cells
     area = len(cells)
     occ = layout.occupied_cells()

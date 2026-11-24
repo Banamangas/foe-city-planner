@@ -391,6 +391,7 @@ class LevelQueue:
         self.stats["early_published"] += 1
         if self.profile is not None:
             self.profile.event("first_early_publish")
+        rf.report_layout(self.params, data["layout"], run.k, data["achieved"])
         if self.on_improvement is not None:
             self.on_improvement(data["layout"], run.k, data["achieved"])
         self._note_best(run.k, data["achieved"])

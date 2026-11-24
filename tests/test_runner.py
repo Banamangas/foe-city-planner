@@ -152,3 +152,86 @@ def test_job_status_reports_phase_and_layouts_found(monkeypatch):
     st = jobs.status(jid)
     release.set()
     assert st["phase"] == "walk" and st["layouts_found"] == 0
+
+
+def _small_city():
+    def b(eid, x, y, w, l, needs, th=False):
+        return Building(eid, f"c{eid}", "main_building" if th else "g",
+                        Footprint(x, y, w, l), needs, 1, th, None, None, f"a{eid}")
+    th = b(1, 0, 0, 2, 2, False, True)
+    region = Region(frozenset((x, y) for x in range(8) for y in range(8)))
+    return Layout(region, [th, b(10, 0, 0, 2, 2, True), b(11, 0, 0, 2, 2, True),
+                           b(12, 0, 0, 3, 2, True)], th, {})
+
+
+def _run_to_end(jobs, jid):
+    for _ in range(600):
+        if jobs.is_done(jid):
+            break
+        time.sleep(0.05)
+    assert jobs.snapshot(jid)["state"] == "done", jobs.snapshot(jid)["error"]
+    return jobs.snapshot(jid)
+
+
+def _drain(jobs, jid):
+    out = []
+    while (imp := jobs.pop_improvement(jid, timeout=0.05)) is not None:
+        out.append(imp)
+    return out
+
+
+def test_run_result_keeps_every_legal_layout():
+    jobs = JobManager()
+    jid = jobs.submit(_small_city(), time_box=3.0, patterns=5, probe_limit=1.0,
+                      workers=1)
+    snap = _run_to_end(jobs, jid)
+    imps = _drain(jobs, jid)
+    layouts = snap["result"]["layouts"]
+    assert imps and layouts
+    assert snap["layouts_found"] >= len(layouts)
+    for e in imps + layouts:
+        assert isinstance(e["stats"]["roads"], int)
+        assert e["legality"]["status"] == "valid"
+    # the final best is among the kept layouts, and they are sorted by roads
+    best = imps[-1]
+    assert any(e["roads"] == best["roads"] and e["buildings"] == best["buildings"]
+               for e in layouts)
+    counts = [len(e["roads"]) for e in layouts]
+    assert counts == sorted(counts) and counts[0] == len(best["roads"])
+
+
+def test_run_with_off_road_publishes_valid_layouts():
+    jobs = JobManager()
+    jid = jobs.submit(_small_city(), time_box=3.0, patterns=5, probe_limit=1.0,
+                      workers=1, off_road=frozenset({11}))
+    snap = _run_to_end(jobs, jid)
+    imps = _drain(jobs, jid)
+    assert imps and snap["result"]["layouts"]
+    for e in imps + snap["result"]["layouts"]:
+        assert e["legality"]["status"] == "valid"
+        # the off-road building keeps the player's road need in the stats
+        assert e["stats"]["with_roads"] == 3
+
+
+def test_stopped_run_still_has_layouts_key():
+    jobs = JobManager()
+    jid = jobs.submit(_small_city(), time_box=600.0, patterns=5, probe_limit=1.0,
+                      workers=1)
+    jobs.stop(jid)
+    snap = _run_to_end(jobs, jid)
+    assert "layouts" in snap["result"]
+
+
+def test_seeded_input_city_is_not_offered_to_on_layout():
+    from foeopt.roads_first import RoadsFirstSearch
+    found = []
+    RoadsFirstSearch(_small_city(), time_box=3.0, patterns=5, probe_limit=1.0,
+                     workers=1).run(on_improvement=lambda lay, k, a: found.append(lay))
+    # Every other publish site offers the layout to on_layout BEFORE
+    # on_improvement, so a leading improvement with no offer is the seed.
+    events = []
+    RoadsFirstSearch(found[-1], time_box=2.0, patterns=5, probe_limit=1.0, workers=1,
+                     seed_input=True).run(
+        on_improvement=lambda lay, k, a: events.append(("improvement", a)),
+        on_layout=lambda lay, k, a: events.append(("layout", a)))
+    assert events[0] == ("improvement", len(found[-1].roads))

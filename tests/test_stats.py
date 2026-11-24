@@ -1,3 +1,4 @@
+from dataclasses import replace
 from foeopt.model import Building, Footprint, Layout, Region
 from foeopt.stats import city_stats
 
@@ -37,3 +38,17 @@ def test_stats_two_lane_counts_double():
     s = city_stats(_city(level=2))
     assert s["unconnected"] == []
     assert s["road_efficiency_pct"] == round(100 * (2 * 2 / 2) / 3, 1)
+
+
+def test_stats_reference_supplies_player_road_needs():
+    """Published layouts rewrite needs_road=False for off-road buildings; with
+    the player's city as reference the building still counts as needing a road
+    (and, without contact, as unconnected)."""
+    ref = _city(roads=False)
+    lay = _city(roads=False)
+    lay.buildings = [replace(b, needs_road=False) if b.entity_id == 2 else b
+                     for b in lay.buildings]
+    assert city_stats(lay)["unconnected"] == []
+    s = city_stats(lay, reference=ref)
+    assert s["unconnected"] == [2]
+    assert s["without_roads"] == 1 and s["with_roads"] == 1

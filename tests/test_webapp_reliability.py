@@ -161,3 +161,37 @@ def test_split_upload_keeps_helper_through_cache_and_optimize(client, fake_searc
     exported = client.get(f"/api/cities/{cid}/export").get_json()
     assert "helper_data" in exported
     assert client.post("/api/cities/import", json=exported).status_code == 200
+
+
+def test_stream_sends_a_layout_event_per_kept_layout(client, monkeypatch):
+    class OfferSearch:
+        def __init__(self, layout, **kw):
+            self.layout = layout
+
+        def run(self, on_layout=None, **_kw):
+            on_layout(self.layout, 3, 3)
+            on_layout(self.layout, 3, 3)
+            return {"verdict": "DONE", "best_achieved": 3}
+
+    class KeepAll:
+        """Stands in for LayoutCollector: keeps everything offered."""
+        def __init__(self, reference, **kw):
+            self.count = 0
+
+        def offer(self, layout, k, achieved):
+            self.count += 1
+            return {"id": self.count - 1, "k": k, "achieved": achieved}
+
+        def entries(self):
+            return [{"id": i} for i in range(self.count)]
+
+    monkeypatch.setattr(runner_mod, "RoadsFirstSearch", OfferSearch)
+    monkeypatch.setattr(runner_mod, "LayoutCollector", KeepAll)
+    cid = client.post("/api/load", json=_combined()).get_json()["city_id"]
+    jid = client.post("/api/optimize", json={"city_id": cid}).get_json()["job_id"]
+    body = client.get(f"/api/stream/{jid}").get_data(as_text=True)
+    events = [json.loads(chunk.split("\ndata: ", 1)[1].split("\n", 1)[0])
+              for chunk in body.split("event: layout")[1:]]
+    assert [e["id"] for e in events] == [0, 1]
+    done = json.loads(body.split("event: done\ndata: ", 1)[1].split("\n", 1)[0])
+    assert done["layouts_found"] == 2 and len(done["result"]["layouts"]) == 2

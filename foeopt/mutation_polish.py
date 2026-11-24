@@ -40,7 +40,7 @@ from foeopt.legality import check as legality_check
 from foeopt.model import Layout
 from foeopt.roads_first import (OBJECTIVE_MARGIN_S, OBJECTIVE_MIN_S, Pattern, _check_pattern,
                                 _run_probe, _worker_init, minimize_needed, model_fillers,
-                                validate)
+                                report_layout, validate)
 
 WARM_LIMIT_S = 10.0      # N5's per-mutant warm solve
 TWO_MOVES_P = 0.3        # N5: 1 move 70%, 2 moves 30%
@@ -192,6 +192,8 @@ class _Climb:
             res = self.evaluate(items, parent["pos"], end)
             sat = sorted((r for r in res if r["status"] == "SAT"),
                          key=lambda r: (r["achieved"], r["k"]))
+            for r in sat:
+                report_layout(self.s, r["layout"], r["k"], r["achieved"])
             for r in sat:
                 if r["achieved"] > parent["achieved"]:
                     break

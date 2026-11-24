@@ -2052,6 +2052,19 @@ def _generate_levels(layout, region, consumers, ks, rng, params, log, *,
     return state
 
 
+def report_layout(owner, layout: Layout, k, achieved: int) -> None:
+    """Offer one validated layout to the run's `on_layout` (read off `owner`:
+    the search, or the walk's params), before any strict-improvement test.
+    A broken callback must never break the run."""
+    cb = getattr(owner, "_on_layout", None)
+    if cb is None:
+        return
+    try:
+        cb(layout, k, achieved)
+    except Exception:
+        pass
+
+
 def _result_handler(state, params, log, *, on_improvement=None, corpus=None,
                     filler_stats=None):
     """Returns `handle_result(k, result, pat)`, which books one probe result
@@ -2098,6 +2111,7 @@ def _result_handler(state, params, log, *, on_improvement=None, corpus=None,
             sat_recorder = getattr(params, "sat_recorder", None)
             if sat_recorder is not None:
                 sat_recorder(k, achieved, pat, result.get("pos"))
+            report_layout(params, vlay, k, achieved)
             if st["best_achieved"] is None or achieved < st["best_achieved"]:
                 st["best_achieved"] = achieved
                 if on_improvement is not None:
@@ -2213,6 +2227,8 @@ def _probe_level(layout, region, consumers, k, rng, params, log, pool=None,
 
 
 class RoadsFirstSearch:
+    _on_layout = None   # run()'s on_layout; polish phases read it off the search
+
     def __init__(self, layout: Layout, *, time_box: float, patterns: int = 200,
                  probe_limit: float = 60.0, workers: int = 4,
                  probe_workers: int = 4, th_anchors: str = "full",
@@ -2431,11 +2447,13 @@ class RoadsFirstSearch:
         res = exact_route(lay, time_limit=limit, **kw)
         wall = round(time.monotonic() - t0, 2)
         after = before
-        if res.roads is not None and res.count is not None and res.count < before:
+        if res.roads is not None and res.count is not None:
             cand = Layout(lay.region, lay.buildings, lay.townhall, dict(res.roads))
             if is_valid(cand) and len(cand.roads) == res.count:
-                after = res.count
-                on_improvement(cand, latest["k"], after)
+                report_layout(self, cand, latest["k"], res.count)
+                if res.count < before:
+                    after = res.count
+                    on_improvement(cand, latest["k"], after)
         return {"before": before, "after": after, "status": res.status,
                 "optimal": res.optimal, "wall_s": wall,
                 "workers": max(1, self.exact_finish_workers),
@@ -2514,6 +2532,8 @@ class RoadsFirstSearch:
                     break
                 tried += 1
                 vlay, got, row = self._polish_one(cand, limit, threads)
+                if got is not None:
+                    report_layout(self, vlay, cand[1], got)
                 if got is not None and (after is None or got < after):
                     after = got
                     if on_improvement is not None:
@@ -2554,6 +2574,8 @@ class RoadsFirstSearch:
         done = [(i, o) for i, o in enumerate(outs) if o is not None]
         after = best
         ok = [(o[1], i, o[0]) for i, o in done if o[1] is not None]
+        for got, i, vlay in ok:
+            report_layout(self, vlay, top[i][1], got)
         if ok:
             got, i, vlay = min(ok, key=lambda t: (t[0], t[1]))
             if after is None or got < after:
@@ -2591,6 +2613,8 @@ class RoadsFirstSearch:
         baseline = best_holder.get("achieved")
         if incumbent is not None and (baseline is None or incumbent < baseline):
             baseline = incumbent
+        if res.layout is not None and res.achieved is not None:
+            report_layout(self, res.layout, best_holder.get("k"), res.achieved)
         improved = (res.achieved is not None and baseline is not None
                     and res.achieved < baseline)
         if improved and on_improvement is not None:
@@ -2611,7 +2635,7 @@ class RoadsFirstSearch:
         user_cb = on_improvement
         profile = Profile()
         self.profile = profile
-        self._on_layout = on_layout          # wired by the layout-stream task
+        self._on_layout = on_layout          # every validated layout (report_layout)
         last_phase: list[str | None] = [None]
 
         def _phase(name: str) -> None:
@@ -2717,6 +2741,7 @@ class RoadsFirstSearch:
             chain_anchors=self.chain_anchors,
         )
         params.profile = profile
+        params._on_layout = self._on_layout
 
         results: dict[int, tuple[str, int | None]] = {}
 
