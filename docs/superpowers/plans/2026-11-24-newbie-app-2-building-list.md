@@ -27,7 +27,7 @@
 2. A new export that is missing buildings the previous list had (API hiccup, partial file): the job must refuse to publish rather than shrink the list (Task 1 test: sanity check fails when a previous id disappears and is not kept).
 3. No network / DNS failure / timeout at app startup: the app starts normally and fast (update check in a background thread with a 10 s timeout) (Task 3 test).
 4. A city with several unknown buildings: one load response lists them all, and reloading with the player's answers succeeds (Task 4 test).
-5. The workflow running on a day with no change: it must stop after the cheap `/status` call without downloading 68 MB (Task 5: manifest `source_version` comparison, checked by the dry-run step).
+5. The workflow running on a day with no change: it must stop after the cheap `/status` call without downloading 68 MB (Task 5: manifest `source_version` = the lookup's content-hash URL). Names-only changes (new French translations) are picked up on the next game-data change or a forced run.
 
 ---
 
@@ -115,7 +115,7 @@
 
 Workflow: `on: schedule: cron "17 4 * * *"` + `workflow_dispatch` (input `force: boolean`, default false); `permissions: contents: write`; one job on `ubuntu-latest`, `concurrency: catalog`. Steps (bash, `set -euo pipefail`, never `set -x`, the key only via `env:` and `-H "X-API-Key: $FOE_API_KEY"`):
 1. checkout; setup-python 3.12.
-2. `status=$(curl -fsS -H ... "$FOE_API_BASE/status")`; `src=$(jq -r '.last_update // .data_updated_at // empty' <<<"$status")`.
+2. `status=$(curl -fsS -H ... "$FOE_API_BASE/status")`; `src=$(jq -r '.last_update.building_entity_lookup.url // .files["building_entity_lookup.json"].last_modified // empty' <<<"$status")`. (Checked 2026-11-24 against a real `/status` response: `last_update.building_entity_lookup.url` ends in the game's content hash, e.g. `...?id=building_entity_lookup-8760d957...`, so it changes only when the building data changes; `files["building_entity_lookup.json"].last_modified` changes on every daily refresh. Also stop with "API update failed" — without publishing — when `.last_update.status` is present and not `success`.)
 3. `gh release download catalog -p catalog-manifest.json -p catalog.json.gz -D prev || true` (first run: none). If `prev/catalog-manifest.json` has `source_version == $src`, `src` is non-empty and `force` is false → print "no change" and stop successfully.
 4. `curl -fsS -H ... -o lookup.json "$FOE_API_BASE/data/download/building_entity_lookup.json"`; `curl -fsS -H ... -o names.json "$FOE_API_BASE/building-names"` (names optional: on failure continue without `--names`).
 5. previous = `prev/catalog.json.gz` if present else `foeopt/data/catalog.json`; run the converter with `--source-version "$src"` into `dist/`.
