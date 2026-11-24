@@ -56,6 +56,24 @@ def is_v3(data: dict) -> bool:
     return "cityData" in data and "mapData" in data
 
 
+class UnknownBuildings(ValueError):
+    """v3 upload with building ids neither catalog nor helper knows; `.ids` sorted."""
+
+    def __init__(self, message: str, ids: list[str]):
+        super().__init__(message)
+        self.ids = ids
+
+
+def count_city_buildings(data: dict, ids) -> dict[str, int]:
+    """Occurrences of each of `ids` among a v3 upload's on-grid entities."""
+    wanted = set(ids)
+    counts = {i: 0 for i in sorted(wanted)}
+    for e in (data.get("cityData") or {}).values():
+        if e.get("type") not in _OFF_GRID_TYPES and _cid(e) in wanted:
+            counts[_cid(e)] += 1
+    return counts
+
+
 def _build_v3(data: dict, helper_data: dict | None = None) -> Layout:
     """v3 has no CityEntities and no per-entity `connected` flag. The catalog is
     the bundled one, extended by an optional helper export's CityEntities. A
@@ -68,11 +86,11 @@ def _build_v3(data: dict, helper_data: dict | None = None) -> Layout:
     missing = sorted({_cid(e) for e in entities.values() if e.get("type") not in _OFF_GRID_TYPES
                       and _cid(e) not in defs})
     if missing:
-        raise ValueError(
+        raise UnknownBuildings(
             f"{len(missing)} building types are not in the catalog "
             f"({', '.join(missing[:5])}{'...' if len(missing) > 5 else ''}); "
             "pass a FoE Helper CityMap export as the helper file, or rebuild "
-            "foeopt/data/catalog.json with scripts/build_catalog.py")
+            "foeopt/data/catalog.json with scripts/build_catalog.py", missing)
     return _build_combined({"CityMapData": entities, "UnlockedAreas": data["mapData"],
                             "CityEntities": defs}, needs_from_catalog=True)
 

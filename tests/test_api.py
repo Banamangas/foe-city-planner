@@ -344,3 +344,58 @@ def test_api_optimize_keep_unconnected_filters_to_road_buildings(client, monkeyp
     r = client.post("/api/optimize", json={"city_id": city_id, "time_box": 1.0,
                                            "keep_unconnected": "2"})
     assert r.status_code == 400
+
+
+def _v3_with_unknowns():
+    from tests.test_loader_v3 import _city
+    data = _city()
+    for i, cid, x in ((7, "W_Zzz_A", 8), (8, "W_Zzz_A", 10), (9, "W_Zzz_B", 12)):
+        data["cityData"][str(i)] = {"id": i, "cityentity_id": cid,
+                                    "type": "generic_building", "x": x, "y": 9}
+    return data
+
+
+_CUSTOM = {"W_Zzz_A": {"width": 2, "length": 3, "road": 1},
+           "W_Zzz_B": {"width": 1, "length": 1, "road": 0}}
+
+
+def test_unknown_buildings_are_a_422_with_counts(client):
+    r = client.post("/api/load", json=_v3_with_unknowns())
+    assert r.status_code == 422
+    assert r.get_json()["unknown_buildings"] == [
+        {"cityentity_id": "W_Zzz_A", "count": 2}, {"cityentity_id": "W_Zzz_B", "count": 1}]
+
+
+def test_custom_buildings_resolve_and_survive_reload(client):
+    body = {**_v3_with_unknowns(), "custom_buildings": _CUSTOM}
+    r = client.post("/api/load", json=body)
+    assert r.status_code == 200, r.get_json()
+    j = r.get_json()
+    a = [b for b in j["buildings"] if b["cityentity_id"] == "W_Zzz_A"]
+    assert len(a) == 2 and {(b["width"], b["length"]) for b in a} == {(2, 3)}
+    # the cached payload keeps the definitions: a plain re-read resolves them
+    assert client.get(f"/api/cities/{j['city_id']}/export").status_code == 200
+
+
+def test_custom_buildings_via_raw_upload(client):
+    r = client.post("/api/load/raw", data={
+        "city": (io.BytesIO(json.dumps(_v3_with_unknowns()).encode()), "c.json"),
+        "custom_buildings": json.dumps(_CUSTOM)}, content_type="multipart/form-data")
+    assert r.status_code == 200, r.get_json()
+    r = client.post("/api/load/raw", data={
+        "city": (io.BytesIO(json.dumps(_v3_with_unknowns()).encode()), "c.json")},
+        content_type="multipart/form-data")
+    assert r.status_code == 422
+
+
+@pytest.mark.parametrize("bad", [
+    {"width": 0, "length": 2, "road": 0}, {"width": 21, "length": 2, "road": 0},
+    {"width": 2, "length": 2, "road": 3}, {"width": "2", "length": 2, "road": 0}])
+def test_bad_custom_building_is_a_400(client, bad):
+    body = {**_v3_with_unknowns(), "custom_buildings": {**_CUSTOM, "W_Zzz_A": bad}}
+    assert client.post("/api/load", json=body).status_code == 400
+
+
+def test_custom_building_for_an_absent_id_is_a_400(client):
+    body = {**_v3_with_unknowns(), "custom_buildings": {**_CUSTOM, "W_Nope": _CUSTOM["W_Zzz_B"]}}
+    assert client.post("/api/load", json=body).status_code == 400

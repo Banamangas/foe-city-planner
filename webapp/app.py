@@ -14,7 +14,8 @@ from foeopt.catalog_store import start_background_check
 from foeopt.catalog import Catalog
 from foeopt.editing import UNPLACEABLE_TYPES, EditError, apply_edits, loose_chain_pieces
 from foeopt.export_v3 import ExportError, can_export, to_v3
-from foeopt.loader import city_catalog_defs, is_v3, load_layout_from_dict, load_layout
+from foeopt.loader import (UnknownBuildings, city_catalog_defs, count_city_buildings, is_v3,
+                           load_layout_from_dict, load_layout)
 from foeopt.report import road_estimate
 from foeopt.stats import city_stats
 from foeopt.viz import layout_to_view
@@ -139,10 +140,49 @@ def create_app(db_path: str | None = None) -> Flask:
         file_storage.save(path)
         return path
 
+    def _custom_entities(data, custom) -> dict:
+        """CityEntities entries for the player's own sizes of unknown buildings.
+        Raises ValueError (-> 400) on anything malformed."""
+        if not isinstance(custom, dict):
+            raise ValueError("custom_buildings must be an object {cityentity_id: {width, length, road}}")
+        present = {(e.get("cityentity_id") or e.get("entityId") or "")
+                   for e in (data.get("cityData") or {}).values()} if is_v3(data) else set()
+        out = {}
+        for cid, spec in custom.items():
+            if cid not in present:
+                raise ValueError(f"custom building {cid!r} is not in this city")
+            if not isinstance(spec, dict):
+                raise ValueError(f"custom building {cid!r}: expected {{width, length, road}}")
+            dims = {}
+            for key in ("width", "length"):
+                v = spec.get(key)
+                if isinstance(v, bool) or not isinstance(v, int) or not 1 <= v <= 20:
+                    raise ValueError(f"custom building {cid!r}: {key} must be a whole number from 1 to 20")
+                dims[key] = v
+            road = spec.get("road", 0)
+            if isinstance(road, bool) or road not in (0, 1, 2):
+                raise ValueError(f"custom building {cid!r}: road must be 0, 1 or 2")
+            entry = {"id": cid, "name": cid, "type": "generic_building", **dims}
+            if road:
+                entry["requirements"] = {"street_connection_level": road}
+            out[cid] = entry
+        return out
+
+    def _unknown_buildings_response(data, exc: UnknownBuildings):
+        counts = count_city_buildings(data, exc.ids)
+        return jsonify(error=str(exc),
+                       unknown_buildings=[{"cityentity_id": c, "count": n}
+                                          for c, n in counts.items()]), 422
+
     def _parse_and_cache(data, helper_data: dict | None = None,
-                         name: str | None = None) -> dict:
+                         name: str | None = None, custom=None) -> dict:
         if not isinstance(data, dict):
             raise ValueError("expected a JSON object")
+        if custom:
+            entries = _custom_entities(data, custom)
+            base = (helper_data if helper_data is not None
+                    else data.get("helper_data")) or {}
+            helper_data = {**base, "CityEntities": {**(base.get("CityEntities") or {}), **entries}}
         if helper_data is not None and ("entities" in data or is_v3(data)):
             # Split export: keep the helper's catalog INSIDE the cached payload
             # so later loads (optimize, export, re-import) still resolve sizes,
@@ -207,8 +247,12 @@ def create_app(db_path: str | None = None) -> Flask:
         data = request.get_json(silent=True)
         if data is None:
             return jsonify(error="invalid JSON body"), 400
+        custom = data.pop("custom_buildings", None) if isinstance(data, dict) else None
         try:
-            return jsonify(_parse_and_cache(data, name=request.args.get("name") or None))
+            return jsonify(_parse_and_cache(data, name=request.args.get("name") or None,
+                                            custom=custom))
+        except UnknownBuildings as exc:
+            return _unknown_buildings_response(data, exc)
         except Exception as exc:
             return jsonify(error=f"could not parse city: {exc}"), 400
 
@@ -229,8 +273,16 @@ def create_app(db_path: str | None = None) -> Flask:
             for p in (city_path, helper_path):
                 if p:
                     os.unlink(p)
+        custom = None
+        if request.form.get("custom_buildings"):
+            try:
+                custom = json.loads(request.form["custom_buildings"])
+            except ValueError:
+                return jsonify(error="custom_buildings is not valid JSON"), 400
         try:
-            return jsonify(_parse_and_cache(data, helper_data, name=city_name))
+            return jsonify(_parse_and_cache(data, helper_data, name=city_name, custom=custom))
+        except UnknownBuildings as exc:
+            return _unknown_buildings_response(data, exc)
         except Exception as exc:
             return jsonify(error=f"could not parse city: {exc}"), 400
 

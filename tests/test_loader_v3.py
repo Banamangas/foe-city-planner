@@ -6,7 +6,7 @@ import pytest
 
 from foeopt.catalog import Catalog
 from foeopt.legality import check
-from foeopt.loader import (_bundled_catalog, is_v3, load_layout,
+from foeopt.loader import (UnknownBuildings, _bundled_catalog, is_v3, load_layout,
                            load_layout_from_dict, read_json)
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -142,3 +142,13 @@ def test_chain_declared_in_components_block():
     bundled = Catalog(_bundled_catalog())
     assert bundled.chain_id("W_MultiAge_FALL25A11") == "fall25a_chain"
     assert bundled.chain_id("W_MultiAge_CUP22D1") == "gentiana_windmill"
+
+
+def test_unknown_buildings_lists_every_missing_id():
+    data = _city()
+    for i, cid in ((7, "W_Zzz_B"), (8, "W_Zzz_A"), (9, "W_Zzz_A")):
+        data["cityData"][str(i)] = {"id": i, "cityentity_id": cid,
+                                    "type": "generic_building", "x": 8, "y": 9}
+    with pytest.raises(UnknownBuildings) as ei:
+        load_layout_from_dict(data)
+    assert ei.value.ids == ["W_Zzz_A", "W_Zzz_B"]
