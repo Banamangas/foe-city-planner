@@ -116,3 +116,34 @@ def test_cli_sanity_failure_exits_1_and_writes_nothing(tmp_path):
     r, out = _run(tmp_path, [old_style("A", w=0, l=0)], {"A": old_style("A")})
     assert r.returncode == 1
     assert not out.exists() or list(out.iterdir()) == []
+
+
+def test_en_only_names_entry_keeps_previous_french():
+    prev = {"W_A": {"id": "W_A", "name": "Ancien", "names": {"en": "O", "fr": "Ancien"},
+                    "width": 1, "length": 1}}
+    out = build([old_style(name="Eng")], prev, {"W_A": {"en": "X"}})
+    assert out["W_A"]["names"] == {"en": "X", "fr": "Ancien"}
+    assert out["W_A"]["name"] == "Ancien"
+
+
+def test_rebuilding_from_own_output_is_idempotent():
+    prev = {"W_A": {"id": "W_A", "name": "Ancien", "width": 1, "length": 1}}
+    names = {"W_A": {"en": "X"}}
+    first = build([old_style(name="Eng")], prev, names)
+    assert build([old_style(name="Eng")], first, names) == first
+    assert build([old_style(name="Eng")], first) == build([old_style(name="Eng")], prev)
+
+
+def test_cli_with_names(tmp_path):
+    (tmp_path / "names.json").write_text(json.dumps({"A": {"en": "E"}}))
+    (tmp_path / "lookup.json").write_text(json.dumps([old_style("A", name="Eng")]))
+    prev = {"A": {"id": "A", "name": "Ancien", "width": 1, "length": 1}}
+    (tmp_path / "prev.json").write_text(json.dumps(prev))
+    out = tmp_path / "out"
+    r = subprocess.run([sys.executable, str(CLI), "--lookup", str(tmp_path / "lookup.json"),
+                        "--names", str(tmp_path / "names.json"),
+                        "--previous", str(tmp_path / "prev.json"), "--out", str(out)],
+                       capture_output=True, text=True, cwd=ROOT)
+    assert r.returncode == 0, r.stderr
+    entry = json.loads((out / "catalog.json").read_text())["A"]
+    assert entry["names"] == {"en": "E", "fr": "Ancien"} and entry["name"] == "Ancien"

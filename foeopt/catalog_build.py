@@ -43,18 +43,16 @@ def trim(defn: dict) -> dict:
 
 
 def _names(new_name: str | None, prev: dict | None, given: dict | None) -> dict:
-    if given:
-        return {k: given[k] for k in ("en", "fr") if given.get(k)}
-    if not prev:
+    """Merge per language: fr from the names file, else the previous fr (or
+    previous name); en from the names file, else the lookup name."""
+    given = given or {}
+    prev_names = (prev or {}).get("names") or {}
+    fr = given.get("fr") or prev_names.get("fr") or (prev or {}).get("name")
+    en = given.get("en") or new_name
+    known = bool(given) or bool(prev_names.get("fr"))
+    if not (known or (fr and en and fr != en)):
         return {}
-    prev_names = prev.get("names") or {}
-    fr = prev_names.get("fr") or prev.get("name")
-    en = new_name or prev_names.get("en")
-    if not fr:
-        return {}
-    if prev_names.get("fr") or (en and en != fr):
-        return {k: v for k, v in (("en", en), ("fr", fr)) if v}
-    return {}
+    return {k: v for k, v in (("en", en), ("fr", fr)) if v}
 
 
 def build(lookup: list[dict], previous: dict, names: dict | None = None) -> dict:
