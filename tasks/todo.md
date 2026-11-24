@@ -1811,3 +1811,24 @@ arm gap: fixed seeds do not make multi-threaded, wall-clock-limited CP-SAT
 repeatable. User's decision: stop -- gains are small, and 8x2 claims all 16 logical
 CPUs, so it only helps on an idle machine; a user working while it runs would
 likely lose the gain or do worse. Not worth pursuing.
+
+## Review (plan N1) -- backend features for the newbie app (2026-11-24)
+Built (all additive API fields; the current webapp ignores them):
+- Layout stats and legality checks on load (`stats`, `checks` in the load response).
+- Optimizer phase reporting (`phase` in heartbeat/status/done).
+- Every legal layout a run finds is kept and reported (`layout` events, `layouts_found`, `layouts` in the done result).
+- `stats` on improvement events.
+- Report of unconnected buildings and loose chain pieces on load.
+- Relinking of loose chain pieces to their main building.
+- Player-chosen buildings kept off the road (`off_road`).
+
+Tests: pytest 869 passed, 3 skipped (107 s); vitest 63/63; `tsc --noEmit` clean.
+Live check (throwaway db, darkzig, 60 s): load response has stats+checks; stream carried
+phase and layouts_found; 4 `layout` events, 2 `improvement` events (both with stats);
+`done` result has 4 layouts, each with a legality block (status/violations) and roads.
+Bench (FR16 120 s): best 66, wall ~104.5 s, collector 0.03 s total, 39 layouts found / 30 kept.
+
+Known deferred minors:
+- Callback errors are swallowed silently in on_phase / report_layout.
+- Relinked pieces lack a `placed` flag.
+- The edit-preview seed check ignores off_road.
