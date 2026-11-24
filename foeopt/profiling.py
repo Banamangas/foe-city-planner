@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 from contextlib import contextmanager
+from typing import Callable
 
 
 class Profile:
@@ -19,6 +20,8 @@ class Profile:
         self.events: dict[str, float] = {}         # first occurrence, seconds from start
         self.info: dict = {}                       # free-form run facts (e.g. scheduler stats)
         self.t0 = time.monotonic()
+        # Called with the phase name when `timed` opens (phase reporting).
+        self.on_enter: Callable[[str], None] | None = None
 
     def add(self, name: str, secs: float, count: int = 1) -> None:
         p = self.phases.setdefault(name, [0.0, 0, 0.0])
@@ -32,6 +35,8 @@ class Profile:
 
     @contextmanager
     def timed(self, name: str):
+        if self.on_enter is not None:
+            self.on_enter(name)
         t = time.monotonic()
         try:
             yield

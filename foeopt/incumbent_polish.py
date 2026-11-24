@@ -21,7 +21,7 @@ from foeopt.model import Footprint, Layout, contact_cells
 from foeopt.legality import two_lane_tiles
 from foeopt.roads_first import (LANE_PREFIX, OBJECTIVE_MARGIN_S, OBJECTIVE_MIN_S,
                                 Pattern, minimize_needed, model_fillers,
-                                skeleton_parents, validate)
+                                report_layout, skeleton_parents, validate)
 
 MAX_SOLVES = 2  # rebase again only after an accepted improvement
 # Q4 (`iterate`): each consumer-only solve gets at most ITER_SLICE_S. FR24
@@ -216,6 +216,7 @@ def polish_rebased(search, incumbent: Layout, achieved: int, end: float,
             report["stop"] = vst
             break
         row["after"] = vach
+        report_layout(search, vlay, k, vach)
         if vach >= cur_ach:
             report["stop"] = "no_gain"
             break

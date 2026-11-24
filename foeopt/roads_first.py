@@ -4,8 +4,10 @@ import itertools
 import json
 import multiprocessing
 import random
+import sys
 import threading
 import time
+import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from types import SimpleNamespace
@@ -1693,6 +1695,8 @@ _WORKER_FILLERS_IN_MODEL: bool = False  # Phase D: the position model places fil
 # Seconds kept back for validate() after the objective solve, and the smallest
 # objective budget worth starting (hinted, it improves within seconds).
 OBJECTIVE_MARGIN_S = 3.0
+PHASES = ("seed", "walk", "objective_polish", "union_polish", "rebased_polish",
+          "mutation_polish", "seed_polish", "exact")   # names run()'s on_phase reports
 BOUNDARY_LEVELS = 4        # levels probed below the walk's lowest when nothing was feasible
 EXACT_FINISH_S = 10.0      # exact_route cap on the final layout
 EXACT_FINISH_MIN_S = 1.0  # below this, skip exact finish rather than start it
@@ -2050,6 +2054,37 @@ def _generate_levels(layout, region, consumers, ks, rng, params, log, *,
     return state
 
 
+def note_callback_error(errors: dict | None, name: str) -> None:
+    """Record a swallowed callback exception (count + first message) and print
+    its traceback to stderr once per callback per run."""
+    if errors is None:
+        return
+    exc = sys.exc_info()[1]
+    errors["count"] += 1
+    if errors["first"] is None:
+        errors["first"] = f"{name}: {exc!r}"
+    if name not in errors["printed"]:
+        errors["printed"].add(name)
+        traceback.print_exc()
+
+
+def _callback_errors(errors: dict) -> dict:
+    return {"count": errors["count"], "first": errors["first"]}
+
+
+def report_layout(owner, layout: Layout, k, achieved: int) -> None:
+    """Offer one validated layout to the run's `on_layout` (read off `owner`:
+    the search, or the walk's params), before any strict-improvement test.
+    A broken callback must never break the run."""
+    cb = getattr(owner, "_on_layout", None)
+    if cb is None:
+        return
+    try:
+        cb(layout, k, achieved)
+    except Exception:
+        note_callback_error(getattr(owner, "_cb_errors", None), "on_layout")
+
+
 def _result_handler(state, params, log, *, on_improvement=None, corpus=None,
                     filler_stats=None):
     """Returns `handle_result(k, result, pat)`, which books one probe result
@@ -2096,6 +2131,7 @@ def _result_handler(state, params, log, *, on_improvement=None, corpus=None,
             sat_recorder = getattr(params, "sat_recorder", None)
             if sat_recorder is not None:
                 sat_recorder(k, achieved, pat, result.get("pos"))
+            report_layout(params, vlay, k, achieved)
             if st["best_achieved"] is None or achieved < st["best_achieved"]:
                 st["best_achieved"] = achieved
                 if on_improvement is not None:
@@ -2211,6 +2247,9 @@ def _probe_level(layout, region, consumers, k, rng, params, log, pool=None,
 
 
 class RoadsFirstSearch:
+    _cb_errors = None
+    _on_layout = None   # run()'s on_layout; polish phases read it off the search
+
     def __init__(self, layout: Layout, *, time_box: float, patterns: int = 200,
                  probe_limit: float = 60.0, workers: int = 4,
                  probe_workers: int = 4, th_anchors: str = "full",
@@ -2234,6 +2273,7 @@ class RoadsFirstSearch:
                  probe_model: str = "position",
                  keep_chains: bool = True,
                  military: str = "connect",
+                 off_road: frozenset[int] = frozenset(),
                  rebase_s: float = 0.0,
                  rebase_iterate: bool = False,
                  road_witness: bool = False,
@@ -2300,15 +2340,23 @@ class RoadsFirstSearch:
                              "and probe_model='position'")
         self.chain_anchors = chain_anchors
         self.source_layout = layout
-        if military == "unconnected":
-            # Explicit per-run choice: two-lane buildings are left off the road
-            # and packed like any building that needs none.
-            layout = Layout(layout.region,
+        # Buildings the player keeps off the road: packed like any building
+        # that needs none; every legality check exempts them.
+        self.off_road = frozenset(off_road)
+        if military == "unconnected" or self.off_road:
+            # Explicit per-run choice: two-lane buildings (military="unconnected")
+            # and the off-road ones are left off the road and packed like any
+            # building that needs none.
+            src = layout
+            layout = Layout(src.region,
                             [replace(b, needs_road=False)
-                             if b.needs_road and b.road_level >= 2 else b
-                             for b in layout.buildings],
-                            layout.townhall, dict(layout.roads))
-        elif probe_model != "position" and any(
+                             if b.needs_road and (b.entity_id in self.off_road or (
+                                 military == "unconnected" and b.road_level >= 2))
+                             else b
+                             for b in src.buildings],
+                            src.townhall, dict(src.roads))
+            layout.catalog_known = getattr(src, "catalog_known", True)
+        if probe_model != "position" and any(
                 b.road_level >= 2 for b in layout.road_needing()):
             raise ValueError("a two-lane building with military='connect' needs "
                              "probe_model='position' (the item model has no "
@@ -2420,11 +2468,13 @@ class RoadsFirstSearch:
         res = exact_route(lay, time_limit=limit, **kw)
         wall = round(time.monotonic() - t0, 2)
         after = before
-        if res.roads is not None and res.count is not None and res.count < before:
+        if res.roads is not None and res.count is not None:
             cand = Layout(lay.region, lay.buildings, lay.townhall, dict(res.roads))
             if is_valid(cand) and len(cand.roads) == res.count:
-                after = res.count
-                on_improvement(cand, latest["k"], after)
+                report_layout(self, cand, latest["k"], res.count)
+                if res.count < before:
+                    after = res.count
+                    on_improvement(cand, latest["k"], after)
         return {"before": before, "after": after, "status": res.status,
                 "optimal": res.optimal, "wall_s": wall,
                 "workers": max(1, self.exact_finish_workers),
@@ -2436,12 +2486,15 @@ class RoadsFirstSearch:
         src = self.source_layout
         if not src.roads or src.townhall is None:
             return {"used": False, "reason": "no roads"}
-        rep = legality_check(src, src, military=self.military)
+        rep = legality_check(src, src, military=self.military, off_road=self.off_road)
         if rep.status != "valid":
             return {"used": False, "reason": rep.status, "violations": rep.violations[:3]}
         n = len(src.roads)
-        on_improvement(Layout(src.region, list(src.buildings), src.townhall, dict(src.roads)),
-                       n, n)
+        # Off-road buildings carry needs_road=False as in the search's own
+        # layouts, so the finishing phases never route a road to them.
+        buildings = [replace(b, needs_road=False) if b.entity_id in self.off_road else b
+                     for b in src.buildings]
+        on_improvement(Layout(src.region, buildings, src.townhall, dict(src.roads)), n, n)
         return {"used": True, "roads": n}
 
     def _polish_threads(self) -> int:
@@ -2500,6 +2553,8 @@ class RoadsFirstSearch:
                     break
                 tried += 1
                 vlay, got, row = self._polish_one(cand, limit, threads)
+                if got is not None:
+                    report_layout(self, vlay, cand[1], got)
                 if got is not None and (after is None or got < after):
                     after = got
                     if on_improvement is not None:
@@ -2540,6 +2595,8 @@ class RoadsFirstSearch:
         done = [(i, o) for i, o in enumerate(outs) if o is not None]
         after = best
         ok = [(o[1], i, o[0]) for i, o in done if o[1] is not None]
+        for got, i, vlay in ok:
+            report_layout(self, vlay, top[i][1], got)
         if ok:
             got, i, vlay = min(ok, key=lambda t: (t[0], t[1]))
             if after is None or got < after:
@@ -2577,6 +2634,8 @@ class RoadsFirstSearch:
         baseline = best_holder.get("achieved")
         if incumbent is not None and (baseline is None or incumbent < baseline):
             baseline = incumbent
+        if res.layout is not None and res.achieved is not None:
+            report_layout(self, res.layout, best_holder.get("k"), res.achieved)
         improved = (res.achieved is not None and baseline is not None
                     and res.achieved < baseline)
         if improved and on_improvement is not None:
@@ -2586,7 +2645,8 @@ class RoadsFirstSearch:
                 "seeds_tried": res.n_tried, "n_legal": res.n_legal,
                 "stopped_early": res.n_tried < self.seed_polish}
 
-    def run(self, on_improvement=None, on_status=None, should_stop=None) -> dict:
+    def run(self, on_improvement=None, on_status=None, should_stop=None,
+            on_phase=None, on_layout=None) -> dict:
         # ONE incumbent for every phase (walk, objective polish, seed polish,
         # exact finish): a layout reaches the caller only if it strictly beats
         # everything published before, so emitted counts never go up and the
@@ -2596,6 +2656,23 @@ class RoadsFirstSearch:
         user_cb = on_improvement
         profile = Profile()
         self.profile = profile
+        self._on_layout = on_layout          # every validated layout (report_layout)
+        last_phase: list[str | None] = [None]
+        cb_errors = {"count": 0, "first": None, "printed": set()}
+        self._cb_errors = cb_errors
+
+        def _phase(name: str) -> None:
+            """Report a phase start once; a phase re-entered back to back
+            (rebased polish in a loop) is not reported again. A broken
+            callback must never break the run."""
+            if on_phase is None or name == last_phase[0]:
+                return
+            last_phase[0] = name
+            try:
+                on_phase(name)
+            except Exception:
+                note_callback_error(cb_errors, "on_phase")
+        profile.on_enter = lambda name: _phase(name.removeprefix("finish_"))
 
         def on_improvement(vlay, k, achieved):  # noqa: F811 -- wraps the caller's
             if latest["achieved"] is not None and achieved >= latest["achieved"]:
@@ -2606,6 +2683,8 @@ class RoadsFirstSearch:
             if user_cb is not None:
                 user_cb(vlay, k, achieved)
         self.solved_networks = []
+        if self.seed_input:
+            _phase("seed")
         seed_info = self._seed_from_input(on_improvement) if self.seed_input else None
         layout = self.layout
         region = set(layout.region.cells)
@@ -2685,6 +2764,8 @@ class RoadsFirstSearch:
             chain_anchors=self.chain_anchors,
         )
         params.profile = profile
+        params._on_layout = self._on_layout
+        params._cb_errors = cb_errors
 
         results: dict[int, tuple[str, int | None]] = {}
 
@@ -2923,6 +3004,7 @@ class RoadsFirstSearch:
             else:
                 k = self.k_start
 
+            _phase("walk")
             st, _ = level(k)
             if st != "FEASIBLE":
                 k_max = len(layout.region.cells) - sum(
@@ -2985,6 +3067,7 @@ class RoadsFirstSearch:
                             "deadline_hit": _should_stop(), "results": results,
                             "boundary_descent": boundary_info["probed"],
                             "profile": profile.as_dict(self.workers),
+                            "callback_errors": _callback_errors(cb_errors),
                             "filler_failures": summarise_fillers(filler_stats),
                             "level_coverage": level_coverage,
                             "undersampled_levels": sum(
@@ -3098,6 +3181,7 @@ class RoadsFirstSearch:
                     "seed_polish": polish_info,
                     "boundary_descent": boundary_info["probed"],
                     "profile": profile.as_dict(self.workers),
+                    "callback_errors": _callback_errors(cb_errors),
                     "objective_polish": objective_info,
                     "rebased_polish": rebase_info,
                     "union_polish": union_info,

@@ -106,10 +106,13 @@ def two_lane_buildings(layout: Layout) -> list[Building]:
     return [b for b in layout.road_needing() if b.road_level >= 2]
 
 
-def check(layout: Layout, reference: Layout, military: str = "connect") -> LegalityReport:
+def check(layout: Layout, reference: Layout, military: str = "connect",
+          off_road: frozenset[int] = frozenset()) -> LegalityReport:
     """Every rule, against the loaded `reference` city. `military="unconnected"`
     exempts two-lane buildings from the road requirement. It is an explicit
-    per-run choice and is reported, never applied silently."""
+    per-run choice and is reported, never applied silently. `off_road`: entity
+    ids the player chose to keep off the road, exempt from `no_road` and
+    `two_lane_path` the same way."""
     if military not in MILITARY_POLICIES:
         raise ValueError(f"military must be one of {MILITARY_POLICIES}")
     rep = LegalityReport()
@@ -146,7 +149,8 @@ def check(layout: Layout, reference: Layout, military: str = "connect") -> Legal
     if bad_road:
         v.append({"rule": "road_out_of_region", "cells": sorted(bad_road)[:20]})
 
-    level1 = [b.entity_id for b in unsatisfied(layout) if b.road_level < 2]
+    level1 = [b.entity_id for b in unsatisfied(layout)
+              if b.road_level < 2 and b.entity_id not in off_road]
     if level1:
         v.append({"rule": "no_road", "entities": sorted(level1)})
 
@@ -156,7 +160,7 @@ def check(layout: Layout, reference: Layout, military: str = "connect") -> Legal
     if military == "connect":
         lane = two_lane_connected(layout)
         bad2 = [b.entity_id for b in two_lane_buildings(layout)
-                if not (b.footprint.border_cells() & lane)]
+                if b.entity_id not in off_road and not (b.footprint.border_cells() & lane)]
         if bad2:
             v.append({"rule": "two_lane_path", "entities": sorted(bad2)})
 

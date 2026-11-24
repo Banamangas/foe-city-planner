@@ -117,3 +117,23 @@ def test_unknown_military_policy_rejected():
     ref = _chain_city()
     with pytest.raises(ValueError):
         check(ref, ref, military="maybe")
+
+
+def test_off_road_exempts_an_unconnected_building():
+    th = _b(1, 0, 0, 4, 4, needs=False, th=True)
+    far = _b(2, 10, 6, 2, 2)
+    lay = _lay([th, far], {(4, 0): 1})
+    rep = check(lay, lay)
+    assert [v["rule"] for v in rep.violations] == ["no_road"]
+    assert rep.violations[0]["entities"] == [2]
+    assert check(lay, lay, off_road=frozenset({2})).status == "valid"
+    assert check(lay, lay, off_road=frozenset({99})).status == "invalid"
+
+
+def test_off_road_exempts_a_two_lane_building_from_its_path():
+    th = _b(1, 0, 0, 4, 4, needs=False, th=True)
+    mil = _b(2, 8, 0, 3, 3, level=2)
+    roads = {(x, 1): 1 for x in range(4, 6)}
+    roads.update({(x, y): 2 for x in (6, 7) for y in (0, 1)})
+    lay = _lay([th, mil], roads)
+    assert check(lay, lay, off_road=frozenset({2})).status == "valid"

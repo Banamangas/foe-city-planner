@@ -40,7 +40,7 @@ from foeopt.legality import check as legality_check
 from foeopt.model import Layout
 from foeopt.roads_first import (OBJECTIVE_MARGIN_S, OBJECTIVE_MIN_S, Pattern, _check_pattern,
                                 _run_probe, _worker_init, minimize_needed, model_fillers,
-                                validate)
+                                report_layout, validate)
 
 WARM_LIMIT_S = 10.0      # N5's per-mutant warm solve
 TWO_MOVES_P = 0.3        # N5: 1 move 70%, 2 moves 30%
@@ -105,6 +105,7 @@ class _Climb:
                                      "position")
         self.src = getattr(search, "source_layout", search.layout)
         self.military = getattr(search, "military", "connect")
+        self.off_road = getattr(search, "off_road", frozenset())
         self.evals = self.cold_batches = 0
 
     def stopped(self) -> bool:
@@ -150,7 +151,8 @@ class _Climb:
         return out
 
     def legal(self, lay) -> bool:
-        return legality_check(lay, self.src, military=self.military).status == "valid"
+        return legality_check(lay, self.src, military=self.military,
+                              off_road=self.off_road).status == "valid"
 
     def climb(self, start, end, rng) -> dict:
         """(1+lambda) hill climb from one start until `end`."""
@@ -190,6 +192,8 @@ class _Climb:
             res = self.evaluate(items, parent["pos"], end)
             sat = sorted((r for r in res if r["status"] == "SAT"),
                          key=lambda r: (r["achieved"], r["k"]))
+            for r in sat:
+                report_layout(self.s, r["layout"], r["k"], r["achieved"])
             for r in sat:
                 if r["achieved"] > parent["achieved"]:
                     break

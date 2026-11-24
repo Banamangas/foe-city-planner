@@ -9,11 +9,13 @@ import uuid
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 
+import foeopt.machine as machine
 from foeopt.catalog import Catalog
-from foeopt.editing import UNPLACEABLE_TYPES, EditError, apply_edits
+from foeopt.editing import UNPLACEABLE_TYPES, EditError, apply_edits, loose_chain_pieces
 from foeopt.export_v3 import ExportError, can_export, to_v3
 from foeopt.loader import city_catalog_defs, is_v3, load_layout_from_dict, load_layout
 from foeopt.report import road_estimate
+from foeopt.stats import city_stats
 from foeopt.viz import layout_to_view
 from webapp.cache import CityCache
 from foeopt.bounds import screen_city
@@ -84,6 +86,13 @@ def _buildings_summary(layout, catalog: Catalog | None = None) -> list[dict]:
 MAX_CATALOG_RESULTS = 30
 
 
+def _off_road(layout, keep: list[int]) -> frozenset[int]:
+    """The requested ids of buildings in `layout` that need a road; removed,
+    unknown and road-free ids are dropped."""
+    needing = {b.entity_id for b in layout.road_needing()}
+    return frozenset(i for i in keep if i in needing)
+
+
 def _catalog_row(catalog: Catalog, cid: str) -> dict | None:
     etype = catalog.entity_type(cid)
     size = catalog.size(cid)
@@ -140,7 +149,9 @@ def create_app(db_path: str | None = None) -> Flask:
         layout = load_layout_from_dict(data)
         payload = json.dumps(data).encode()
         city_id = city_id_for(data)
-        buildings = _buildings_summary(layout, Catalog(city_catalog_defs(data)))
+        catalog = Catalog(city_catalog_defs(data))
+        buildings = _buildings_summary(layout, catalog)
+        stats = city_stats(layout)
         cache.store_city(city_id, payload, buildings,
                          len(layout.region.cells), road_estimate(layout), name=name)
         return {
@@ -155,6 +166,10 @@ def create_app(db_path: str | None = None) -> Flask:
             # Advisory only -- the UI must never use it to block a run.
             "screen": screen_city(layout),
             "map_view": layout_to_view(layout),
+            "stats": stats,
+            # Load-time problems worth flagging to the player.
+            "checks": {"unconnected": stats["unconnected"],
+                       "loose_chain_pieces": loose_chain_pieces(layout, catalog)},
             # Edits saved for this city (survive a reload of the same file).
             "edits": cache.get_edits(city_id),
         }
@@ -167,13 +182,14 @@ def create_app(db_path: str | None = None) -> Flask:
             cat = _catalogs[city["id"]] = Catalog(city_catalog_defs(city["payload"]))
         return cat
 
-    def _edit_city(city: dict, edits) -> tuple:
+    def _edit_city(city: dict, edits, relink_chains: bool = False) -> tuple:
         """(edited layout, report) for a cached city, or raise EditError."""
         if not isinstance(edits, dict):
             raise EditError("edits must be an object {remove: [...], add: [...]}")
         layout = load_layout_from_dict(city["payload"])
         return apply_edits(layout, edits.get("remove") or [], edits.get("add") or [],
-                           catalog=_catalog_for(city), relink=edits.get("relink") or {})
+                           catalog=_catalog_for(city), relink=edits.get("relink") or {},
+                           relink_loose=relink_chains)
 
     def _edit_error(exc: EditError):
         return jsonify(error=str(exc), **exc.detail), 400
@@ -224,7 +240,8 @@ def create_app(db_path: str | None = None) -> Flask:
         range, default, help text and the CLI flag it mirrors.
         """
         return jsonify(options=OPTION_SPECS, groups=GROUP_LABELS,
-                       presets={"smoke": SMOKE_PRESET, "best": BEST_PRESET})
+                       presets={"smoke": SMOKE_PRESET, "best": BEST_PRESET},
+                       machine=machine.machine_info())
 
     @app.post("/api/optimize")
     def api_optimize():
@@ -241,19 +258,31 @@ def create_app(db_path: str | None = None) -> Flask:
             options = parse_options(data)
         except OptionError as exc:
             return jsonify(error=str(exc)), 400
+        # Size parallelism to this machine unless the request chose it.
+        sized = machine.machine_info()
+        for key in ("workers", "probe_workers"):
+            if key not in data:
+                options[key] = sized[key]
+        keep = data.get("keep_unconnected", [])
+        if not isinstance(keep, list) or not all(
+                isinstance(i, int) and not isinstance(i, bool) for i in keep):
+            return jsonify(error="keep_unconnected must be a list of entity ids"), 400
         edits = data.get("edits")
-        if not edits or (isinstance(edits, dict) and not edits.get("remove")
-                         and not edits.get("add")):
+        relink_chains = data.get("relink_chains", True) is not False
+        layout = load_layout_from_dict(city["payload"])
+        has_loose = relink_chains and bool(loose_chain_pieces(layout, _catalog_for(city)))
+        if not has_loose and (not edits or (isinstance(edits, dict)
+                                            and not edits.get("remove")
+                                            and not edits.get("add"))):
             # Unedited city: exactly the historical path.
-            layout = load_layout_from_dict(city["payload"])
             try:
-                job_id = jobs.submit(layout, **options)
+                job_id = jobs.submit(layout, off_road=_off_road(layout, keep), **options)
             except JobBusy as exc:
                 return jsonify(error=str(exc), active_job_id=exc.job_id), 409
             # Echo the resolved options so the client can show exactly what ran.
             return jsonify(job_id=job_id, options=options)
         try:
-            layout, report = _edit_city(city, edits)
+            layout, report = _edit_city(city, edits or {}, relink_chains)
         except EditError as exc:
             return _edit_error(exc)
         space = report["space"]
@@ -270,7 +299,8 @@ def create_app(db_path: str | None = None) -> Flask:
         # so the export lists the buildings to store.
         edit_info = {"to_store": report["to_store"], "added": report["added"]}
         try:
-            job_id = jobs.submit(layout, edit_info=edit_info, **options)
+            job_id = jobs.submit(layout, edit_info=edit_info,
+                                 off_road=_off_road(layout, keep), **options)
         except JobBusy as exc:
             return jsonify(error=str(exc), active_job_id=exc.job_id), 409
         return jsonify(job_id=job_id, options=options, edits=edits, report=report)
@@ -300,7 +330,8 @@ def create_app(db_path: str | None = None) -> Flask:
         if city is None:
             return jsonify(error="city not found, load it first"), 400
         try:
-            _, report = _edit_city(city, data.get("edits") or {})
+            _, report = _edit_city(city, data.get("edits") or {},
+                                  data.get("relink_chains", True) is not False)
         except EditError as exc:
             return _edit_error(exc)
         return jsonify(report=report)
@@ -320,9 +351,15 @@ def create_app(db_path: str | None = None) -> Flask:
         if not jobs.exists(job_id):
             return jsonify(error="unknown job"), 404
 
+        def layout_events():
+            # Every kept layout (webapp.collector), as soon as it is found.
+            while (entry := jobs.pop_layout(job_id)) is not None:
+                yield f"event: layout\ndata: {json.dumps(entry)}\n\n"
+
         def generate():
             while not jobs.is_done(job_id):
                 imp = jobs.pop_improvement(job_id, timeout=0.2)
+                yield from layout_events()
                 if imp is not None:
                     yield f"event: improvement\ndata: {json.dumps(imp)}\n\n"
                 else:
@@ -330,6 +367,7 @@ def create_app(db_path: str | None = None) -> Flask:
                     yield f"event: heartbeat\ndata: {json.dumps(st)}\n\n"
             while True:
                 imp = jobs.pop_improvement(job_id, timeout=0.05)
+                yield from layout_events()
                 if imp is None:
                     break
                 yield f"event: improvement\ndata: {json.dumps(imp)}\n\n"

@@ -46,6 +46,9 @@ def test_api_load_with_json_body(client):
     assert "region_cells" in body
     assert "road_estimate" in body
     assert "map_view" in body
+    assert isinstance(body["stats"]["roads"], int)
+    assert body["checks"]["unconnected"] == body["stats"]["unconnected"]
+    assert isinstance(body["checks"]["loose_chain_pieces"], list)
 
 
 def test_api_load_bad_json_returns_400(client):
@@ -89,6 +92,7 @@ def test_api_optimize_defaults_to_validated_worker_config(client, monkeypatch):
         captured.append(kwargs)
         return "fake-job-id"
     monkeypatch.setattr(app_mod.JobManager, "submit", spy_submit)
+    _fake_machine(monkeypatch, workers=6, probe_workers=2)
 
     r_load = client.post("/api/load", json=_combined_payload())
     city_id = r_load.get_json()["city_id"]
@@ -98,6 +102,47 @@ def test_api_optimize_defaults_to_validated_worker_config(client, monkeypatch):
     assert captured[0]["workers"] == 6
     assert captured[0]["probe_workers"] == 2
     assert captured[0]["concurrent_levels"] == 4
+
+
+def _fake_machine(monkeypatch, **info):
+    import foeopt.machine as machine
+    monkeypatch.setattr(machine, "machine_info", lambda: dict(
+        {"workers": 3, "probe_workers": 2, "threads": 6, "logical_cpus": 8,
+         "reduced": True, "warn": False}, **info))
+
+
+def test_api_options_reports_the_machine(client):
+    r = client.get("/api/options")
+    assert r.get_json()["machine"]["workers"] >= 1
+
+
+def test_api_optimize_sizes_workers_to_the_machine(client, monkeypatch):
+    import webapp.app as app_mod
+    _fake_machine(monkeypatch)
+    captured = []
+    def spy_submit(self, layout, **kwargs):
+        captured.append(kwargs)
+        return "fake-job-id"
+    monkeypatch.setattr(app_mod.JobManager, "submit", spy_submit)
+    city_id = client.post("/api/load", json=_combined_payload()).get_json()["city_id"]
+    r = client.post("/api/optimize", json={"city_id": city_id, "time_box": 1.0})
+    assert r.status_code == 200
+    assert (captured[0]["workers"], captured[0]["probe_workers"]) == (3, 2)
+
+
+def test_api_optimize_explicit_workers_beat_the_machine(client, monkeypatch):
+    import webapp.app as app_mod
+    _fake_machine(monkeypatch)
+    captured = []
+    def spy_submit(self, layout, **kwargs):
+        captured.append(kwargs)
+        return "fake-job-id"
+    monkeypatch.setattr(app_mod.JobManager, "submit", spy_submit)
+    city_id = client.post("/api/load", json=_combined_payload()).get_json()["city_id"]
+    r = client.post("/api/optimize", json={"city_id": city_id, "time_box": 1.0,
+                                           "workers": 5})
+    assert r.status_code == 200
+    assert (captured[0]["workers"], captured[0]["probe_workers"]) == (5, 2)
 
 
 def test_api_optimize_worker_config_still_overridable(client, monkeypatch):
@@ -267,3 +312,35 @@ def test_best_preset_seed_polish_cannot_overrun_the_time_box():
     assert sp * limit <= 60.0, (
         f"BEST_PRESET seed_polish={sp} at probe_limit={limit}s can add "
         f"{sp * limit:.0f}s beyond the box")
+
+
+def test_api_optimize_keep_unconnected_filters_to_road_buildings(client, monkeypatch):
+    """Ids removed by the edits, decorations and unknown ids are dropped; a
+    road-needing building of the city is kept off the road."""
+    import webapp.app as app_mod
+    from tests.test_api_edits import _payload
+    captured = []
+
+    def spy_submit(self, layout, **kwargs):
+        captured.append(kwargs)
+        return "fake-job-id"
+    monkeypatch.setattr(app_mod.JobManager, "submit", spy_submit)
+    city_id = client.post("/api/load", json=_payload()).get_json()["city_id"]
+
+    r = client.post("/api/optimize", json={"city_id": city_id, "time_box": 1.0})
+    assert r.status_code == 200 and captured[-1]["off_road"] == frozenset()
+
+    r = client.post("/api/optimize", json={"city_id": city_id, "time_box": 1.0,
+                                           "edits": {"remove": [2]},
+                                           "keep_unconnected": [2, 3]})
+    assert r.status_code == 200, r.get_json()
+    assert captured[-1]["off_road"] == frozenset()
+
+    r = client.post("/api/optimize", json={"city_id": city_id, "time_box": 1.0,
+                                           "keep_unconnected": [2, 3, 999]})
+    assert r.status_code == 200, r.get_json()
+    assert captured[-1]["off_road"] == frozenset({2})
+
+    r = client.post("/api/optimize", json={"city_id": city_id, "time_box": 1.0,
+                                           "keep_unconnected": "2"})
+    assert r.status_code == 400
