@@ -158,3 +158,21 @@ def test_oversized_decompressed_payload_fails(tmp_path, server, cache, monkeypat
     _release(tmp_path, _newer(tmp_path))
     assert cs.check_for_update(server["url"]) == "failed"
     assert not cache.exists()
+
+
+def test_remote_manifest_with_other_schema_fails(tmp_path, server, cache):
+    d, m = _release(tmp_path, _newer(tmp_path))
+    m["schema"] = 2
+    (d / "catalog-manifest.json").write_text(json.dumps(m))
+    assert cs.check_for_update(server["url"]) == "failed"
+    assert not (cache / "catalog.json").exists()
+
+
+def test_cached_manifest_with_other_schema_is_ignored(tmp_path, server, cache):
+    d, m = _release(tmp_path, _newer(tmp_path))
+    assert cs.check_for_update(server["url"]) == "updated"
+    assert cs.active_catalog_path() == cache / "catalog.json"
+    m2 = json.loads((cache / "catalog-manifest.json").read_text())
+    m2["schema"] = 2
+    (cache / "catalog-manifest.json").write_text(json.dumps(m2))
+    assert cs.active_catalog_path() == CATALOG_PATH

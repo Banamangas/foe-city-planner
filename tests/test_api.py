@@ -399,3 +399,32 @@ def test_bad_custom_building_is_a_400(client, bad):
 def test_custom_building_for_an_absent_id_is_a_400(client):
     body = {**_v3_with_unknowns(), "custom_buildings": {**_CUSTOM, "W_Nope": _CUSTOM["W_Zzz_B"]}}
     assert client.post("/api/load", json=body).status_code == 400
+
+
+def test_v3_with_custom_buildings_exports(client):
+    from foeopt.loader import load_layout_from_dict
+    from tests.test_export_v3 import _v3
+    from webapp.runner import layout_to_dict
+    src = _v3()
+    for i, cid, x in ((7, "W_Zzz_A", 8), (8, "W_Zzz_B", 10)):
+        ent = {"id": i, "cityentity_id": cid, "type": "generic_building",
+               "x": x, "y": 11, "era": "IronAge"}
+        src["cityData"][str(i)] = ent
+        src["mapBuildings"].append({"metaId": cid, "x": x, "y": 11,
+                                    "era": "IronAge", "custom": False})
+    r = client.post("/api/load", json={**src, "custom_buildings": _CUSTOM})
+    assert r.status_code == 200, r.get_json()
+    cid = r.get_json()["city_id"]
+    payload = client.get(f"/api/cities/{cid}").get_json()["payload"]
+    lay = layout_to_dict(load_layout_from_dict(payload))
+    r = client.post("/api/export/v3", json={"city_id": cid, "layout": lay})
+    assert r.status_code == 200, r.data[:300]
+    meta = {m["metaId"] for m in json.loads(r.data)["mapBuildings"]}
+    assert {"W_Zzz_A", "W_Zzz_B"} <= meta
+
+
+def test_partial_custom_buildings_list_only_the_remaining_unknowns(client):
+    body = {**_v3_with_unknowns(), "custom_buildings": {"W_Zzz_A": _CUSTOM["W_Zzz_A"]}}
+    r = client.post("/api/load", json=body)
+    assert r.status_code == 422
+    assert r.get_json()["unknown_buildings"] == [{"cityentity_id": "W_Zzz_B", "count": 1}]

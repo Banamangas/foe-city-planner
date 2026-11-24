@@ -26,5 +26,8 @@ If the game data has not changed since the last run, the job stops and does noth
 3. If the run turned red, open it in the Actions tab and read the failing step.
    A message "API update failed" means your API's own last update failed; nothing was published.
 
+If the job keeps failing at the download step, delete the "catalog" release on
+GitHub (Releases page, open it, Delete) and run the job again.
+
 GitHub pauses scheduled workflows after 60 days without repository activity.
 If updates stop, open Actions -> "Building list" -> "Enable workflow".

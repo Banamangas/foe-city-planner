@@ -41,7 +41,9 @@ def cache_dir() -> Path:
 def _read_manifest(path: Path) -> dict | None:
     try:
         m = json.loads(path.read_text(encoding="utf-8"))
-        return m if isinstance(m, dict) and m.get("built_at") and m.get("sha256") else None
+        ok = (isinstance(m, dict) and m.get("schema") == 1
+              and m.get("built_at") and m.get("sha256"))
+        return m if ok else None
     except (OSError, ValueError):
         return None
 
@@ -105,7 +107,8 @@ def check_for_update(base_url: str = RELEASE_BASE, timeout: float = 10.0) -> str
     try:
         active_path, active_built = _active()
         remote = json.loads(_get(base_url + "catalog-manifest.json", timeout))
-        if not isinstance(remote, dict) or not remote.get("built_at") or not remote.get("sha256"):
+        if (not isinstance(remote, dict) or remote.get("schema") != 1
+                or not remote.get("built_at") or not remote.get("sha256")):
             return "failed"
         if remote["built_at"] <= active_built:
             return "current"

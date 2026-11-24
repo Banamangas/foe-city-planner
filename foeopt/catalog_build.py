@@ -55,9 +55,16 @@ def _names(new_name: str | None, prev: dict | None, given: dict | None) -> dict:
     return {k: v for k, v in (("en", en), ("fr", fr)) if v}
 
 
-def build(lookup: list[dict], previous: dict, names: dict | None = None) -> dict:
+def _has_size(cid: str, entry: dict) -> bool:
+    size = Catalog({cid: entry}).size(cid)
+    return bool(size) and size[0] > 0 and size[1] > 0
+
+
+def build(lookup: list[dict], previous: dict, names: dict | None = None,
+          skipped: list[str] | None = None) -> dict:
     """New data wins; ids only in `previous` are kept; an empty new `type`
-    keeps the previous one."""
+    keeps the previous one. A brand-new id without a positive size is left
+    out (its id is appended to `skipped`); a previous id is never dropped."""
     names = names or {}
     catalog = dict(previous)
     for raw in lookup:
@@ -66,6 +73,10 @@ def build(lookup: list[dict], previous: dict, names: dict | None = None) -> dict
             continue
         entry = trim(raw)
         prev = previous.get(cid)
+        if prev is None and not _has_size(cid, entry):
+            if skipped is not None:
+                skipped.append(cid)
+            continue
         if prev and not entry.get("type") and prev.get("type"):
             entry["type"] = prev["type"]
         nm = _names(entry.get("name"), prev, names.get(cid))

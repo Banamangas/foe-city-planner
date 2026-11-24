@@ -147,3 +147,41 @@ def test_cli_with_names(tmp_path):
     assert r.returncode == 0, r.stderr
     entry = json.loads((out / "catalog.json").read_text())["A"]
     assert entry["names"] == {"en": "E", "fr": "Ancien"} and entry["name"] == "Ancien"
+
+
+def test_cli_merges_several_previous_files_later_wins(tmp_path):
+    (tmp_path / "lookup.json").write_text(json.dumps([]))
+    first = {"A": old_style("A", name="First"), "ONLY1": old_style("ONLY1")}
+    second = {"A": old_style("A", name="Second"), "ONLY2": old_style("ONLY2")}
+    (tmp_path / "p1.json").write_text(json.dumps(first))
+    (tmp_path / "p2.json.gz").write_bytes(gzip.compress(json.dumps(second).encode()))
+    out = tmp_path / "out"
+    r = subprocess.run([sys.executable, str(CLI), "--lookup", str(tmp_path / "lookup.json"),
+                        "--previous", str(tmp_path / "p1.json"),
+                        "--previous", str(tmp_path / "p2.json.gz"), "--out", str(out)],
+                       capture_output=True, text=True, cwd=ROOT)
+    assert r.returncode == 0, r.stderr
+    cat = json.loads((out / "catalog.json").read_text())
+    assert set(cat) == {"A", "ONLY1", "ONLY2"} and cat["A"]["name"] == "Second"
+
+
+def test_new_entry_without_size_is_skipped_not_fatal():
+    skipped = []
+    out = build([old_style("NEW", w=0, l=0), old_style("OK")], {}, skipped=skipped)
+    assert "NEW" not in out and "OK" in out and skipped == ["NEW"]
+    assert sanity(out, {}) == []
+
+
+def test_previous_entry_losing_its_size_still_fails_sanity():
+    prev = {"A": old_style("A")}
+    skipped = []
+    out = build([old_style("A", w=0, l=0)], prev, skipped=skipped)
+    assert skipped == [] and any("A" in p for p in sanity(out, prev))
+
+
+def test_cli_reports_skipped_new_entries(tmp_path):
+    r, out = _run(tmp_path, [old_style("A"), old_style("NEW", w=0, l=0)],
+                  {"A": old_style("A")})
+    assert r.returncode == 0, r.stderr
+    assert "skipped 1 new entries without a size: NEW" in r.stderr
+    assert "NEW" not in json.loads((out / "catalog.json").read_text())

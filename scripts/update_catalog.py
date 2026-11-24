@@ -1,7 +1,9 @@
 """Rebuild the slim building catalog from the game's building_entity_lookup export.
 
 Usage: python scripts/update_catalog.py --lookup L.json [--names N.json]
-           --previous P.json[.gz] --out DIR [--source-version V]
+           --previous P.json[.gz] [--previous Q.json[.gz] ...] --out DIR [--source-version V]
+
+Several --previous files are merged in order (a later one wins for shared ids).
 
 Writes DIR/catalog.json, DIR/catalog.json.gz and DIR/catalog-manifest.json;
 exits 1 and writes nothing when the sanity check reports problems.
@@ -31,13 +33,20 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--lookup", required=True)
     ap.add_argument("--names")
-    ap.add_argument("--previous", required=True)
+    ap.add_argument("--previous", required=True, action="append")
     ap.add_argument("--out", required=True)
     ap.add_argument("--source-version")
     args = ap.parse_args(argv)
 
-    previous = _read(args.previous)
-    catalog = build(_read(args.lookup), previous, _read(args.names) if args.names else None)
+    previous: dict = {}
+    for path in args.previous:
+        previous.update(_read(path))
+    skipped: list[str] = []
+    catalog = build(_read(args.lookup), previous,
+                    _read(args.names) if args.names else None, skipped)
+    if skipped:
+        print(f"skipped {len(skipped)} new entries without a size: "
+              + ", ".join(sorted(skipped)[:50]), file=sys.stderr)
     problems = sanity(catalog, previous)
     if problems:
         for p in problems[:50]:

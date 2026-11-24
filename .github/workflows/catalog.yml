@@ -23,7 +23,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
-      FOE_API_KEY: ${{ secrets.FOE_API_KEY }}
       FORCE: ${{ inputs.force }}
     steps:
       - uses: actions/checkout@v4
@@ -35,6 +34,8 @@ jobs:
       - name: Check the game data version
         id: check
         shell: bash
+        env:
+          FOE_API_KEY: ${{ secrets.FOE_API_KEY }}
         run: |
           set -euo pipefail
           status=$(curl -fsS -H "X-API-Key: $FOE_API_KEY" "$FOE_API_BASE/status")
@@ -65,7 +66,15 @@ jobs:
             fi
           }
           if [ "$have" = 1 ]; then
-            gh release download catalog -p catalog-manifest.json -p catalog.json.gz -D prev
+            # a release without assets (first upload failed) counts as a first run
+            if dl=$(gh release download catalog -p catalog-manifest.json -p catalog.json.gz -D prev 2>&1); then
+              :
+            elif grep -qi 'no assets match' <<<"$dl"; then
+              echo "Release has no assets yet (treated as first run)."
+            else
+              echo "could not download the previous building list"
+              exit 1
+            fi
           else
             echo "No release yet (first run)."
           fi
@@ -87,6 +96,8 @@ jobs:
       - name: Download game data
         if: steps.check.outputs.skip != 'true'
         shell: bash
+        env:
+          FOE_API_KEY: ${{ secrets.FOE_API_KEY }}
         run: |
           set -euo pipefail
           curl -fsS -H "X-API-Key: $FOE_API_KEY" -o lookup.json "$FOE_API_BASE/data/download/building_entity_lookup.json"
@@ -104,11 +115,10 @@ jobs:
           SRC: ${{ steps.check.outputs.src }}
         run: |
           set -euo pipefail
-          previous=foeopt/data/catalog.json
+          args=(--lookup lookup.json --previous foeopt/data/catalog.json --out dist)
           if [ -f prev/catalog.json.gz ]; then
-            previous=prev/catalog.json.gz
+            args+=(--previous prev/catalog.json.gz)
           fi
-          args=(--lookup lookup.json --previous "$previous" --out dist)
           if [ -f names.json ]; then
             args+=(--names names.json)
           fi
