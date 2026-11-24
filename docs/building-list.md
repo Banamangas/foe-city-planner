@@ -25,3 +25,6 @@ If the game data has not changed since the last run, the job stops and does noth
 2. Its assets `catalog.json.gz` and `catalog-manifest.json` should show a fresh date.
 3. If the run turned red, open it in the Actions tab and read the failing step.
    A message "API update failed" means your API's own last update failed; nothing was published.
+
+GitHub pauses scheduled workflows after 60 days without repository activity.
+If updates stop, open Actions -> "Building list" -> "Enable workflow".

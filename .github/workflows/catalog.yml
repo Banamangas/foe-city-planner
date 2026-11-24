@@ -43,12 +43,28 @@ jobs:
             echo "API update failed (last_update.status = $last); not publishing."
             exit 1
           fi
-          src=$(jq -r '.last_update.building_entity_lookup.url // .files["building_entity_lookup.json"].last_modified // empty' <<<"$status")
+          url=$(jq -r '.last_update.building_entity_lookup.url // empty' <<<"$status")
+          src=$(grep -oE 'building_entity_lookup-[0-9a-f]+' <<<"$url" | head -n 1 || true)
+          if [ -z "$src" ]; then
+            src=$(jq -r '.files["building_entity_lookup.json"].last_modified // empty' <<<"$status")
+          fi
+          if [ -n "$src" ] && ! [[ "$src" =~ ^[A-Za-z0-9._:+-]+$ ]]; then
+            echo "bad source version"
+            exit 1
+          fi
           echo "Source version: ${src:-<unknown>}"
           echo "src=$src" >> "$GITHUB_OUTPUT"
 
           mkdir -p prev
-          gh release download catalog -p catalog-manifest.json -p catalog.json.gz -D prev || echo "No previous release assets (first run?)."
+          if gh release view catalog >/dev/null 2>&1; then
+            gh release download catalog -p catalog-manifest.json -p catalog.json.gz -D prev
+          else
+            echo "No release yet (first run)."
+          fi
+          if [ -f prev/catalog-manifest.json ] && [ ! -f prev/catalog.json.gz ]; then
+            echo "Previous manifest found without catalog.json.gz; refusing to continue."
+            exit 1
+          fi
           prev_src=""
           if [ -f prev/catalog-manifest.json ]; then
             prev_src=$(jq -r '.source_version // empty' prev/catalog-manifest.json)
