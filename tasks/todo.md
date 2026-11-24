@@ -1851,3 +1851,26 @@ Owner's next steps:
 3. After pushing main, run the workflow once (Actions -> "Building list" -> Run workflow).
 4. Check that the "catalog" release has catalog.json.gz and catalog-manifest.json.
 Then `check_for_update()` should return `updated`.
+
+## Review (plan N3) -- the five-step beginner wizard (2026-11-24)
+Built:
+- Backend: localized building names (en/fr) and an `exportable` flag in the catalog, stored-first catalog lookup, edit info on every layout, load response with stats and checks.
+- Translations: English and French message tables with a parity test (same keys in both languages).
+- Shell: wizard with step bar, language switch, and the old tool kept at the `/advanced` route; legacy styles isolated from the wizard by loading each root separately.
+- Five steps: 1 load city, 2 buildings, 3 optimize, 4 choose, 5 save.
+
+Tests: vitest 124/124 (16 files), `npm run build` clean (writes webapp/dist); pytest 920 passed, 3 skipped (113 s).
+Raw-string grep over frontend/src/wizard (*.tsx): no hits; extra checks on title/placeholder/aria-label/alt attributes and quoted English strings also clean.
+
+What the player sees:
+1. Load: drops or picks the city file; if the game has buildings the list doesn't know, a short form asks for them; load checks (what was read, anything odd) are shown.
+2. Buildings: the city's buildings with the option to remove one or add one from the list (with a search dialog), and a preview of the effect.
+3. Optimize: starts a run, sees progress with phases and layouts found so far, and can stop at any time.
+4. Choose: compares the layouts found (roads used, legality) and picks one.
+5. Save: exports the chosen layout for Forge Hammer, shows a saved line and a translated warning count.
+A short guide with a screenshot is offered on steps; it hides itself if the image is missing.
+
+Open items for the user:
+- Guide wording and screenshots: `frontend/public/guides/<lang>/<kind>-<n>.png` do not exist yet (the directory is absent); add them for en and fr.
+- French copy check: the French text was written by the assistant and needs a native read-through.
+- Browser walkthrough (Step 5 of the plan) with a real city file in both languages still to do.
