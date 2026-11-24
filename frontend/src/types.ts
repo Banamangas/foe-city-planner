@@ -1,3 +1,4 @@
+import type { CityStats, LoadChecks } from "./wizard/types";
 export type RoadView = { x: number; y: number; level: number };
 
 export type BuildingView = {
@@ -94,6 +95,9 @@ export type LoadResponse = {
   screen?: CityScreen;
   map_view: MapView;
   edits?: Edits | null;
+  stats?: CityStats;
+  checks?: LoadChecks;
+  exportable?: boolean;
 };
 
 export type Improvement = {
