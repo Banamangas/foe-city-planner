@@ -9,6 +9,7 @@ type Optimized = { roads: RoadView[]; buildings: BuildingView[]; k: number; achi
 /** Terminal report from the server's `done` event (webapp/app.py). */
 export type JobResult = {
   verdict?: string; best_achieved?: number | null;
+  seed_input?: { used: boolean; roads?: number | null } | null;
   legality?: { status: string; violations: unknown[]; military?: string };
   [key: string]: unknown;
 };

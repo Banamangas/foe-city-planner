@@ -2946,3 +2946,17 @@ That is a modelling gap (fillers outside the model), not a scheduling one.
   nonuniform at the same TH/k FIRST; gate probing on coverage no worse than nonuniform's p50.
 - Also: "a motif is missing" needs a measurement of the motif in existing layouts. 3-building
   dead-end stubs already average ~6 per nonuniform layout (pruned branch ends).
+
+## 2026-11-17: a content hash of browser-sent JSON depends on JavaScript's key order (plan X)
+- The webapp's city_id is sha256(json.dumps(payload)). A browser's JSON.parse enumerates
+  integer-like keys ASCENDING (cityData "1","2",...,"100"), whatever the file's order; Flask's
+  test client sends keys SORTED (so "100" < "2"). The same city therefore hashes differently
+  depending on the transport. Plan X keeps old ids by hashing the slim projection with cityData
+  keys in JS order (verified: essay and antivol reproduce their cached ids).
+- Rule: when an id is a hash of JSON, define the canonical order explicitly, and test
+  it with a reordered input, not only with the client the tests happen to use.
+
+## Profiling: py-spy hides CP-SAT time by default (2026-11-18)
+- A Python thread inside `CpSolver.solve` is blocked waiting on CP-SAT's C++ threads, so py-spy's default (idle samples dropped) shows almost no solver time and makes Python look dominant. CP-SAT's own threads are never sampled at all.
+- **Rule:** to split Python vs solver cost, run `py-spy record --idle --subprocesses` AND measure real CPU per process from /proc (utime+stime, all threads, every descendant). Forkserver pool workers are not your children, so `RUSAGE_CHILDREN` reports 0 for them.
+- Never `pkill -f <pattern>` where the pattern also appears in the calling shell's command line: it kills the shell (exit 144). Kill by pid.

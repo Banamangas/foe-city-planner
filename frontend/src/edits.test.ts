@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  addAt, catalogAdd, chainMains, chainNotices, customAdd, dropAddAt, emptyEdits, forServer,
+  addAt, catalogAdd, chainMains, chainNotices, customAdd, dropAddAt, editedView, emptyEdits, forServer,
   isEmptyEdits, normalizeEdits, sameTypeIds, setRelink, setRemoved, toggleRemove, withAdded,
 } from "./edits";
 import type { BuildingSummary, CatalogEntry, EditReport } from "./types";
@@ -96,5 +96,45 @@ describe("report notices and result names", () => {
     }]);
     expect(m.get("99")?.name).toBe("House (new)");
     expect(m.get("99")?.needs_road).toBe(true);
+  });
+});
+
+describe("editedView: what the current map shows for an edit set", () => {
+  const V = (id: number, x: number, w = 2, h = 6) =>
+    ({ id, x: x * 10, y: 0, w: w * 10, h: h * 10, name: `b${id}`, size: "", needs_road: false, townhall: false });
+  // main 1 at x=0 (3 wide), patches 2,3,4 at x=3,5,7; removing 2 slides 3,4 two cells left
+  const view = [V(1, 0, 3), V(2, 3), V(3, 5), V(4, 7), V(9, 20)];
+  const report = (over: Partial<EditReport> = {}): EditReport => ({
+    removed: [2], to_store: [], cascades: [], added: [], warnings: [], not_composable: [],
+    reattached: [{ removed: 2, moved: [3, 4], to: 1, to_name: "b1", ok: true, offset: [-2, 0] }],
+    seed: { possible: true, reason: null }, space: {} as EditReport["space"], ...over,
+  });
+
+  it("slides reattached pieces and hatches only the cells that actually free up", () => {
+    const r = editedView(view, { remove: [2], add: [], relink: {} }, report(), 10);
+    const byId = new Map(r.buildings.map((b) => [Number(b.id), b]));
+    expect(byId.has(2)).toBe(false);
+    expect([byId.get(3)!.x, byId.get(3)!.moved]).toEqual([30, true]);
+    expect([byId.get(4)!.x, byId.get(4)!.moved]).toEqual([50, true]);
+    expect(byId.get(9)!.moved).toBeFalsy();
+    const xs = [...new Set(r.freed.map(([x]) => x))].sort((a, b) => a - b);
+    expect(xs).toEqual([70, 80]);          // the 2x6 slot at the end of the row
+    expect(r.freed.length).toBe(12);
+  });
+
+  it("hatches removed buildings and patches a cascade sends to store", () => {
+    const rep = report({ removed: [1], reattached: [],
+      cascades: [{ main: 1, main_name: "b1", stored: [2, 3, 4], relink_candidates: [] }] });
+    const r = editedView(view, { remove: [1], add: [], relink: {} }, rep, 10);
+    expect(r.buildings.filter((b) => b.off).map((b) => Number(b.id)).sort()).toEqual([1, 2, 3, 4]);
+    expect(r.freed).toEqual([]);
+  });
+
+  it("without a report (or a stale one) it only hatches the removed buildings", () => {
+    const r = editedView(view, { remove: [9], add: [], relink: {} }, report(), 10);
+    expect(r.buildings.filter((b) => b.off).map((b) => Number(b.id))).toEqual([9]);
+    expect(r.buildings.some((b) => b.moved)).toBe(false);
+    expect(editedView(view, { remove: [2], add: [], relink: {} }, null, 10)
+      .buildings.find((b) => b.id === 2)!.off).toBe(true);
   });
 });

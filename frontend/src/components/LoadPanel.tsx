@@ -13,10 +13,10 @@ export function LoadPanel() {
   const refreshCities = () => apiCities().then(setCities).catch(() => {});
   useEffect(() => { refreshCities(); }, []);
 
-  const loadSlim = async (slim: unknown) => {
+  const loadSlim = async (slim: unknown, fileName?: string) => {
     setPhase("uploading");
     try {
-      const resp = await apiLoad(slim);
+      const resp = await apiLoad(slim, fileName);
       setCity(resp);
       setPhase("");
       refreshCities();
@@ -34,7 +34,7 @@ export function LoadPanel() {
     worker.onmessage = (e: MessageEvent<any>) => {
       const msg = e.data;
       if (msg.phase === "error") { setError(msg.message); setPhase(""); worker.terminate(); return; }
-      if (msg.phase === "done") { worker.terminate(); loadSlim(msg.slim); return; }
+      if (msg.phase === "done") { worker.terminate(); loadSlim(msg.slim, file.name); return; }
       setPhase(msg.phase);
     };
     worker.postMessage(file);
@@ -44,7 +44,7 @@ export function LoadPanel() {
     setError("");
     try {
       const slim = JSON.parse(await file.text());
-      loadSlim(slim);
+      loadSlim(slim, file.name);
     } catch (err) {
       setError(String(err));
     }
@@ -78,7 +78,7 @@ export function LoadPanel() {
         <select defaultValue="" onChange={(e) => loadCached(e.target.value)}>
           <option value="">Load cached city…</option>
           {cities.map((c) => (
-            <option key={c.id} value={c.id}>{c.id} ({c.region_cells} cells)</option>
+            <option key={c.id} value={c.id} title={c.id}>{c.label} ({c.region_cells} cells)</option>
           ))}
         </select>
       )}

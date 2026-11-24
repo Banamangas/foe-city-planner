@@ -60,7 +60,7 @@ export type EditReport = {
   removed: number[];
   to_store: StoredBuilding[];
   reattached: { removed: number; moved: number[]; to: number | null; to_name: string | null;
-                ok: boolean; relinked?: boolean }[];
+                ok: boolean; relinked?: boolean; offset?: [number, number] }[];
   cascades: { main: number; main_name: string; stored: number[];
               relink_candidates: { entity_id: number; name: string }[] }[];
   added: AddedBuilding[];
@@ -108,7 +108,7 @@ export type Improvement = {
 };
 
 export type CityListItem = {
-  id: string; region_cells: number; road_estimate: number; created_at: string;
+  id: string; label: string; region_cells: number; road_estimate: number; created_at: string;
 };
 
 /** One run parameter, as declared by webapp/params.py and served by /api/options. */

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 
@@ -32,19 +33,23 @@ class CityCache:
         cols = {r[1] for r in self._conn.execute("PRAGMA table_info(cities)")}
         if "edits" not in cols:   # databases created before plan E
             self._conn.execute("ALTER TABLE cities ADD COLUMN edits TEXT")
+        if "name" not in cols:    # databases created before plan X
+            self._conn.execute("ALTER TABLE cities ADD COLUMN name TEXT")
         self._conn.commit()
 
     def store_city(self, city_id: str, payload: bytes,
                    buildings: list[dict], region_cells: int,
-                   road_estimate: int) -> None:
+                   road_estimate: int, name: str | None = None) -> None:
         with self._lock:
-            # Upsert, not REPLACE: re-loading the same file keeps its saved edits.
+            # Upsert, not REPLACE: re-loading the same file keeps its saved edits
+            # (and its file name when the reload does not say one).
             self._conn.execute(
-                "INSERT INTO cities (id, payload, buildings, region_cells, road_estimate) "
-                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+                "INSERT INTO cities (id, payload, buildings, region_cells, road_estimate, name) "
+                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
                 "payload = excluded.payload, buildings = excluded.buildings, "
-                "region_cells = excluded.region_cells, road_estimate = excluded.road_estimate",
-                (city_id, payload, json.dumps(buildings), region_cells, road_estimate)
+                "region_cells = excluded.region_cells, road_estimate = excluded.road_estimate, "
+                "name = COALESCE(excluded.name, cities.name)",
+                (city_id, payload, json.dumps(buildings), region_cells, road_estimate, name)
             )
             self._conn.commit()
 
@@ -63,6 +68,7 @@ class CityCache:
             "road_estimate": row["road_estimate"],
             "created_at": row["created_at"],
             "edits": json.loads(row["edits"]) if row["edits"] else None,
+            "name": row["name"],
         }
 
     def get_edits(self, city_id: str) -> dict | None:
@@ -78,13 +84,25 @@ class CityCache:
             self._conn.commit()
 
     def list_cities(self) -> list[dict]:
+        """Newest first. `label` is the uploaded file's stem; when several
+        cities share it, the oldest keeps it bare and later ones get _2, _3..."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT id, region_cells, road_estimate, created_at FROM cities ORDER BY created_at DESC"
+                "SELECT id, name, region_cells, road_estimate, created_at FROM cities "
+                "ORDER BY created_at, rowid"
             ).fetchall()
-        return [{"id": r["id"], "region_cells": r["region_cells"],
-                 "road_estimate": r["road_estimate"], "created_at": r["created_at"]}
-                for r in rows]
+        seen: dict[str, int] = {}
+        out = []
+        for r in rows:
+            stem = os.path.splitext(os.path.basename(r["name"] or ""))[0]
+            if stem:
+                seen[stem] = seen.get(stem, 0) + 1
+                label = stem if seen[stem] == 1 else f"{stem}_{seen[stem]}"
+            else:
+                label = f"city {r['id'][:8]}"
+            out.append({"id": r["id"], "label": label, "region_cells": r["region_cells"],
+                        "road_estimate": r["road_estimate"], "created_at": r["created_at"]})
+        return out[::-1]
 
     def store_layout(self, layout_id: str, city_id: str, k: int,
                      achieved: int, layout: dict, roads_count: int) -> None:

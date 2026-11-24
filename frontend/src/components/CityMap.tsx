@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useCityStore } from "../stores/cityStore";
 import { fitTransform, screenToGrid, buildingAt, type Transform } from "../geometry";
 import type { BuildingView } from "../types";
-import { toggleRemove } from "../edits";
+import { editedView, toggleRemove } from "../edits";
 
 export function CityMap() {
   const city = useCityStore((s) => s.city);
@@ -11,6 +11,7 @@ export function CityMap() {
   const setViewMode = useCityStore((s) => s.setViewMode);
   const edits = useCityStore((s) => s.edits);
   const setEdits = useCityStore((s) => s.setEdits);
+  const editReport = useCityStore((s) => s.editReport);
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -64,34 +65,47 @@ export function CityMap() {
       if (r.level >= 2) ctx.strokeRect(r.x + cell / 4, r.y + cell / 4, cell / 2, cell / 2);
     }
 
-    const buildings = showOpt && optimized ? optimized.buildings : view.buildings;
-    // Plan E: in the current view, removed buildings stay visible, faded and hatched.
-    const removed = showOpt ? new Set<number>() : new Set(edits.remove);
+    // Plan E: in the current view, removed buildings (and patches a removed
+    // main sends to store) stay visible, faded and hatched; a removed patch's
+    // tail is drawn where it slides to, and the cells that free up are hatched.
+    const shown = showOpt && optimized
+      ? { buildings: optimized.buildings as (BuildingView & { off?: boolean; moved?: boolean })[], freed: [] }
+      : editedView(view.buildings, edits, editReport, cell);
+    const hatch = (x: number, y: number, w: number, h: number) => {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x, y, w, h);
+      ctx.clip();
+      ctx.strokeStyle = "#e07a5f";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let d = -h; d < w; d += cell / 2) {
+        ctx.moveTo(x + d, y + h);
+        ctx.lineTo(x + d + h, y);
+      }
+      ctx.stroke();
+      ctx.restore();
+    };
+    for (const [x, y] of shown.freed) hatch(x, y, cell, cell);
     ctx.lineWidth = 1;
     ctx.strokeStyle = p.border;
-    for (const b of buildings) {
-      const off = b.id !== undefined && removed.has(Number(b.id));
-      ctx.globalAlpha = off ? 0.25 : 1;
+    for (const b of shown.buildings) {
+      ctx.globalAlpha = b.off ? 0.25 : 1;
       ctx.fillStyle = b.townhall ? p.townhall : b.needs_road ? p.road_building : p.plain_building;
       ctx.fillRect(b.x, b.y, b.w, b.h);
       ctx.globalAlpha = 1;
-      ctx.strokeRect(b.x, b.y, b.w, b.h);
-      if (off) {
+      if (b.moved) {
         ctx.save();
-        ctx.beginPath();
-        ctx.rect(b.x, b.y, b.w, b.h);
-        ctx.clip();
         ctx.strokeStyle = "#e07a5f";
-        ctx.beginPath();
-        for (let d = -b.h; d < b.w; d += cell / 2) {
-          ctx.moveTo(b.x + d, b.y + b.h);
-          ctx.lineTo(b.x + d + b.h, b.y);
-        }
-        ctx.stroke();
+        ctx.lineWidth = Math.max(1, cell / 5);
+        ctx.strokeRect(b.x, b.y, b.w, b.h);
         ctx.restore();
+      } else {
+        ctx.strokeRect(b.x, b.y, b.w, b.h);
       }
+      if (b.off) hatch(b.x, b.y, b.w, b.h);
     }
-  }, [view, t, size, optimized, showOpt, edits]);
+  }, [view, t, size, optimized, showOpt, edits, editReport]);
 
   useEffect(() => {
     const cv = canvasRef.current;

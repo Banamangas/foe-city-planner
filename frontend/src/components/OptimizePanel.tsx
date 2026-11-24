@@ -87,16 +87,25 @@ function RunReport({ job }: { job: Job }) {
   const r = job.result;
   const legality = r?.legality;
   const best = r?.best_achieved;
+  // The upload (or the edited city) was published first; nothing beat it.
+  const start = r?.seed_input?.used ? r.seed_input.roads : null;
+  const noGain = best != null && start != null && best >= start;
   return (
     <div className="status">
       {job.stopped ? "Stopped" : "Finished"} after {Math.round(job.elapsed)}s
       {best != null ? ` · best ${best} roads` : " · no layout found"}
-      {r?.verdict && r.verdict !== "DONE" ? ` · ${r.verdict}` : ""}
+      {r?.verdict && r.verdict !== "DONE" && !noGain ? ` · ${r.verdict}` : ""}
       {legality && (
         <span className={legality.status === "valid" ? "" : "error"}>
           {" · "}{legality.status === "valid" ? "game-legal" : `legality: ${legality.status}`}
           {legality.military === "unconnected" ? " (two-lane buildings left unconnected)" : ""}
         </span>
+      )}
+      {noGain && (
+        <div className="sub">
+          No layout with fewer roads than the starting city ({start}) was found, so the
+          result is the starting city itself{job.stopped ? "" : "; a longer run may still find one"}.
+        </div>
       )}
     </div>
   );
