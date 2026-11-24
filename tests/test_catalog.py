@@ -30,3 +30,12 @@ def test_name_present(helper_data):
     cat = Catalog(helper_data["CityEntities"])
     assert isinstance(cat.name("H_SpaceAgeSpaceHub_Townhall"), str)
     assert cat.name("H_SpaceAgeSpaceHub_Townhall") != ""
+
+
+def test_name_by_language():
+    cat = Catalog({"X": {"name": "Parc holo",
+                         "names": {"en": "Holo Park", "fr": "Parc holo"}}})
+    assert cat.name("X") == "Parc holo"
+    assert cat.name("X", "en") == "Holo Park"
+    assert cat.name("X", "de") == "Parc holo"
+    assert cat.name("missing", "en") == "missing"

@@ -5,6 +5,9 @@ so sizes, road requirements and chain metadata come from this bundled catalog.
 It is the union of the CityEntities of the given exports (later files win),
 trimmed to the fields foeopt.catalog.Catalog reads.
 
+To refresh the bundled list from the game-data export instead, use
+scripts/update_catalog.py.
+
 Usage: python scripts/build_catalog.py EXPORT.json [EXPORT.json ...]
 """
 from __future__ import annotations

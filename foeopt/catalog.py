@@ -82,8 +82,11 @@ class Catalog:
         """True when catalog definitions were supplied (chains are detectable)."""
         return bool(self._defs)
 
-    def name(self, cityentity_id: str) -> str:
-        return self._def(cityentity_id).get("name", cityentity_id)
+    def name(self, cityentity_id: str, lang: str | None = None) -> str:
+        """`names[lang]` when known, else the default `name`, else the id."""
+        defn = self._def(cityentity_id)
+        localized = (defn.get("names") or {}).get(lang) if lang else None
+        return localized or defn.get("name", cityentity_id)
 
     def ids(self):
         return self._defs.keys()
