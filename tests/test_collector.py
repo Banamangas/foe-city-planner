@@ -67,3 +67,12 @@ def test_entries_sorted_by_roads_then_order_found():
     es = c.entries()
     assert [len(e["roads"]) for e in es] == [4, 6, 6]
     assert es[1]["id"] < es[2]["id"]
+
+
+def test_collector_entries_carry_edit_info():
+    c = LayoutCollector(REF, military="connect", off_road=frozenset(),
+                        extra={"to_store": [1], "added": []})
+    entry = c.offer(_city(4), 4, 4)
+    assert entry["to_store"] == [1] and entry["added"] == []
+    plain = _collector().offer(_city(4), 4, 4)
+    assert "to_store" not in plain and "added" not in plain

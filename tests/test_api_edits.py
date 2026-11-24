@@ -79,7 +79,7 @@ def test_catalog_search_city_and_bundled(client, city_id):
     farm = next(r for r in rows if r["id"] == "FARM")
     assert farm == {"id": "FARM", "name": "Farmhouse", "type": "residential", "width": 2,
                     "length": 2, "needs_road": True, "road_level": 1, "chain_id": "farm",
-                    "is_chain_head": True}
+                    "is_chain_head": True, "stored": 0}
     roads = client.get(f"/api/catalog?q=road&city_id={city_id}").get_json()["results"]
     assert "ROAD" not in [r["id"] for r in roads]                   # streets hidden
     big = client.get("/api/catalog?q=a").get_json()["results"]      # bundled catalog only

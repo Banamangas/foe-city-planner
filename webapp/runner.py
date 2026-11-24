@@ -118,7 +118,8 @@ class JobManager:
             }
 
         last_legality: dict = {}
-        collector = LayoutCollector(layout, military=military, off_road=off_road)
+        collector = LayoutCollector(layout, military=military, off_road=off_road,
+                                  extra=edit_info)
 
         def on_layout(lay, k, achieved):
             # Every validated layout the search finds, not only improvements;

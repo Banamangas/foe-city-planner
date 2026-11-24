@@ -71,13 +71,25 @@ def _safe_stem(name: str | None, fallback: str) -> str:
     return stem or fallback
 
 
-def _buildings_summary(layout, catalog: Catalog | None = None) -> list[dict]:
+def _lang() -> str | None:
+    """The `lang` query parameter when it is a supported language, else None."""
+    lang = request.args.get("lang")
+    return lang if lang in ("en", "fr") else None
+
+
+def _buildings_summary(layout, catalog: Catalog | None = None,
+                       lang: str | None = None) -> list[dict]:
     """Per-building rows for the UI. The chain fields drive the edit panel
     (chain removal notices, the main-building picker for added patches)."""
     def head(b):
         return bool(b.chain_id) and catalog is not None and catalog.is_chain_head(b.cityentity_id)
+
+    def name(b):
+        if lang and catalog is not None and b.cityentity_id in catalog.ids():
+            return catalog.name(b.cityentity_id, lang)
+        return b.name
     return [{
-        "entity_id": b.entity_id, "name": b.name,
+        "entity_id": b.entity_id, "name": name(b),
         "width": b.footprint.width, "length": b.footprint.length,
         "needs_road": b.needs_road, "is_townhall": b.is_townhall,
         "cityentity_id": b.cityentity_id, "chain_id": b.chain_id,
@@ -95,37 +107,48 @@ def _off_road(layout, keep: list[int]) -> frozenset[int]:
     return frozenset(i for i in keep if i in needing)
 
 
-def _catalog_row(catalog: Catalog, cid: str) -> dict | None:
+def _catalog_row(catalog: Catalog, cid: str, lang: str | None = None) -> dict | None:
     etype = catalog.entity_type(cid)
     size = catalog.size(cid)
     if size is None or etype in UNPLACEABLE_TYPES or etype == "main_building":
         return None
     req = catalog.street_requirement(cid)
     chain = catalog.chain_id(cid)
-    return {"id": cid, "name": catalog.name(cid), "type": etype,
+    return {"id": cid, "name": catalog.name(cid, lang), "type": etype,
             "width": size[0], "length": size[1], "needs_road": req > 0,
             "road_level": catalog.required_level(cid) if req > 0 else 0,
             "chain_id": chain, "is_chain_head": bool(chain) and catalog.is_chain_head(cid)}
 
 
-def search_catalog(catalog: Catalog, q: str, limit: int = MAX_CATALOG_RESULTS) -> list[dict]:
-    """Placeable catalog entries whose name or id contains `q` (case-insensitive).
-    Name matches rank before id-only matches, prefix matches first."""
+def search_catalog(catalog: Catalog, q: str, limit: int = MAX_CATALOG_RESULTS,
+                   lang: str | None = None,
+                   stored: dict[str, int] | None = None) -> list[dict]:
+    """Placeable catalog entries whose name (default or `lang`) or id contains
+    `q` (case-insensitive). Name matches rank before id-only matches, prefix
+    matches first. Every row carries `stored`, how many of that type sit in
+    the player's storage (`stored`: cityentity_id -> count); types in storage
+    come first when `q` is empty or not."""
+    stored = stored or {}
     ql = q.strip().lower()
-    if not ql:
+    if not ql and not stored:
         return []
     hits = []
     for cid in catalog.ids():
-        name = str(catalog.name(cid)).lower()
-        in_name, in_id = ql in name, ql in cid.lower()
+        default = str(catalog.name(cid)).lower()
+        local = str(catalog.name(cid, lang)).lower()
+        match_default = ql in default
+        in_name = match_default or ql in local
+        in_id = ql in cid.lower()
         if not (in_name or in_id):
             continue
-        row = _catalog_row(catalog, cid)
+        row = _catalog_row(catalog, cid, lang)
         if row is not None:
+            name = local if ql in local else default
             rank = 0 if name.startswith(ql) else 1 if in_name else 2
-            hits.append((rank, len(name), name, cid, row))
-    hits.sort(key=lambda h: h[:4])
-    return [h[4] for h in hits[:limit]]
+            row["stored"] = stored.get(cid, 0)
+            hits.append((0 if row["stored"] else 1, rank, len(name), name, cid, row))
+    hits.sort(key=lambda h: h[:5])
+    return [h[5] for h in hits[:limit]]
 
 
 def create_app(db_path: str | None = None) -> Flask:
@@ -175,7 +198,8 @@ def create_app(db_path: str | None = None) -> Flask:
                                           for c, n in counts.items()]), 422
 
     def _parse_and_cache(data, helper_data: dict | None = None,
-                         name: str | None = None, custom=None) -> dict:
+                         name: str | None = None, custom=None,
+                         lang: str | None = None) -> dict:
         if not isinstance(data, dict):
             raise ValueError("expected a JSON object")
         if custom:
@@ -198,7 +222,8 @@ def create_app(db_path: str | None = None) -> Flask:
                          len(layout.region.cells), road_estimate(layout), name=name)
         return {
             "city_id": city_id,
-            "buildings": buildings,
+            "buildings": _buildings_summary(layout, catalog, lang) if lang else buildings,
+            "exportable": can_export(data),
             "region_cells": len(layout.region.cells),
             "road_estimate": road_estimate(layout),
             # Microsecond instance screen (foeopt.bounds.screen_city): tells the
@@ -250,7 +275,7 @@ def create_app(db_path: str | None = None) -> Flask:
         custom = data.pop("custom_buildings", None) if isinstance(data, dict) else None
         try:
             return jsonify(_parse_and_cache(data, name=request.args.get("name") or None,
-                                            custom=custom))
+                                            custom=custom, lang=_lang()))
         except UnknownBuildings as exc:
             return _unknown_buildings_response(data, exc)
         except Exception as exc:
@@ -280,7 +305,8 @@ def create_app(db_path: str | None = None) -> Flask:
             except ValueError:
                 return jsonify(error="custom_buildings is not valid JSON"), 400
         try:
-            return jsonify(_parse_and_cache(data, helper_data, name=city_name, custom=custom))
+            return jsonify(_parse_and_cache(data, helper_data, name=city_name, custom=custom,
+                                            lang=_lang()))
         except UnknownBuildings as exc:
             return _unknown_buildings_response(data, exc)
         except Exception as exc:
@@ -364,14 +390,19 @@ def create_app(db_path: str | None = None) -> Flask:
         """Search placeable building types: the bundled catalog plus the
         city's own definitions when `city_id` names a cached city."""
         city_id = request.args.get("city_id")
+        stored: dict[str, int] = {}
         if city_id:
             city = cache.get_city(city_id)
             if city is None:
                 return jsonify(error="city not found"), 404
             catalog = _catalog_for(city)
+            for e in city["payload"].get("storedBuildings") or []:
+                if isinstance(e, dict) and e.get("metaId"):
+                    stored[e["metaId"]] = stored.get(e["metaId"], 0) + 1
         else:
             catalog = Catalog(city_catalog_defs({}))
-        return jsonify(results=search_catalog(catalog, request.args.get("q", "")))
+        return jsonify(results=search_catalog(catalog, request.args.get("q", ""),
+                                              lang=_lang(), stored=stored))
 
     @app.post("/api/edits/preview")
     def api_edits_preview():
