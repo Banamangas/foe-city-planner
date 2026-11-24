@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { act } from "react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { translate } from "./i18n";
 import { pickRoot } from "./route";
 import { Wizard } from "./Wizard";
+import wizardSource from "./Wizard.tsx?raw";
 import { useWizardStore } from "./wizardStore";
 
 beforeEach(() => {
@@ -51,5 +52,28 @@ describe("Wizard shell", () => {
     const s = useWizardStore.getState();
     expect(s.step).toBe(1);
     expect(s.lang).toBe("fr");
+  });
+});
+
+describe("style isolation and storage", () => {
+  it("Wizard does not import the legacy styles.css", () => {
+    expect(wizardSource).not.toMatch(/styles\.css/);
+  });
+
+  it("store works when localStorage throws", () => {
+    vi.stubGlobal("localStorage", {
+      getItem: () => {
+        throw new Error("blocked");
+      },
+      setItem: () => {
+        throw new Error("blocked");
+      },
+    });
+    try {
+      expect(() => useWizardStore.getState().setLang("fr")).not.toThrow();
+      expect(useWizardStore.getState().lang).toBe("fr");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

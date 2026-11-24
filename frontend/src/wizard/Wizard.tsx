@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { LANGS, languageName } from "./i18n";
+import { LANGS, languageName, translate } from "./i18n";
 import { BuildingsStep } from "./steps/BuildingsStep";
 import { ChooseStep } from "./steps/ChooseStep";
 import { ExportStep } from "./steps/ExportStep";
@@ -18,8 +18,8 @@ export function Wizard() {
   const setLang = useWizardStore((s) => s.setLang);
 
   useEffect(() => {
-    document.title = t("app.title");
-  }, [lang]); // eslint-disable-line react-hooks/exhaustive-deps
+    document.title = translate(lang, "app.title");
+  }, [lang]);
 
   const Current = STEP_COMPONENTS[step - 1];
   return (
