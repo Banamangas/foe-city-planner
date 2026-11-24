@@ -69,7 +69,7 @@ jobs:
             # a release without assets (first upload failed) counts as a first run
             if dl=$(gh release download catalog -p catalog-manifest.json -p catalog.json.gz -D prev 2>&1); then
               :
-            elif grep -qi 'no assets match' <<<"$dl"; then
+            elif grep -qiE 'no assets (match|to download)' <<<"$dl"; then
               echo "Release has no assets yet (treated as first run)."
             else
               echo "could not download the previous building list"
