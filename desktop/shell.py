@@ -3,7 +3,9 @@ close prompt during a search, and the idle exit of the browser mode."""
 from __future__ import annotations
 
 import logging
+import os
 import socket
+import sys
 import threading
 import time
 import webbrowser
@@ -19,6 +21,37 @@ def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+def _bindable(port: int) -> bool:
+    with socket.socket() as s:
+        try:
+            s.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
+
+
+def preferred_port(data_dir: str) -> int:
+    """The port remembered in `<data_dir>/port.txt` when it is free, else a
+    free one (remembered for next time). The same port keeps the page's
+    origin, so its saved settings (the language) survive a restart; a second
+    copy of the app finds it busy and takes another."""
+    path = os.path.join(data_dir, "port.txt")
+    try:
+        with open(path, encoding="utf-8") as f:
+            port = int(f.read().strip())
+        if 1024 <= port <= 65535 and _bindable(port):
+            return port
+    except (OSError, ValueError):
+        pass
+    port = free_port()
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(str(port))
+    except OSError:
+        log.warning("could not remember the port in %s", path, exc_info=True)
+    return port
 
 
 def start_server(app, port: int) -> threading.Thread:
@@ -51,13 +84,13 @@ def confirm_needed(running: bool) -> bool:
     return running
 
 
-def should_exit(last_ping: float | None, now: float, job_running: bool,
+def should_exit(last_ping: float, now: float, job_running: bool,
                 timeout: float = IDLE_TIMEOUT_S) -> bool:
     """Browser mode: quit when no page has pinged for `timeout` seconds and no
     search runs. The caller passes the start time until the first ping."""
     if job_running:
         return False
-    return now - (last_ping or 0.0) > timeout
+    return now - last_ping > timeout
 
 
 def shutdown(app, wait_s: float = 5.0) -> None:
@@ -70,40 +103,78 @@ def shutdown(app, wait_s: float = 5.0) -> None:
 
 
 class ShellApi:
-    """Exposed to the page as `window.pywebview.api`. The page reports when a
-    search starts or ends, with the close-prompt texts in its language."""
+    """Exposed to the page as `window.pywebview.api` (pywebview skips names
+    starting with "_", so the window stays private). The page reports when a
+    search starts or ends, with the close-prompt texts in its language; they
+    drive pywebview's built-in close confirmation, which runs inline on the GUI
+    thread (a dialog opened from a `closing` handler deadlocks on macOS)."""
 
     def __init__(self) -> None:
         self.running = False
         self.title = ""
         self.message = ""
+        self._labels: dict[str, str] = {}
+        self._window = None
 
-    def set_running(self, running, title, message):
+    def attach(self, window) -> None:
+        self._window = window
+        self._apply()
+
+    def set_running(self, running, title, message, quit_label=None, cancel_label=None):
         self.running = bool(running)
         self.title = str(title or "")
         self.message = str(message or "")
+        if quit_label:
+            self._labels["global.quit"] = str(quit_label)
+        if cancel_label:
+            self._labels["global.cancel"] = str(cancel_label)
+        self._apply()
+
+    def _apply(self) -> None:
+        window = self._window
+        if window is None:
+            return
+        window.confirm_close = confirm_needed(self.running)
+        texts = dict(self._labels)
+        if self.message:
+            texts["global.quitConfirmation"] = self.message
+        # In place: the GUI backend holds a reference to this very dict. Before
+        # webview.start() only the override exists (start copies it in).
+        for name in ("localization", "localization_override"):
+            loc = getattr(window, name, None)
+            if isinstance(loc, dict):
+                loc.update(texts)
 
 
-def closing_handler(window, api: ShellApi):
-    """The window's `closing` handler: False keeps the window open."""
-    def on_closing():
-        if not confirm_needed(api.running):
-            return True
-        return bool(window.create_confirmation_dialog(api.title, api.message))
-    return on_closing
+def _windows_renderer_ok() -> bool:
+    """On Windows, pywebview falls back to the old MSHTML engine (a blank
+    window for this app) when the WebView2 runtime is missing; the browser is
+    better then. Importing the backend only reads which engine it found."""
+    if sys.platform != "win32":
+        return True
+    import importlib
+    return getattr(importlib.import_module("webview.platforms.winforms"),
+                   "renderer", None) == "edgechromium"
 
 
-def run_window(url: str, api: ShellApi, title: str) -> bool:
+def run_window(url: str, api: ShellApi, title: str, storage_dir: str | None = None) -> bool:
     """Show the app in its own window until it closes (True). False when
-    pywebview is missing or no GUI can start: the caller opens the browser."""
+    pywebview is missing or no GUI can start: the caller opens the browser.
+    The page's storage persists in `storage_dir` (default <data dir>/webview)."""
     shown = threading.Event()
     try:
         import webview
+        if not _windows_renderer_ok():
+            log.info("no WebView2 runtime, using the browser")
+            return False
+        if storage_dir is None:
+            from desktop.paths import data_dir
+            storage_dir = os.path.join(data_dir(), "webview")
         window = webview.create_window(title, url, js_api=api, width=1280, height=860,
-                                       min_size=(900, 640))
-        window.events.closing += closing_handler(window, api)
+                                       min_size=(900, 640), localization={})
+        api.attach(window)
         window.events.shown += shown.set
-        webview.start()
+        webview.start(private_mode=False, storage_path=storage_dir)
     except Exception:
         if shown.is_set():
             log.exception("the window failed after it opened")

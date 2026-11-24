@@ -88,7 +88,18 @@ def _say(line: str) -> None:
 
 
 def run(timeout_s: float = 240.0) -> int:
+    previous = os.environ.get("FOEOPT_NO_UPDATE")
     os.environ["FOEOPT_NO_UPDATE"] = "1"   # never download during the test
+    try:
+        return _run(timeout_s)
+    finally:
+        if previous is None:
+            os.environ.pop("FOEOPT_NO_UPDATE", None)
+        else:
+            os.environ["FOEOPT_NO_UPDATE"] = previous
+
+
+def _run(timeout_s: float) -> int:
     from desktop import shell
     from webapp.app import create_app
 

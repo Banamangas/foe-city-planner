@@ -19,8 +19,8 @@ describe("setRunningFlag", () => {
   it("tells the desktop shell", () => {
     const set_running = vi.fn();
     (window as any).pywebview = { api: { set_running } };
-    setRunningFlag(true, "T", "M");
-    expect(set_running).toHaveBeenCalledWith(true, "T", "M");
+    setRunningFlag(true, "T", "M", "Q", "C");
+    expect(set_running).toHaveBeenCalledWith(true, "T", "M", "Q", "C");
   });
 
   it("works without the desktop shell", () => {

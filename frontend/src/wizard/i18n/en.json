@@ -126,5 +126,7 @@
   "resume.another": "Start with another city",
   "resume.failed": "We couldn't reopen your last city. Please load your city file again.",
   "close.title": "A search is running",
-  "close.message": "Closing now stops the search and loses what it found since the last saved step. Close anyway?"
+  "close.message": "Closing now stops the search and loses what it found since the last saved step. Close anyway?",
+  "close.quit": "Close anyway",
+  "close.cancel": "Keep searching"
 }

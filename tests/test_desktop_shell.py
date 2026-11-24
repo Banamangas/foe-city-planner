@@ -2,6 +2,7 @@
 window-or-browser, headless self-test)."""
 import builtins
 import json
+import os
 import socket
 import threading
 import time
@@ -11,6 +12,22 @@ import pytest
 
 from desktop import shell
 from webapp.app import create_app
+
+
+@pytest.fixture(autouse=True)
+def _restore_logging():
+    """main() adds a file handler to the root logger: take it off again."""
+    import logging
+    root = logging.getLogger()
+    level, werkzeug_level = root.level, logging.getLogger("werkzeug").level
+    yield
+    from desktop import main as main_mod
+    if main_mod._log_handler is not None:
+        root.removeHandler(main_mod._log_handler)
+        main_mod._log_handler.close()
+        main_mod._log_handler = None
+    root.setLevel(level)
+    logging.getLogger("werkzeug").setLevel(werkzeug_level)
 
 
 def test_free_port_gives_bindable_ports():
@@ -35,11 +52,77 @@ def test_confirm_needed():
     assert shell.confirm_needed(False) is False
 
 
+class _FakeWindow:
+    def __init__(self):
+        self.confirm_close = False
+        self.localization = {"global.quitConfirmation": "Do you want to quit?",
+                             "global.quit": "Quit", "global.cancel": "Cancel"}
+
+
 def test_shell_api_stores_running_state():
     api = shell.ShellApi()
     assert api.running is False
-    api.set_running(True, "Quit?", "A search is running.")
+    api.set_running(True, "Quit?", "A search is running.")   # no window yet: no error
     assert (api.running, api.title, api.message) == (True, "Quit?", "A search is running.")
+
+
+def test_set_running_drives_builtin_close_confirmation():
+    api = shell.ShellApi()
+    win = _FakeWindow()
+    loc = win.localization
+    api.attach(win)
+    api.set_running(True, "T", "Search running", "Close anyway", "Keep searching")
+    assert win.confirm_close is True
+    assert win.localization is loc          # updated in place (the GUI holds this dict)
+    assert loc["global.quitConfirmation"] == "Search running"
+    assert loc["global.quit"] == "Close anyway"
+    assert loc["global.cancel"] == "Keep searching"
+    api.set_running(False, "", "")
+    assert win.confirm_close is False
+    assert loc["global.quit"] == "Close anyway"   # empty labels leave them alone
+
+
+def test_attach_applies_state_set_before_the_window():
+    api = shell.ShellApi()
+    api.set_running(True, "T", "M")
+    win = _FakeWindow()
+    api.attach(win)
+    assert win.confirm_close is True
+    assert win.localization["global.quitConfirmation"] == "M"
+
+
+def test_window_is_not_exposed_to_the_page():
+    api = shell.ShellApi()
+    api.attach(_FakeWindow())
+    assert not [n for n in vars(api) if not n.startswith("_") and n not in
+                ("running", "title", "message")]
+
+
+def test_preferred_port_is_remembered(tmp_path):
+    p1 = shell.preferred_port(str(tmp_path))
+    assert (tmp_path / "port.txt").read_text().strip() == str(p1)
+    assert shell.preferred_port(str(tmp_path)) == p1
+
+
+def test_preferred_port_busy_takes_another(tmp_path):
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    s.listen()
+    busy = s.getsockname()[1]
+    try:
+        (tmp_path / "port.txt").write_text(str(busy))
+        p = shell.preferred_port(str(tmp_path))
+        assert p != busy and 1024 <= p <= 65535
+    finally:
+        s.close()
+
+
+def test_preferred_port_corrupt_file(tmp_path):
+    (tmp_path / "port.txt").write_text("not a port")
+    p = shell.preferred_port(str(tmp_path))
+    assert 1024 <= p <= 65535
+    (tmp_path / "port.txt").write_text("99999")
+    assert 1024 <= shell.preferred_port(str(tmp_path)) <= 65535
 
 
 def test_shutdown_stops_running_job(tmp_path):
@@ -108,30 +191,95 @@ def test_run_window_falls_back_when_gui_cannot_start(monkeypatch):
         created.update(kw, title=title, url=url)
         return Win()
 
+    started = {}
+
     def start(**kw):
+        started.update(kw)
         raise RuntimeError("no GTK or Qt")
     fake.create_window = create_window
     fake.start = start
     monkeypatch.setitem(sys.modules, "webview", fake)
-    assert shell.run_window("http://127.0.0.1:1/", shell.ShellApi(), "T") is False
+    assert shell.run_window("http://127.0.0.1:1/", shell.ShellApi(), "T",
+                            storage_dir="/x/webview") is False
+    assert started["private_mode"] is False and started["storage_path"] == "/x/webview"
     assert created["width"] == 1280 and created["height"] == 860
     assert created["min_size"] == (900, 640)
 
 
-def test_close_prompt_only_while_running():
-    asked = []
+def test_run_window_refuses_mshtml_on_windows(monkeypatch):
+    import sys
+    import types
+    fake = types.ModuleType("webview")
+    calls = []
+    fake.create_window = lambda *a, **k: calls.append("create")
+    fake.start = lambda **k: calls.append("start")
+    winforms = types.ModuleType("webview.platforms.winforms")
+    winforms.renderer = "mshtml"
+    monkeypatch.setitem(sys.modules, "webview", fake)
+    monkeypatch.setitem(sys.modules, "webview.platforms.winforms", winforms)
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert shell.run_window("http://127.0.0.1:1/", shell.ShellApi(), "T") is False
+    assert calls == []
 
-    class Win:
-        def create_confirmation_dialog(self, title, message):
-            asked.append((title, message))
-            return False
-    api = shell.ShellApi()
-    handler = shell.closing_handler(Win(), api)
-    assert handler() is True            # idle: close without asking
-    assert asked == []
-    api.set_running(True, "Quit?", "Search running")
-    assert handler() is False           # declined: stay open
-    assert asked == [("Quit?", "Search running")]
+
+def _fake_shell(monkeypatch, calls, browser_exc=None):
+    monkeypatch.setattr(shell, "start_server", lambda app, port: calls.append("server"))
+    monkeypatch.setattr(shell, "run_window",
+                        lambda *a, **k: calls.append("window") or True)
+
+    def run_browser(url, app):
+        calls.append("browser")
+        if browser_exc:
+            raise browser_exc
+    monkeypatch.setattr(shell, "run_browser", run_browser)
+    monkeypatch.setattr(shell, "shutdown", lambda app: calls.append("shutdown"))
+
+
+def test_main_uses_browser_on_linux(monkeypatch, tmp_path):
+    import sys
+    from desktop.main import main
+    monkeypatch.setenv("FOEOPT_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(sys, "platform", "linux")
+    calls = []
+    _fake_shell(monkeypatch, calls)
+    assert main([]) == 0
+    assert calls == ["server", "browser", "shutdown"]
+    import logging
+    assert logging.getLogger("werkzeug").level == logging.WARNING
+
+
+def test_main_ctrl_c_exits_cleanly(monkeypatch, tmp_path):
+    from desktop.main import main
+    monkeypatch.setenv("FOEOPT_DATA_DIR", str(tmp_path))
+    calls = []
+    _fake_shell(monkeypatch, calls, browser_exc=KeyboardInterrupt())
+    assert main(["--browser"]) == 0
+    assert calls[-1] == "shutdown"
+
+
+def test_main_survives_unusable_data_dir(monkeypatch):
+    import desktop.paths
+    from desktop import main as main_mod, selftest
+
+    def broken():
+        raise PermissionError("read-only")
+    monkeypatch.setattr(desktop.paths, "data_dir", broken)
+    monkeypatch.setattr(selftest, "run", lambda: 0)
+    assert main_mod.main(["--self-test"]) == 0
+
+
+def test_selftest_restores_update_env(monkeypatch):
+    from desktop import selftest
+    monkeypatch.delenv("FOEOPT_NO_UPDATE", raising=False)
+    seen = []
+
+    def check(base, deadline):
+        seen.append(os.environ.get("FOEOPT_NO_UPDATE"))
+        raise selftest._Fail("stubbed")
+    monkeypatch.setattr(selftest, "_check", check)
+    assert selftest.run() == 1
+    assert seen == ["1"]
+    assert "FOEOPT_NO_UPDATE" not in os.environ
 
 
 def test_main_version(capsys):

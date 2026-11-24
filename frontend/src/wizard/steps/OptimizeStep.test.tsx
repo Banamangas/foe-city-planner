@@ -206,13 +206,16 @@ describe("OptimizeStep", () => {
       vi.spyOn(api, "apiOptimizeResult").mockResolvedValue({ ok: true, job_id: "j" });
       const { unmount } = render(<OptimizeStep />);
       await waitFor(() => expect((screen.getByText("Start") as HTMLButtonElement).disabled).toBe(false));
-      expect(set_running).toHaveBeenLastCalledWith(false, expect.any(String), expect.any(String));
+      expect(set_running).toHaveBeenLastCalledWith(
+        false, expect.any(String), expect.any(String), expect.any(String), expect.any(String));
       fireEvent.click(screen.getByText("Start"));
       await screen.findByRole("progressbar");
       expect(set_running).toHaveBeenLastCalledWith(
         true,
         "A search is running",
         "Closing now stops the search and loses what it found since the last saved step. Close anyway?",
+        "Close anyway",
+        "Keep searching",
       );
       unmount();
       expect(set_running.mock.lastCall?.[0]).toBe(false);

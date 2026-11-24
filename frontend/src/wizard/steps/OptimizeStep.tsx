@@ -82,7 +82,7 @@ export function OptimizeStep() {
 
   // The desktop shell (and the browser) ask before closing while a search runs.
   useEffect(() => {
-    setRunningFlag(running, t("close.title"), t("close.message"));
+    setRunningFlag(running, t("close.title"), t("close.message"), t("close.quit"), t("close.cancel"));
   }, [running, lang]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => setRunningFlag(false, "", ""), []);
 
