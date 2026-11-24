@@ -70,7 +70,7 @@ def test_set_running_drives_builtin_close_confirmation():
     api = shell.ShellApi()
     win = _FakeWindow()
     loc = win.localization
-    api.attach(win)
+    api._attach(win)
     api.set_running(True, "T", "Search running", "Close anyway", "Keep searching")
     assert win.confirm_close is True
     assert win.localization is loc          # updated in place (the GUI holds this dict)
@@ -86,16 +86,17 @@ def test_attach_applies_state_set_before_the_window():
     api = shell.ShellApi()
     api.set_running(True, "T", "M")
     win = _FakeWindow()
-    api.attach(win)
+    api._attach(win)
     assert win.confirm_close is True
     assert win.localization["global.quitConfirmation"] == "M"
 
 
 def test_window_is_not_exposed_to_the_page():
     api = shell.ShellApi()
-    api.attach(_FakeWindow())
-    assert not [n for n in vars(api) if not n.startswith("_") and n not in
-                ("running", "title", "message")]
+    api._attach(_FakeWindow())
+    # pywebview exposes every public name of the js_api object to the page
+    assert {n for n in dir(api) if not n.startswith("_")} == {
+        "running", "title", "message", "set_running"}
 
 
 def test_preferred_port_is_remembered(tmp_path):
@@ -113,8 +114,34 @@ def test_preferred_port_busy_takes_another(tmp_path):
         (tmp_path / "port.txt").write_text(str(busy))
         p = shell.preferred_port(str(tmp_path))
         assert p != busy and 1024 <= p <= 65535
+        # busy only for this run (a second copy): keep the remembered port
+        assert (tmp_path / "port.txt").read_text() == str(busy)
     finally:
         s.close()
+
+
+@pytest.mark.skipif(__import__("sys").platform == "win32", reason="no TIME_WAIT reuse rule")
+def test_port_in_time_wait_is_still_usable():
+    """Closing the app leaves its port in TIME_WAIT; werkzeug binds it anyway
+    (SO_REUSEADDR), so a quick relaunch must keep the remembered port."""
+    lsock = socket.socket()
+    lsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)   # as werkzeug's server does
+    lsock.bind(("127.0.0.1", 0))
+    lsock.listen()
+    port = lsock.getsockname()[1]
+    client = socket.create_connection(("127.0.0.1", port))
+    conn, _ = lsock.accept()
+    conn.close()          # the server side closes first: its port enters TIME_WAIT
+    time.sleep(0.05)
+    client.close()
+    lsock.close()
+    plain = socket.socket()
+    try:
+        with pytest.raises(OSError):
+            plain.bind(("127.0.0.1", port))   # the bug: a plain bind says busy
+    finally:
+        plain.close()
+    assert shell._bindable(port) is True
 
 
 def test_preferred_port_corrupt_file(tmp_path):

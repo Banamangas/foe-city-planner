@@ -24,7 +24,12 @@ def free_port() -> int:
 
 
 def _bindable(port: int) -> bool:
+    """Whether the server could bind `port` now. Like werkzeug, allow address
+    reuse except on Windows (where it would let two servers share a port), so
+    a port left in TIME_WAIT by the last run still counts as free."""
     with socket.socket() as s:
+        if sys.platform != "win32":
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind(("127.0.0.1", port))
         except OSError:
@@ -36,15 +41,17 @@ def preferred_port(data_dir: str) -> int:
     """The port remembered in `<data_dir>/port.txt` when it is free, else a
     free one (remembered for next time). The same port keeps the page's
     origin, so its saved settings (the language) survive a restart; a second
-    copy of the app finds it busy and takes another."""
+    copy of the app finds it busy and takes another for that run only."""
     path = os.path.join(data_dir, "port.txt")
     try:
         with open(path, encoding="utf-8") as f:
-            port = int(f.read().strip())
-        if 1024 <= port <= 65535 and _bindable(port):
-            return port
+            remembered = int(f.read().strip())
     except (OSError, ValueError):
-        pass
+        remembered = None
+    if remembered is not None and 1024 <= remembered <= 65535:
+        if _bindable(remembered):
+            return remembered
+        return free_port()   # busy for now (another copy): keep the remembered one
     port = free_port()
     try:
         with open(path, "w", encoding="utf-8") as f:
@@ -116,7 +123,7 @@ class ShellApi:
         self._labels: dict[str, str] = {}
         self._window = None
 
-    def attach(self, window) -> None:
+    def _attach(self, window) -> None:
         self._window = window
         self._apply()
 
@@ -172,7 +179,7 @@ def run_window(url: str, api: ShellApi, title: str, storage_dir: str | None = No
             storage_dir = os.path.join(data_dir(), "webview")
         window = webview.create_window(title, url, js_api=api, width=1280, height=860,
                                        min_size=(900, 640), localization={})
-        api.attach(window)
+        api._attach(window)
         window.events.shown += shown.set
         webview.start(private_mode=False, storage_path=storage_dir)
     except Exception:
