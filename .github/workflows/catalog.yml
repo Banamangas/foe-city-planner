@@ -1,0 +1,106 @@
+name: Building list
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Rebuild even if the game data has not changed"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency: catalog
+
+env:
+  FOE_API_BASE: https://foe-buildings.duckdns.org
+
+jobs:
+  catalog:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      FOE_API_KEY: ${{ secrets.FOE_API_KEY }}
+      FORCE: ${{ inputs.force }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check the game data version
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          status=$(curl -fsS -H "X-API-Key: $FOE_API_KEY" "$FOE_API_BASE/status")
+          last=$(jq -r '.last_update.status // "success"' <<<"$status")
+          if [ "$last" != "success" ]; then
+            echo "API update failed (last_update.status = $last); not publishing."
+            exit 1
+          fi
+          src=$(jq -r '.last_update.building_entity_lookup.url // .files["building_entity_lookup.json"].last_modified // empty' <<<"$status")
+          echo "Source version: ${src:-<unknown>}"
+          echo "src=$src" >> "$GITHUB_OUTPUT"
+
+          mkdir -p prev
+          gh release download catalog -p catalog-manifest.json -p catalog.json.gz -D prev || echo "No previous release assets (first run?)."
+          prev_src=""
+          if [ -f prev/catalog-manifest.json ]; then
+            prev_src=$(jq -r '.source_version // empty' prev/catalog-manifest.json)
+          fi
+          skip=false
+          if [ "${FORCE:-false}" != "true" ] && [ -n "$src" ] && [ "$prev_src" = "$src" ]; then
+            echo "no change"
+            skip=true
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
+      - name: Download game data
+        if: steps.check.outputs.skip != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS -H "X-API-Key: $FOE_API_KEY" -o lookup.json "$FOE_API_BASE/data/download/building_entity_lookup.json"
+          if curl -fsS -H "X-API-Key: $FOE_API_KEY" -o names.json "$FOE_API_BASE/building-names"; then
+            echo "Downloaded building names."
+          else
+            rm -f names.json
+            echo "Building names unavailable; continuing without --names."
+          fi
+
+      - name: Build the building list
+        if: steps.check.outputs.skip != 'true'
+        shell: bash
+        env:
+          SRC: ${{ steps.check.outputs.src }}
+        run: |
+          set -euo pipefail
+          previous=foeopt/data/catalog.json
+          if [ -f prev/catalog.json.gz ]; then
+            previous=prev/catalog.json.gz
+          fi
+          args=(--lookup lookup.json --previous "$previous" --out dist)
+          if [ -f names.json ]; then
+            args+=(--names names.json)
+          fi
+          if [ -n "$SRC" ]; then
+            args+=(--source-version "$SRC")
+          fi
+          python scripts/update_catalog.py "${args[@]}"
+
+      - name: Publish to the "catalog" release
+        if: steps.check.outputs.skip != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view catalog >/dev/null 2>&1 || gh release create catalog \
+            --title "Building list" \
+            --notes "Updated daily from the game data. Used by the app; not a download for players." \
+            --target "${{ github.sha }}" \
+            --latest=false
+          gh release upload catalog dist/catalog.json.gz dist/catalog-manifest.json --clobber
