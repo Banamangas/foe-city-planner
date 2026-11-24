@@ -16,37 +16,10 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from foeopt.catalog_build import ABILITY_KEYS, trim  # noqa: E402,F401
 from foeopt.loader import read_json  # noqa: E402
 
 OUT = ROOT / "foeopt" / "data" / "catalog.json"
-ABILITY_KEYS = ("setId", "chainId", "linkPositions")
-
-
-def trim(defn: dict) -> dict:
-    out = {k: defn[k] for k in ("id", "name", "type", "width", "length") if k in defn}
-    lvl = (defn.get("requirements") or {}).get("street_connection_level")
-    if lvl:
-        out["requirements"] = {"street_connection_level": lvl}
-    comps = {}
-    for key, comp in (defn.get("components") or {}).items():
-        if not isinstance(comp, dict):
-            continue
-        keep = {k: comp[k] for k in ("placement", "streetConnectionRequirement") if k in comp}
-        if isinstance(comp.get("chain"), dict):
-            keep["chain"] = {k: comp["chain"][k] for k in ("chainId", "linkPositions")
-                             if k in comp["chain"]}
-        if "placement" in keep:
-            keep["placement"] = {"size": (keep["placement"] or {}).get("size")}
-        if keep:
-            comps[key] = keep
-    if comps:
-        out["components"] = comps
-    abilities = [{k: a[k] for k in ABILITY_KEYS if k in a}
-                 for a in defn.get("abilities", []) if isinstance(a, dict)]
-    abilities = [a for a in abilities if a]
-    if abilities:
-        out["abilities"] = abilities
-    return out
 
 
 def main(paths: list[str]) -> None:
