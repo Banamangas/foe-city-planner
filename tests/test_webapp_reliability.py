@@ -21,7 +21,7 @@ class _GateSearch:
     def __init__(self, layout, **kw):
         pass
 
-    def run(self, on_improvement=None, on_status=None, should_stop=None):
+    def run(self, on_improvement=None, on_status=None, should_stop=None, **_kw):
         while not _GateSearch.gate.wait(0.01):
             if should_stop and should_stop():
                 break

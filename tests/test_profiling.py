@@ -39,3 +39,38 @@ def test_run_returns_a_profile_with_first_valid(monkeypatch):
     prof = res["profile"]
     assert "first_valid" in prof["events"] and "walk_end" in prof["events"]
     assert prof["phases"]["probe_solve"]["count"] >= 1
+
+
+def test_run_reports_each_phase_once_in_order(monkeypatch):
+    lay, pat = _corridor_layout(1)
+
+    def fake_level(layout, region, consumers, k, rng, params, log, pool=None, **kw):
+        if k == 5:
+            kw["on_improvement"](lay, k, 9)
+            return ("FEASIBLE", 9)
+        return ("INFEASIBLE", None)
+
+    monkeypatch.setattr(rf, "_probe_level", fake_level)
+    seen: list[str] = []
+    rf.RoadsFirstSearch(lay, time_box=30, workers=1, k_start=5).run(on_phase=seen.append)
+    assert seen and seen[0] in ("seed", "walk")
+    assert all(n in rf.PHASES for n in seen)
+    assert all(a != b for a, b in zip(seen, seen[1:]))
+
+
+def test_timed_calls_on_enter_and_a_raising_phase_callback_never_breaks_run(monkeypatch):
+    p = Profile()
+    names: list[str] = []
+    p.on_enter = names.append
+    with p.timed("finish_exact"):
+        pass
+    assert names == ["finish_exact"]
+
+    lay, pat = _corridor_layout(1)
+    monkeypatch.setattr(rf, "_probe_level",
+                        lambda *a, **kw: ("INFEASIBLE", None))
+
+    def boom(name):
+        raise RuntimeError(name)
+    res = rf.RoadsFirstSearch(lay, time_box=5, workers=1, k_start=5).run(on_phase=boom)
+    assert "verdict" in res

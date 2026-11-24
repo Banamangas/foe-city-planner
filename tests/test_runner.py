@@ -84,7 +84,7 @@ def test_job_manager_submit_passes_concurrent_levels_through(monkeypatch):
         def __init__(self, layout, **kwargs):
             captured.append(kwargs)
 
-        def run(self, on_improvement=None, on_status=None, should_stop=None):
+        def run(self, on_improvement=None, on_status=None, should_stop=None, **_kw):
             return {"verdict": "DONE", "results": {}}
 
     monkeypatch.setattr(runner_mod, "RoadsFirstSearch", FakeSearch)
@@ -111,7 +111,7 @@ def test_job_manager_submit_defaults_concurrent_levels_to_1(monkeypatch):
         def __init__(self, layout, **kwargs):
             captured.append(kwargs)
 
-        def run(self, on_improvement=None, on_status=None, should_stop=None):
+        def run(self, on_improvement=None, on_status=None, should_stop=None, **_kw):
             return {"verdict": "DONE", "results": {}}
 
     monkeypatch.setattr(runner_mod, "RoadsFirstSearch", FakeSearch)
@@ -124,3 +124,31 @@ def test_job_manager_submit_defaults_concurrent_levels_to_1(monkeypatch):
         time.sleep(0.05)
     assert captured
     assert captured[0]["concurrent_levels"] == 1
+
+
+def test_job_status_reports_phase_and_layouts_found(monkeypatch):
+    import threading
+    import webapp.runner as runner_mod
+    release = threading.Event()
+
+    class FakeSearch:
+        def __init__(self, layout, **kwargs):
+            pass
+
+        def run(self, on_improvement=None, on_status=None, should_stop=None,
+                on_phase=None, **_kw):
+            on_phase("walk")
+            release.wait(5)
+            return {"verdict": "DONE", "results": {}}
+
+    monkeypatch.setattr(runner_mod, "RoadsFirstSearch", FakeSearch)
+    jobs = JobManager()
+    jid = jobs.submit(_tiny_layout(), time_box=1.0, patterns=5, probe_limit=1.0, workers=1)
+    assert jobs.status(jid)["phase"] in (None, "walk")
+    for _ in range(200):
+        if jobs.status(jid)["phase"] == "walk":
+            break
+        time.sleep(0.02)
+    st = jobs.status(jid)
+    release.set()
+    assert st["phase"] == "walk" and st["layouts_found"] == 0

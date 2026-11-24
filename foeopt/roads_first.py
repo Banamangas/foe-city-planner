@@ -1693,6 +1693,8 @@ _WORKER_FILLERS_IN_MODEL: bool = False  # Phase D: the position model places fil
 # Seconds kept back for validate() after the objective solve, and the smallest
 # objective budget worth starting (hinted, it improves within seconds).
 OBJECTIVE_MARGIN_S = 3.0
+PHASES = ("seed", "walk", "objective_polish", "union_polish", "rebased_polish",
+          "mutation_polish", "seed_polish", "exact")   # names run()'s on_phase reports
 BOUNDARY_LEVELS = 4        # levels probed below the walk's lowest when nothing was feasible
 EXACT_FINISH_S = 10.0      # exact_route cap on the final layout
 EXACT_FINISH_MIN_S = 1.0  # below this, skip exact finish rather than start it
@@ -2598,7 +2600,8 @@ class RoadsFirstSearch:
                 "seeds_tried": res.n_tried, "n_legal": res.n_legal,
                 "stopped_early": res.n_tried < self.seed_polish}
 
-    def run(self, on_improvement=None, on_status=None, should_stop=None) -> dict:
+    def run(self, on_improvement=None, on_status=None, should_stop=None,
+            on_phase=None, on_layout=None) -> dict:
         # ONE incumbent for every phase (walk, objective polish, seed polish,
         # exact finish): a layout reaches the caller only if it strictly beats
         # everything published before, so emitted counts never go up and the
@@ -2608,6 +2611,21 @@ class RoadsFirstSearch:
         user_cb = on_improvement
         profile = Profile()
         self.profile = profile
+        self._on_layout = on_layout          # wired by the layout-stream task
+        last_phase: list[str | None] = [None]
+
+        def _phase(name: str) -> None:
+            """Report a phase start once; a phase re-entered back to back
+            (rebased polish in a loop) is not reported again. A broken
+            callback must never break the run."""
+            if on_phase is None or name == last_phase[0]:
+                return
+            last_phase[0] = name
+            try:
+                on_phase(name)
+            except Exception:
+                pass
+        profile.on_enter = lambda name: _phase(name.removeprefix("finish_"))
 
         def on_improvement(vlay, k, achieved):  # noqa: F811 -- wraps the caller's
             if latest["achieved"] is not None and achieved >= latest["achieved"]:
@@ -2618,6 +2636,8 @@ class RoadsFirstSearch:
             if user_cb is not None:
                 user_cb(vlay, k, achieved)
         self.solved_networks = []
+        if self.seed_input:
+            _phase("seed")
         seed_info = self._seed_from_input(on_improvement) if self.seed_input else None
         layout = self.layout
         region = set(layout.region.cells)
@@ -2935,6 +2955,7 @@ class RoadsFirstSearch:
             else:
                 k = self.k_start
 
+            _phase("walk")
             st, _ = level(k)
             if st != "FEASIBLE":
                 k_max = len(layout.region.cells) - sum(

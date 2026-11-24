@@ -113,7 +113,8 @@ class JobManager:
         stop_event = threading.Event()
         improvements: queue.Queue = queue.Queue()
         state = {"state": "running", "start": time.monotonic(), "end": None,
-                 "result": None, "error": None}
+                 "result": None, "error": None,
+                 "phase": None, "layouts_found": 0}
         with self._lock:
             active = [jid for jid, j in self._jobs.items()
                       if j["state"]["state"] == "running"]
@@ -144,6 +145,9 @@ class JobManager:
 
         def on_status(k, level_status, probes_done, probes_total):
             pass
+
+        def on_phase(name):
+            state["phase"] = name
 
         def should_stop():
             return stop_event.is_set()
@@ -203,7 +207,8 @@ class JobManager:
                 )
                 res = search.run(on_improvement=on_improvement,
                                  on_status=on_status,
-                                 should_stop=should_stop)
+                                 should_stop=should_stop,
+                                 on_phase=on_phase)
                 if last_legality:
                     res["legality"] = dict(last_legality)
                 if edit_info:
@@ -232,7 +237,8 @@ class JobManager:
             end = st["end"] if st["end"] is not None else time.monotonic()
             return {"state": st["state"], "elapsed": round(end - st["start"], 1),
                     "error": st["error"], "result": st["result"],
-                    "stopped": job["stop_event"].is_set()}
+                    "stopped": job["stop_event"].is_set(),
+                    "phase": st["phase"], "layouts_found": st["layouts_found"]}
 
     def pop_improvement(self, job_id: str, timeout: float = 0.1) -> dict | None:
         with self._lock:
@@ -248,7 +254,8 @@ class JobManager:
         snap = self.snapshot(job_id)
         if snap is None:
             return {"state": "error", "elapsed": 0, "error": "unknown job"}
-        return {k: snap[k] for k in ("state", "elapsed", "error")}
+        return {k: snap[k] for k in ("state", "elapsed", "error", "phase",
+                                    "layouts_found")}
 
     def result(self, job_id: str) -> dict | None:
         snap = self.snapshot(job_id)
