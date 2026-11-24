@@ -1794,3 +1794,11 @@ and mapData), so it can't rebuild a full v3 file either.
   buildings land where the optimizer drew them (positions have only been checked against our own
   reading of the format). (2) essay's 36 two-lane tiles serve no building, so the optimized city
   has only level-1 roads. (3) storedBuildings are written at their old cityData position, custom=false.
+
+## Plan W: 8x2 workers vs 6x2 (2026-11-24, user: "Try A")
+Profile (FR16 300 s): 12 threads configured, 9.6 busy on average; 4 of the 16 logical
+CPUs never used (Ryzen 7 9700X: 8 cores / 16 threads). Mutation climb loses 556
+thread-s (empty 6th slot + slowest-probe tail); the walk only 42.
+- [ ] Paired A/B: `preset` vs `w8:workers=8` (probe_workers stays 2; polish threads
+      follow workers x probe_workers = 16), darkzig/FR16/FR17, 120 s and 300 s, 2 reps.
+- [ ] Gate: adopt only if never worse in any pair and better in at least one.
