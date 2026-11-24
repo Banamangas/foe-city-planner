@@ -16,16 +16,27 @@ app's dependencies plus PyInstaller. Keep PyInstaller out of the project's own
 dependencies: use a throwaway venv under `build/` (gitignored).
 
 ```sh
-cd frontend && npm install && cd ..
 uv venv --python 3.12 build/venv312
-uv pip install --python build/venv312/bin/python pyinstaller flask ortools
+uv pip install --python build/venv312/bin/python "flask>=3" "ortools>=9" pyinstaller
 # Windows / macOS also need the window:
-#   uv pip install --python <build python> pywebview
+#   uv pip install --python <build python> "pywebview>=5"
 build/venv312/bin/python desktop/build.py      # --skip-frontend reuses webapp/dist
 ```
 
-`build.py` runs `npm run build` (→ `webapp/dist`), then PyInstaller with
+Install the dependencies directly as above: `pip install .` does not work
+(the repo has several top-level packages and no build system).
+
+`build.py` runs `npm ci` in `frontend/` when `node_modules` is missing (fresh
+checkout), then `npm run build` (→ `webapp/dist`), then PyInstaller with
 `desktop/foe-city-planner.spec`, and prints the artifact path and size.
+
+## Releases (GitHub)
+
+`.github/workflows/desktop.yml` ("Desktop app") builds and self-tests all
+three systems. Run it by hand to get the files as workflow artifacts; push a
+`v*` tag (e.g. `v0.1.0`, matching `desktop/__init__.py`) to also get a
+**draft** release with the three files and `docs/download.md` as its notes.
+Review it, then publish it by hand.
 
 ## Check the build
 

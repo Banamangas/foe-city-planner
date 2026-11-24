@@ -40,7 +40,11 @@ def build_frontend() -> None:
     npm = shutil.which("npm")
     if npm is None:
         raise SystemExit("npm not found: install Node.js to build the frontend")
-    subprocess.run([npm, "run", "build"], cwd=os.path.join(ROOT, "frontend"), check=True)
+    frontend = os.path.join(ROOT, "frontend")
+    if not os.path.isdir(os.path.join(frontend, "node_modules")):
+        # fresh checkout: node_modules is gitignored
+        subprocess.run([npm, "ci"], cwd=frontend, check=True)
+    subprocess.run([npm, "run", "build"], cwd=frontend, check=True)
     if not os.path.exists(os.path.join(ROOT, "webapp", "dist", "index.html")):
         raise SystemExit("the frontend build produced no webapp/dist/index.html")
 

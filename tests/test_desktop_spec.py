@@ -43,3 +43,24 @@ def test_spec_uses_datas_and_never_globs():
     text = SPEC.read_text(encoding="utf-8")
     assert "datas=_datas" in text.replace(" ", "")
     assert "glob" not in text
+
+
+def _excludes() -> list[str]:
+    tree = ast.parse(SPEC.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.keyword) and node.arg == "excludes":
+            return ast.literal_eval(node.value)
+    raise AssertionError("the spec has no literal excludes list")
+
+
+def test_numpy_and_pandas_are_never_excluded():
+    # ortools' cp_model imports both at top level.
+    excludes = _excludes()
+    assert "numpy" not in excludes and "pandas" not in excludes
+
+
+def test_mac_bundle_metadata():
+    text = SPEC.read_text(encoding="utf-8")
+    assert '"NSHighResolutionCapable": True' in text
+    assert '"CFBundleShortVersionString": VERSION' in text
+    assert 'bundle_identifier="io.github.foe-city-planner"' in text

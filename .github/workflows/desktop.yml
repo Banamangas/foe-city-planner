@@ -1,0 +1,127 @@
+name: Desktop app
+
+# Manual run: build and self-test on all three systems, upload the files.
+# Version tag (v*): the same, then a DRAFT release with the three files
+# attached; the owner reviews and publishes it by hand.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: FoE-City-Planner-Windows.exe
+            binary: dist-desktop/FoE-City-Planner-Windows.exe
+          - os: macos-latest   # Apple Silicon
+            artifact: FoE-City-Planner-macOS.zip
+            binary: dist-desktop/FoE City Planner.app/Contents/MacOS/FoE City Planner
+          - os: ubuntu-latest
+            artifact: FoE-City-Planner-Linux
+            binary: dist-desktop/FoE-City-Planner-Linux
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install the frontend packages
+        working-directory: frontend
+        run: npm ci
+
+      # Not `pip install .`: the repo has several top-level packages and no
+      # build system, so it is not installable; install the dependencies directly.
+      - name: Install the Python packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pkgs=("flask>=3" "ortools>=9" pyinstaller)
+          if [ "$RUNNER_OS" != "Linux" ]; then
+            pkgs+=("pywebview>=5")   # the app's own window (Linux uses the browser)
+          fi
+          python -m pip install "${pkgs[@]}"
+
+      - name: Build the app
+        run: python desktop/build.py
+
+      # bash on every system: on Windows the exe has no console, so PowerShell
+      # would neither wait for it nor get its exit code; Git Bash does both.
+      # A windowed build prints nothing, so app.log (with the SELFTEST line)
+      # is always shown.
+      - name: Self-test the build
+        shell: bash
+        timeout-minutes: 10
+        env:
+          FOEOPT_NO_UPDATE: "1"
+          BINARY: ${{ matrix.binary }}
+        run: |
+          set -uo pipefail
+          data="$RUNNER_TEMP/foeopt-selftest"
+          mkdir -p "$data"
+          if command -v cygpath >/dev/null; then data=$(cygpath -m "$data"); fi
+          export FOEOPT_DATA_DIR="$data"
+          "./$BINARY" --self-test
+          status=$?
+          echo "--- app.log ---"
+          cat "$FOEOPT_DATA_DIR/app.log" || echo "(no app.log)"
+          echo "self-test exit code: $status"
+          exit $status
+
+      - name: Zip the macOS app
+        if: runner.os == 'macOS'
+        working-directory: dist-desktop
+        run: ditto -c -k --keepParent "FoE City Planner.app" FoE-City-Planner-macOS.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist-desktop/${{ matrix.artifact }}
+          if-no-files-found: error
+
+  release:
+    name: Draft release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: Create the draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          files=(release/FoE-City-Planner-Windows.exe release/FoE-City-Planner-macOS.zip release/FoE-City-Planner-Linux)
+          ls -l "${files[@]}"
+          gh release create "$TAG" --draft --verify-tag \
+            --title "FoE City Planner $TAG" \
+            --notes-file docs/download.md \
+            "${files[@]}"

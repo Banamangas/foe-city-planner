@@ -2,12 +2,15 @@
 an export, all over HTTP against the local server, no window.
 
 Prints one line, `SELFTEST OK roads=<before>-><best> layouts=<n>` (exit 0) or
-`SELFTEST FAIL <reason>` (exit 1)."""
+`SELFTEST FAIL <reason>` (exit 1). On Windows and macOS it first checks that
+the window backend is in the build (`SELFTEST FAIL window: <reason>`)."""
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 import os
+import sys
 import tempfile
 import time
 import urllib.error
@@ -87,7 +90,33 @@ def _say(line: str) -> None:
     log.info(line)
 
 
+def _window_problem() -> str | None:
+    """Why the build could not open its own window, or None. Windows needs
+    pywebview's WinForms backend on the Edge (WebView2) engine, macOS its
+    Cocoa backend; Linux always uses the browser."""
+    if sys.platform == "win32":
+        module = "webview.platforms.winforms"
+    elif sys.platform == "darwin":
+        module = "webview.platforms.cocoa"
+    else:
+        return None
+    try:
+        backend = importlib.import_module(module)
+    except Exception as exc:
+        return f"{module} does not import ({type(exc).__name__}: {exc})"
+    if sys.platform == "win32":
+        renderer = getattr(backend, "renderer", None)
+        if renderer != "edgechromium":
+            return f"renderer is {renderer!r}, not 'edgechromium'"
+    return None
+
+
 def run(timeout_s: float = 240.0) -> int:
+    problem = _window_problem()
+    if problem is not None:
+        log.error("window backend check failed: %s", problem)
+        _say(f"SELFTEST FAIL window: {problem}")
+        return 1
     previous = os.environ.get("FOEOPT_NO_UPDATE")
     os.environ["FOEOPT_NO_UPDATE"] = "1"   # never download during the test
     try:

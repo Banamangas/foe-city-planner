@@ -1883,3 +1883,13 @@ Texts live in `frontend/src/wizard/i18n/en.json` and `fr.json` (121 keys each; e
 3. **French copy (all of `fr.json`)** — natural wording, "vous", game vocabulary. Priority: `run.*` (machine line "threads de processeur", phase names `phase.*`), `checks.*` (unconnected-buildings question, chain relink notice), `unknown.*` (unknown-building form), `problem.*` and `load.*` (error and file messages).
 4. **Plain-language phase names (`phase.*`)** — "Reading your city", "Sketching road networks", "Fitting buildings around the best roads", "Trying small changes", "Fine-tuning the winner": keep or rename.
 5. **Stats labels (`stat.*`)** — match the wording players know (road efficiency, coverage, free area).
+
+## User to-do: download page screenshots (owner: the user)
+
+`docs/download.md` shows these pictures once they exist in `docs/download/` (taken with the unsigned app, English system language if possible):
+1. `windows-1.png` — the blue "Windows protected your PC" box, showing the **More info** link.
+2. `windows-2.png` — the same box after More info, showing **Run anyway**.
+3. `macos-1.png` — right-click menu on FoE City Planner with **Open**.
+4. `macos-2.png` — the "are you sure you want to open it" box with **Open**.
+5. `macos-3.png` — System Settings → Privacy & Security with **Open Anyway**.
+6. `linux-1.png` — the file's Properties with "Allow executing file as program" turned on.

@@ -3,6 +3,13 @@
 Minimizes the number of road tiles in a Forge of Empires city while keeping every
 road-needing building connected to the Townhall.
 
+## Download the app
+
+Not a developer? Get the ready-made app for Windows, Mac or Linux from the
+[Releases page](../../releases/latest) (nothing else to install), and see
+[docs/download.md](docs/download.md) for which file to pick and how to open
+it the first time.
+
 ## Setup
     uv sync
 

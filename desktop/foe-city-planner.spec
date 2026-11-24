@@ -2,12 +2,26 @@
 #
 # Privacy: the repo root holds player city files, so DATAS lists the exact
 # files to bundle (paths relative to the repo root), never a pattern.
+import ast
 import os
 import sys
 
 from PyInstaller.utils.hooks import collect_all
 
 ROOT = os.path.dirname(SPECPATH)  # noqa: F821 (SPECPATH is set by PyInstaller)
+
+
+def _version() -> str:
+    """desktop.__version__, read from the file (no import of the app)."""
+    with open(os.path.join(ROOT, "desktop", "__init__.py"), encoding="utf-8") as f:
+        for node in ast.parse(f.read()).body:
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                    and getattr(node.targets[0], "id", None) == "__version__"):
+                return ast.literal_eval(node.value)
+    raise SystemExit("desktop/__init__.py has no __version__")
+
+
+VERSION = _version()
 
 DATAS = [
     ("webapp/dist", "webapp/dist"),
@@ -50,6 +64,7 @@ a = Analysis(  # noqa: F821
     binaries=_binaries,
     datas=_datas,
     hiddenimports=_hidden,
+    # Never exclude numpy or pandas: ortools' cp_model imports both at top level.
     excludes=["tkinter", "torch", "pytest"],
     noarchive=False,
 )
@@ -68,6 +83,11 @@ if IS_MAC:
         coll,
         name=NAME + ".app",
         bundle_identifier="io.github.foe-city-planner",
+        info_plist={
+            "NSHighResolutionCapable": True,
+            "CFBundleShortVersionString": VERSION,
+            "CFBundleVersion": VERSION,
+        },
     )
 else:
     # One file on Windows and Linux.
