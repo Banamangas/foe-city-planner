@@ -6,6 +6,7 @@ import os
 import socket
 import threading
 import time
+import urllib.error
 import urllib.request
 
 import pytest
@@ -324,3 +325,114 @@ def test_selftest_runs_real_optimizer(capsys, tmp_path, monkeypatch):
     assert selftest.run() == 0
     out = capsys.readouterr().out
     assert "SELFTEST OK roads=" in out
+
+
+def _html_404_server():
+    """A local server that is not the app: HTML 404 for everything."""
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_error(404)
+
+        def log_message(self, *a):
+            pass
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def test_start_server_guards_the_host(tmp_path):
+    app = create_app(data_dir=str(tmp_path))
+    port = shell.free_port()
+    thread = shell.start_server(app, port)
+    try:
+        assert app.config["FOEOPT_PORT"] == port
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/options",
+                                     headers={"Host": f"evil.example:{port}"})
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(req, timeout=10)
+        assert exc.value.code == 403
+    finally:
+        shell.stop_server(thread)
+
+
+def test_existing_instance(tmp_path):
+    app = create_app(data_dir=str(tmp_path))
+    port = shell.free_port()
+    thread = shell.start_server(app, port)
+    try:
+        assert shell.existing_instance(port) is True          # 404 "no session"
+        (tmp_path / "last-session.json").write_text('{"step": 2}')
+        assert shell.existing_instance(port) is True          # 200 JSON
+    finally:
+        shell.stop_server(thread)
+    assert shell.existing_instance(port) is False             # nothing listens
+    other = _html_404_server()
+    try:
+        assert shell.existing_instance(other.server_address[1]) is False
+    finally:
+        other.shutdown()
+        other.server_close()
+
+
+def test_developer_server_is_not_an_existing_instance(tmp_path):
+    app = create_app(str(tmp_path / "c.db"))                  # no session routes
+    port = shell.free_port()
+    thread = shell.start_server(app, port)
+    try:
+        assert shell.existing_instance(port) is False
+    finally:
+        shell.stop_server(thread)
+
+
+def test_main_opens_the_running_copy(monkeypatch, tmp_path):
+    """A second launch opens the first copy's page instead of starting a second
+    server on the same city files."""
+    import webbrowser
+    import webapp.app
+    from desktop.main import main
+    first = create_app(data_dir=str(tmp_path))
+    port = shell.free_port()
+    thread = shell.start_server(first, port)
+    try:
+        (tmp_path / "port.txt").write_text(str(port))
+        monkeypatch.setenv("FOEOPT_DATA_DIR", str(tmp_path))
+        calls, opened = [], []
+        _fake_shell(monkeypatch, calls)
+        monkeypatch.setattr(webapp.app, "create_app",
+                            lambda *a, **k: calls.append("create_app"))
+        monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url))
+        assert main([]) == 0
+        assert calls == []
+        assert opened == [f"http://127.0.0.1:{port}/"]
+        assert "already running" in (tmp_path / "app.log").read_text()
+    finally:
+        shell.stop_server(thread)
+
+
+def test_main_starts_normally_when_the_port_is_another_server(monkeypatch, tmp_path):
+    from desktop.main import main
+    other = _html_404_server()
+    try:
+        (tmp_path / "port.txt").write_text(str(other.server_address[1]))
+        monkeypatch.setenv("FOEOPT_DATA_DIR", str(tmp_path))
+        calls = []
+        _fake_shell(monkeypatch, calls)
+        assert main(["--browser"]) == 0
+        assert calls == ["server", "browser", "shutdown"]
+    finally:
+        other.shutdown()
+        other.server_close()
+
+
+def test_main_ignores_unknown_args(monkeypatch, tmp_path):
+    """A file dropped on the exe, or an argument the OS adds, must not stop it."""
+    from desktop.main import main
+    monkeypatch.setenv("FOEOPT_DATA_DIR", str(tmp_path))
+    calls = []
+    _fake_shell(monkeypatch, calls)
+    assert main(["--browser", "/some/city.json", "-psn_0_12345"]) == 0
+    assert calls == ["server", "browser", "shutdown"]
+    log = (tmp_path / "app.log").read_text()
+    assert "ignored" in log and "city.json" in log

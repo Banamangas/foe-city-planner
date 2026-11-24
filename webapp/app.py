@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import glob
 import hashlib
 import json
 import os
@@ -156,15 +157,46 @@ def search_catalog(catalog: Catalog, q: str, limit: int = MAX_CATALOG_RESULTS,
 
 
 _SESSION_MAX_BYTES = 5 * 1024 * 1024
+_LOCAL_HOSTS = ("127.0.0.1", "localhost")
+
+
+def _local_host(host: str, port: int | None) -> bool:
+    """Whether a Host header names this computer's server: 127.0.0.1 or
+    localhost, without a port or with `port` (any port while it is unknown)."""
+    name, sep, given = host.lower().partition(":")
+    if name not in _LOCAL_HOSTS:
+        return False
+    if not sep:
+        return True
+    return given.isdigit() and (port is None or int(given) == port)
+
+
+def _remove_leftover_tmp(data_dir: str) -> None:
+    """Session writes interrupted by a crash leave `tmp*.tmp` files behind."""
+    for path in glob.glob(os.path.join(glob.escape(data_dir), "tmp*.tmp")):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 def create_app(db_path: str | None = None, *, data_dir: str | None = None) -> Flask:
     """`data_dir` switches on desktop mode: the city db lives there, only the
-    last city is kept, and the session/ping routes exist."""
+    last city is kept, the session/ping routes exist, and only requests for
+    127.0.0.1 / localhost are served (on `app.config["FOEOPT_PORT"]` once
+    set, as `desktop.shell.start_server` does)."""
     app = Flask(__name__, static_folder=_DIST, static_url_path="/assets_root")
     if data_dir is not None:
         os.makedirs(data_dir, exist_ok=True)
         db_path = os.path.join(data_dir, "cities.db")
+        _remove_leftover_tmp(data_dir)
+
+        @app.before_request
+        def _local_only():
+            # DNS-rebinding guard: a page from another site must not reach the
+            # local server through a name that resolves to 127.0.0.1.
+            if not _local_host(request.host, app.config.get("FOEOPT_PORT")):
+                abort(403)
     cache = CityCache(db_path or os.path.join(os.path.dirname(__file__), "cities.db"))
     jobs = JobManager()
     app.extensions["foeopt_jobs"] = jobs

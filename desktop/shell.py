@@ -2,12 +2,15 @@
 close prompt during a search, and the idle exit of the browser mode."""
 from __future__ import annotations
 
+import json
 import logging
 import os
 import socket
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 import webbrowser
 
 log = logging.getLogger(__name__)
@@ -37,22 +40,29 @@ def _bindable(port: int) -> bool:
     return True
 
 
+def remembered_port(data_dir: str) -> int | None:
+    """The port in `<data_dir>/port.txt`, or None when missing or not a port."""
+    try:
+        with open(os.path.join(data_dir, "port.txt"), encoding="utf-8") as f:
+            port = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    return port if 1024 <= port <= 65535 else None
+
+
 def preferred_port(data_dir: str) -> int:
     """The port remembered in `<data_dir>/port.txt` when it is free, else a
     free one (remembered for next time). The same port keeps the page's
-    origin, so its saved settings (the language) survive a restart; a second
-    copy of the app finds it busy and takes another for that run only."""
-    path = os.path.join(data_dir, "port.txt")
-    try:
-        with open(path, encoding="utf-8") as f:
-            remembered = int(f.read().strip())
-    except (OSError, ValueError):
-        remembered = None
-    if remembered is not None and 1024 <= remembered <= 65535:
+    origin, so its saved settings (the language) survive a restart. Busy
+    means another program holds it (a running copy of the app is caught
+    first by `existing_instance`): take another for this run only."""
+    remembered = remembered_port(data_dir)
+    if remembered is not None:
         if _bindable(remembered):
             return remembered
-        return free_port()   # busy for now (another copy): keep the remembered one
+        return free_port()   # busy for now: keep the remembered one
     port = free_port()
+    path = os.path.join(data_dir, "port.txt")
     try:
         with open(path, "w", encoding="utf-8") as f:
             f.write(str(port))
@@ -61,11 +71,35 @@ def preferred_port(data_dir: str) -> int:
     return port
 
 
+def existing_instance(port: int, timeout: float = 1.0) -> bool:
+    """Whether a copy of the desktop app already serves on `port`: its
+    `GET /api/session` answers 200 JSON, or 404 with exactly
+    {"error": "no session"} (the developer server and other programs don't)."""
+    url = f"http://127.0.0.1:{port}/api/session"
+    direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # never via a proxy
+    try:
+        with direct.open(url, timeout=timeout) as r:
+            status, raw = r.status, r.read()
+    except urllib.error.HTTPError as exc:
+        status, raw = exc.code, exc.read()
+    except (OSError, ValueError):
+        return False
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        return False
+    if status == 200:
+        return True
+    return status == 404 and body == {"error": "no session"}
+
+
 def start_server(app, port: int) -> threading.Thread:
     """Serve `app` on 127.0.0.1:`port` from a daemon thread; return once the
-    port accepts connections (up to 10 s). The thread carries the server as
+    port accepts connections (up to 10 s). The app learns its port (for the
+    desktop mode's Host check). The thread carries the server as
     `.server` so `stop_server` can shut it down."""
     from werkzeug.serving import make_server
+    app.config["FOEOPT_PORT"] = port   # the host guard accepts only this port
     server = make_server("127.0.0.1", port, app, threaded=True)
     thread = threading.Thread(target=server.serve_forever, name="foeopt-server", daemon=True)
     thread.server = server

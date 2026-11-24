@@ -70,7 +70,7 @@ export const useWizardStore = create<WizardState>((set, get) => ({
       run: patch === null ? null : s.run ? { ...s.run, ...patch } : (patch as RunState),
     })),
   layouts: [],
-  addLayouts: (entries) => set((s) => ({ layouts: mergeLayouts(s.layouts, entries) })),
+  addLayouts: (entries) => set((s) => ({ layouts: mergeLayouts(s.layouts, entries, s.selectedId) })),
   clearLayouts: () => set({ layouts: [], selectedId: null }),
   invalidateRun: () => {
     set({ run: null, layouts: [], selectedId: null });

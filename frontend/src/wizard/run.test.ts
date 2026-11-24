@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  afterRun, buildOptimizeBody, mergeLayouts, phaseIndex, progressPct, runKey, startDecision, timeLeft,
+  afterRun, buildOptimizeBody, MAX_LAYOUTS, mergeLayouts, phaseIndex, progressPct, runKey, startDecision, timeLeft,
 } from "./run";
 import type { LayoutEntry } from "./types";
 
@@ -54,6 +54,22 @@ describe("mergeLayouts", () => {
     const m = mergeLayouts([entry(2, 70)], [entry(2, 69)]);
     expect(m).toHaveLength(1);
     expect(m[0].stats.roads).toBe(69);
+  });
+  it("keeps only the best MAX_LAYOUTS (same cap as the server)", () => {
+    expect(MAX_LAYOUTS).toBe(30);
+    const many = Array.from({ length: 40 }, (_, i) => entry(i + 1, 100 - i));
+    const m = mergeLayouts([], many);
+    expect(m).toHaveLength(30);
+    expect(m[0].stats.roads).toBe(61);
+    expect(m[29].stats.roads).toBe(90);
+  });
+  it("keeps the selected layout even when it would be trimmed", () => {
+    const many = Array.from({ length: 40 }, (_, i) => entry(i + 1, 100 - i));
+    const m = mergeLayouts([], many, 1);   // id 1 has the most roads
+    expect(m).toHaveLength(30);
+    expect(m.map((e) => e.id)).toContain(1);
+    expect(m[m.length - 1].id).toBe(1);
+    expect(mergeLayouts([], many, 40).map((e) => e.id)).not.toContain(10);
   });
 });
 

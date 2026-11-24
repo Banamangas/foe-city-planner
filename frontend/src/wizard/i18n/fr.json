@@ -126,7 +126,7 @@
   "resume.another": "Commencer avec une autre ville",
   "resume.failed": "Impossible de rouvrir votre dernière ville. Chargez à nouveau le fichier de votre ville.",
   "close.title": "Une recherche est en cours",
-  "close.message": "Si vous fermez maintenant, la recherche s'arrête et vous perdez ce qu'elle a trouvé depuis la dernière étape enregistrée. Fermer quand même ?",
+  "close.message": "Si vous fermez maintenant, la recherche s'arrête. Les agencements déjà trouvés sont conservés. Fermer quand même ?",
   "close.quit": "Fermer quand même",
   "close.cancel": "Continuer la recherche"
 }

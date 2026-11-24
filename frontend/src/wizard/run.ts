@@ -69,12 +69,28 @@ export function runKey(cityId: string, edits: Edits, keepUnconnected: number[]):
   });
 }
 
-/** Unique by id (incoming wins), sorted by roads then id, so the order is stable while layouts stream in. */
-export function mergeLayouts(existing: LayoutEntry[], incoming: LayoutEntry[]): LayoutEntry[] {
+/** The most layouts kept in the browser: the same cap as the server's layout collector,
+ *  so long runs do not grow the saved session without end. */
+export const MAX_LAYOUTS = 30;
+
+/** Unique by id (incoming wins), sorted by roads then id, so the order is stable while layouts
+ *  stream in; trimmed to the best MAX_LAYOUTS, always keeping `keepId` (the player's pick). */
+export function mergeLayouts(
+  existing: LayoutEntry[],
+  incoming: LayoutEntry[],
+  keepId: number | "player" | null = null,
+): LayoutEntry[] {
   const byId = new Map<number, LayoutEntry>();
   for (const e of existing) byId.set(e.id, e);
   for (const e of incoming) byId.set(e.id, e);
-  return [...byId.values()].sort((a, b) => a.stats.roads - b.stats.roads || a.id - b.id);
+  const sorted = [...byId.values()].sort((a, b) => a.stats.roads - b.stats.roads || a.id - b.id);
+  if (sorted.length <= MAX_LAYOUTS) return sorted;
+  const kept = sorted.slice(0, MAX_LAYOUTS);
+  if (typeof keepId === "number" && !kept.some((e) => e.id === keepId)) {
+    const picked = byId.get(keepId);
+    if (picked) kept.splice(MAX_LAYOUTS - 1, 1, picked);
+  }
+  return kept;
 }
 
 export function startDecision(

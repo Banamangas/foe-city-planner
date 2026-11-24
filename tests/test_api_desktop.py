@@ -98,3 +98,42 @@ def test_stop_all():
     assert ev.is_set()
     jm._jobs["j"]["state"]["state"] = "done"
     assert jm.any_running() is False
+
+
+def test_desktop_rejects_foreign_host(tmp_path):
+    """DNS-rebinding guard: only 127.0.0.1 / localhost (with or without the port)."""
+    app, c = _desktop(tmp_path)
+    app.config["FOEOPT_PORT"] = 8123
+    assert c.get("/api/session").status_code == 404                     # Host: localhost
+    for host in ("127.0.0.1:8123", "localhost:8123", "127.0.0.1", "LOCALHOST:8123"):
+        assert c.get("/api/session", headers={"Host": host}).status_code == 404, host
+    for host in ("evil.example:8123", "evil.example", "127.0.0.1:9999",
+                 "127.0.0.1.evil.example:8123", "[::1]:8123"):
+        assert c.get("/api/session", headers={"Host": host}).status_code == 403, host
+        assert c.put("/api/session", json={"a": 1},
+                     headers={"Host": host}).status_code == 403, host
+    assert not (tmp_path / "last-session.json").exists()
+
+
+def test_desktop_host_guard_any_port_until_known(tmp_path):
+    app, c = _desktop(tmp_path)
+    assert c.get("/api/session", headers={"Host": "127.0.0.1:4242"}).status_code == 404
+    assert c.get("/api/session", headers={"Host": "evil.example:4242"}).status_code == 403
+
+
+def test_developer_mode_has_no_host_guard(tmp_path):
+    app = create_app(str(tmp_path / "c.db"))
+    app.config.update(TESTING=True)
+    r = app.test_client().get("/api/cities", headers={"Host": "evil.example:5000"})
+    assert r.status_code == 200
+
+
+def test_desktop_startup_removes_leftover_tmp_files(tmp_path):
+    (tmp_path / "tmpab12cd.tmp").write_text("{}")
+    (tmp_path / "tmp_x.tmp").write_text("{}")
+    keep = tmp_path / "notes.tmp"
+    keep.write_text("x")
+    (tmp_path / "last-session.json").write_text("{}")
+    _desktop(tmp_path)
+    assert sorted(p.name for p in tmp_path.iterdir()
+                  if not p.name.startswith("cities.db")) == ["last-session.json", "notes.tmp"]

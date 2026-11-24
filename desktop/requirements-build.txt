@@ -1,0 +1,46 @@
+# Exact versions for building the desktop app (CI and local builds), so the
+# same tag always builds the same app. Derived from uv.lock:
+#   uv export --frozen --no-hashes --extra desktop --no-dev --no-emit-project
+# plus pyinstaller, resolved with
+#   uv pip compile --universal --python-version 3.12 -c <that export> <top-level pins>
+# pywebview (the app's own window) is for Windows and macOS only: the Linux
+# build opens the browser. Update by re-running the commands above.
+absl-py==2.5.0
+altgraph==0.17.5
+blinker==1.9.0
+bottle==0.13.4 ; sys_platform != 'linux'
+cffi==2.1.1 ; sys_platform == 'win32'
+click==8.4.1
+clr-loader==0.3.1 ; sys_platform == 'win32'
+colorama==0.4.6 ; sys_platform == 'win32'
+flask==3.1.3
+immutabledict==4.3.1
+itsdangerous==2.2.0
+jinja2==3.1.6
+macholib==1.16.4 ; sys_platform == 'darwin'
+markupsafe==3.0.3
+numpy==2.5.0
+ortools==9.15.6755
+packaging==26.4
+pandas==3.0.3
+pefile==2024.8.26 ; sys_platform == 'win32'
+protobuf==6.33.6
+proxy-tools==0.1.0 ; sys_platform != 'linux'
+pycparser==3.12 ; implementation_name != 'PyPy' and sys_platform == 'win32'
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.10
+pyobjc-core==13.0 ; sys_platform == 'darwin'
+pyobjc-framework-cocoa==13.0 ; sys_platform == 'darwin'
+pyobjc-framework-quartz==13.0 ; sys_platform == 'darwin'
+pyobjc-framework-security==13.0 ; sys_platform == 'darwin'
+pyobjc-framework-uniformtypeidentifiers==13.0 ; sys_platform == 'darwin'
+pyobjc-framework-webkit==13.0 ; sys_platform == 'darwin'
+python-dateutil==2.9.0.post0
+pythonnet==3.2.1 ; sys_platform == 'win32'
+pywebview==6.2.1 ; sys_platform != 'linux'
+pywin32-ctypes==0.2.3 ; sys_platform == 'win32'
+setuptools==84.2.1
+six==1.17.0
+typing-extensions==4.15.0
+tzdata==2026.3 ; sys_platform == 'emscripten' or sys_platform == 'win32'
+werkzeug==3.1.8

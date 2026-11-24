@@ -47,18 +47,12 @@ jobs:
         working-directory: frontend
         run: npm ci
 
-      # Not `pip install .`: the repo has several top-level packages and no
-      # build system, so it is not installable; install the dependencies directly.
+      # Exact versions (desktop/requirements-build.txt), so a tag always builds
+      # the same app; pywebview (the app's own window) is skipped on Linux by
+      # its marker. Not `pip install .`: the repo has several top-level
+      # packages and no build system.
       - name: Install the Python packages
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          pkgs=("flask>=3" "ortools>=9" pyinstaller)
-          if [ "$RUNNER_OS" != "Linux" ]; then
-            pkgs+=("pywebview>=5")   # the app's own window (Linux uses the browser)
-          fi
-          python -m pip install "${pkgs[@]}"
+        run: python -m pip install -r desktop/requirements-build.txt
 
       - name: Build the app
         run: python desktop/build.py

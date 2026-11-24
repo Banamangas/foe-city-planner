@@ -213,7 +213,7 @@ describe("OptimizeStep", () => {
       expect(set_running).toHaveBeenLastCalledWith(
         true,
         "A search is running",
-        "Closing now stops the search and loses what it found since the last saved step. Close anyway?",
+        "Closing now stops the search. The layouts found so far are kept. Close anyway?",
         "Close anyway",
         "Keep searching",
       );

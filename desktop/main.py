@@ -11,6 +11,7 @@ import multiprocessing
 import os
 import sys
 import tempfile
+import webbrowser
 from logging.handlers import RotatingFileHandler
 
 TITLE = "FoE City Planner"
@@ -58,7 +59,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--browser", action="store_true")
     parser.add_argument("--version", action="store_true")
-    args = parser.parse_args(argv)
+    # A file dropped on the exe or an argument the OS adds must not stop it.
+    args, ignored = parser.parse_known_args(argv)
 
     if args.version:
         print(f"{TITLE} {__version__}")
@@ -70,6 +72,8 @@ def main(argv: list[str] | None = None) -> int:
         _setup_logging(folder)
     except Exception:
         folder = None
+    if ignored:
+        log.info("ignored command-line arguments: %r", ignored)
 
     if args.self_test:
         from desktop import selftest
@@ -81,6 +85,14 @@ def main(argv: list[str] | None = None) -> int:
 
         if folder is None:
             raise RuntimeError("no folder to keep the city in")
+        # One copy at a time: a second server on the same city files would
+        # let one copy delete the other's city.
+        running = shell.remembered_port(folder)
+        if running is not None and shell.existing_instance(running):
+            url = f"http://127.0.0.1:{running}/"
+            log.info("already running on %s, opening it", url)
+            webbrowser.open(url)
+            return 0
         app = create_app(data_dir=folder)
         port = shell.preferred_port(folder)
         try:
