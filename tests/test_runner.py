@@ -41,6 +41,9 @@ def test_job_manager_submit_and_status():
             break
         time.sleep(0.1)
     assert st["state"] in ("done", "error")
+    imp = jobs.pop_improvement(jid)
+    if imp is not None:
+        assert isinstance(imp["stats"]["roads"], int)
 
 
 def test_job_manager_stop_signals_search():

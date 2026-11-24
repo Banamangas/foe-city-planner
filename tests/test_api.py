@@ -46,6 +46,7 @@ def test_api_load_with_json_body(client):
     assert "region_cells" in body
     assert "road_estimate" in body
     assert "map_view" in body
+    assert isinstance(body["stats"]["roads"], int)
 
 
 def test_api_load_bad_json_returns_400(client):

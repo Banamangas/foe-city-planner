@@ -7,6 +7,7 @@ import uuid
 
 from foeopt.legality import check as check_legality
 from foeopt.model import Layout
+from foeopt.stats import city_stats
 from foeopt.roads_first import RoadsFirstSearch
 
 
@@ -131,6 +132,7 @@ class JobManager:
             last_legality.clear()
             last_legality.update(leg)
             imp = {"k": k, "achieved": achieved, "legality": leg,
+                   "stats": city_stats(best_layout),
                    **layout_to_dict(best_layout)}
             if edit_info:
                 imp.update(edit_info)

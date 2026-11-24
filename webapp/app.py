@@ -15,6 +15,7 @@ from foeopt.editing import UNPLACEABLE_TYPES, EditError, apply_edits
 from foeopt.export_v3 import ExportError, can_export, to_v3
 from foeopt.loader import city_catalog_defs, is_v3, load_layout_from_dict, load_layout
 from foeopt.report import road_estimate
+from foeopt.stats import city_stats
 from foeopt.viz import layout_to_view
 from webapp.cache import CityCache
 from foeopt.bounds import screen_city
@@ -156,6 +157,7 @@ def create_app(db_path: str | None = None) -> Flask:
             # Advisory only -- the UI must never use it to block a run.
             "screen": screen_city(layout),
             "map_view": layout_to_view(layout),
+            "stats": city_stats(layout),
             # Edits saved for this city (survive a reload of the same file).
             "edits": cache.get_edits(city_id),
         }
