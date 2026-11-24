@@ -65,6 +65,8 @@ class _Editor:
         self.warnings: list[str] = []
         self.touched: set[int] = set()   # entity ids whose chain group an edit changed
         self.relinked: list[int] = []    # patches moved to another main's chain
+        self.loose_relinked: list[dict] = []   # loose pieces attached to their main
+        self.loose_failed: list[dict] = []     # loose pieces left where they were
 
     # -- chain helpers ------------------------------------------------------
     def is_head(self, b: Building) -> bool:
@@ -267,6 +269,36 @@ class _Editor:
                 added.append({"entity_id": b.entity_id, "link_to": link_to})
         return added
 
+    def relink_loose(self) -> list[int]:
+        """Attach every loose chain piece (ascending id) at the free END slot of
+        its chain's main, like an added patch; the entity id is kept. With
+        several mains the lowest id that has a free slot wins. A piece that
+        cannot be attached stays where it is and is reported in `loose_failed`."""
+        moved = []
+        for e in loose_chain_pieces(self._layout(), self.catalog):
+            b = self.work[e]
+            w, l = b.footprint.width, b.footprint.length
+            info = {"entity_id": e, "name": b.name}
+            heads = sorted(h.entity_id for h in self.heads_of(b.chain_id))
+            if not heads:
+                self.loose_failed.append({**info, "reason": "no_main"})
+                continue
+            main = next((h for h in heads if self.free_slot(h, w, l) is not None), None)
+            if main is None:
+                self.loose_failed.append({**info, "reason": "no_free_slot"})
+                continue
+            sx, sy = self.free_slot(main, w, l)
+            self.work[e] = replace(b, footprint=Footprint(sx, sy, w, l))
+            group = self.component(self.adjacency(), main)
+            if e not in group or make_composite([self.work[g] for g in group]) is None:
+                self.work[e] = b
+                self.loose_failed.append({**info, "reason": "not_rigid"})
+                continue
+            self.touched |= group
+            self.loose_relinked.append({**info, "main": main})
+            moved.append(e)
+        return moved
+
     def _pick_main(self, b: Building, link_to) -> int:
         heads = self.heads_of(b.chain_id)
         cands = [{"entity_id": h.entity_id, "name": h.name} for h in heads]
@@ -437,12 +469,16 @@ def _parse_add(spec, catalog: Catalog | None) -> dict:
 
 def apply_edits(layout: Layout, remove_ids, add: list | None = None,
                 catalog: Catalog | None = None,
-                relink: dict | None = None) -> tuple[Layout, dict]:
+                relink: dict | None = None,
+                relink_loose: bool = False) -> tuple[Layout, dict]:
     """The edited layout (upload roads kept) and a report:
     `to_store` (every building that leaves the map, with the reason),
     `reattached`, `cascades` (mains whose patches go to store, with the other
     mains they could be attached to instead), `added`, `warnings`,
     `not_composable`, `seed` ({possible, reason}) and `space`.
+    With `relink_loose`, loose chain pieces are attached to their main
+    (`relinked`); those that cannot be are listed in `relink_failed` with a
+    reason: no_main, no_free_slot or not_rigid.
     Raises EditError on an invalid edit set."""
     add = add if add is not None else []
     if not isinstance(add, list):
@@ -476,6 +512,7 @@ def apply_edits(layout: Layout, remove_ids, add: list | None = None,
         ed.remove(e)
     added = ed.add(specs)
     new_ids = [a["entity_id"] for a in added]
+    loose_moved = ed.relink_loose() if relink_loose else []
 
     adj = ed.adjacency()
     not_composable, seen = [], set()
@@ -492,7 +529,7 @@ def apply_edits(layout: Layout, remove_ids, add: list | None = None,
 
     # Relinked patches moved next to another main, usually onto other
     # buildings: they need a free spot as much as new buildings do.
-    movers = new_ids + ed.relinked
+    movers = new_ids + ed.relinked + loose_moved
     unplaced = ed.place_for_seed(movers) if movers else []
     out = ed.result()
 
@@ -530,5 +567,6 @@ def apply_edits(layout: Layout, remove_ids, add: list | None = None,
     report = {"removed": sorted(set(remove)), "to_store": ed.stored,
               "reattached": ed.reattached, "cascades": ed.cascades, "added": added_info,
               "warnings": ed.warnings, "not_composable": not_composable, "seed": seed,
-              "space": space}
+              "space": space, "relinked": ed.loose_relinked,
+              "relink_failed": ed.loose_failed}
     return out, report

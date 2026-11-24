@@ -175,13 +175,14 @@ def create_app(db_path: str | None = None) -> Flask:
             cat = _catalogs[city["id"]] = Catalog(city_catalog_defs(city["payload"]))
         return cat
 
-    def _edit_city(city: dict, edits) -> tuple:
+    def _edit_city(city: dict, edits, relink_chains: bool = False) -> tuple:
         """(edited layout, report) for a cached city, or raise EditError."""
         if not isinstance(edits, dict):
             raise EditError("edits must be an object {remove: [...], add: [...]}")
         layout = load_layout_from_dict(city["payload"])
         return apply_edits(layout, edits.get("remove") or [], edits.get("add") or [],
-                           catalog=_catalog_for(city), relink=edits.get("relink") or {})
+                           catalog=_catalog_for(city), relink=edits.get("relink") or {},
+                           relink_loose=relink_chains)
 
     def _edit_error(exc: EditError):
         return jsonify(error=str(exc), **exc.detail), 400
@@ -256,10 +257,13 @@ def create_app(db_path: str | None = None) -> Flask:
             if key not in data:
                 options[key] = sized[key]
         edits = data.get("edits")
-        if not edits or (isinstance(edits, dict) and not edits.get("remove")
-                         and not edits.get("add")):
+        relink_chains = data.get("relink_chains", True) is not False
+        layout = load_layout_from_dict(city["payload"])
+        has_loose = relink_chains and bool(loose_chain_pieces(layout, _catalog_for(city)))
+        if not has_loose and (not edits or (isinstance(edits, dict)
+                                            and not edits.get("remove")
+                                            and not edits.get("add"))):
             # Unedited city: exactly the historical path.
-            layout = load_layout_from_dict(city["payload"])
             try:
                 job_id = jobs.submit(layout, **options)
             except JobBusy as exc:
@@ -267,7 +271,7 @@ def create_app(db_path: str | None = None) -> Flask:
             # Echo the resolved options so the client can show exactly what ran.
             return jsonify(job_id=job_id, options=options)
         try:
-            layout, report = _edit_city(city, edits)
+            layout, report = _edit_city(city, edits or {}, relink_chains)
         except EditError as exc:
             return _edit_error(exc)
         space = report["space"]
@@ -314,7 +318,8 @@ def create_app(db_path: str | None = None) -> Flask:
         if city is None:
             return jsonify(error="city not found, load it first"), 400
         try:
-            _, report = _edit_city(city, data.get("edits") or {})
+            _, report = _edit_city(city, data.get("edits") or {},
+                                  data.get("relink_chains", True) is not False)
         except EditError as exc:
             return _edit_error(exc)
         return jsonify(report=report)

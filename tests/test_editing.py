@@ -24,6 +24,8 @@ CAT = Catalog({
              "requirements": {"street_connection_level": 1}, "abilities": _lp(2, 0, 2, 1)},
     "FIELD": {"name": "Field", "width": 1, "length": 2, "type": "decoration",
               "abilities": _lp(1, 0, 1, 1)},
+    "WIDE": {"name": "Wide", "width": 1, "length": 3, "type": "decoration",
+             "abilities": _lp(1, 0, 1, 1)},
     "MEADOW": {"name": "Meadow", "width": 1, "length": 2, "type": "decoration",
                "abilities": _lp(1, 0, 1, 1)},
 })
@@ -291,3 +293,54 @@ def test_loose_chain_pieces_ignores_chain_without_main():
 
 def test_loose_chain_pieces_needs_a_catalog():
     assert loose_chain_pieces(_moved(_city(), 11, 0, 3), None) == []
+
+
+# -- relinking loose chain pieces ------------------------------------------------
+
+def test_relink_loose_attaches_piece_at_chain_end():
+    lay = _moved(_city(), 13, 0, 5)
+    assert loose_chain_pieces(lay, CAT) == [13]
+    out, rep = apply_edits(lay, [], catalog=CAT, relink_loose=True)
+    assert rep["relinked"] == [{"entity_id": 13, "name": "Field#13", "main": 10}]
+    assert rep["relink_failed"] == []
+    assert _ids(out) == _ids(lay)                      # entity id kept
+    assert _pos(out, 13) == (14, 0)                    # the end of the chain
+    assert loose_chain_pieces(out, CAT) == []
+    assert len(chain_links(out)) == len(chain_links(_city()))
+    assert len(compose(out).buildings) == len(compose(_city()).buildings)
+    assert check(out, out).status == "valid"
+
+
+def test_relink_loose_default_leaves_city_unchanged():
+    lay = _moved(_city(), 11, 0, 3)
+    out, rep = apply_edits(lay, [], catalog=CAT)
+    assert rep["relinked"] == [] and rep["relink_failed"] == []
+    assert _pos(out, 11) == (12, 3)
+    assert loose_chain_pieces(out, CAT) == [11]
+
+
+def test_relink_loose_no_free_slot_for_wrong_size():
+    lay = _city()
+    bs = lay.buildings + [_cat_b(40, "WIDE", 12, 5)]
+    lay = Layout(lay.region, bs, lay.townhall, lay.roads)
+    out, rep = apply_edits(lay, [], catalog=CAT, relink_loose=True)
+    assert rep["relinked"] == []
+    assert rep["relink_failed"] == [
+        {"entity_id": 40, "name": "Wide#40", "reason": "no_free_slot"}]
+    assert _pos(out, 40) == (12, 5)
+
+
+def test_relink_loose_picks_lowest_main_with_a_free_slot():
+    lay = _moved(_city(farms=((10, 0), (10, 3))), 13, 0, 6)
+    out, rep = apply_edits(lay, [], catalog=CAT, relink_loose=True)
+    assert [r["main"] for r in rep["relinked"]] == [10]
+    assert loose_chain_pieces(out, CAT) == []
+
+
+def test_relink_loose_never_raises_and_reports_not_rigid(monkeypatch):
+    import foeopt.editing as ed
+    monkeypatch.setattr(ed, "make_composite", lambda bs: None)
+    lay = _moved(_city(), 11, 0, 3)
+    out, rep = apply_edits(lay, [], catalog=CAT, relink_loose=True)
+    assert rep["relink_failed"][0]["reason"] == "not_rigid"
+    assert rep["relinked"] == [] and _pos(out, 11) == (12, 3)

@@ -167,3 +167,31 @@ def test_edits_persist_with_city(client, city_id):
     again = client.post("/api/load", json=_payload()).get_json()   # re-upload keeps them
     assert again["edits"] == edits
     assert client.put("/api/cities/nope/edits", json=edits).status_code == 404
+
+
+def _loose_city(client):
+    p = _payload()
+    p["CityMapData"]["p1"]["y"] = 4     # the field leaves the farm's link slot
+    r = client.post("/api/load", json=p)
+    assert r.status_code == 200
+    return r.get_json()["city_id"]
+
+
+def test_preview_relinks_loose_pieces_by_default(client):
+    cid = _loose_city(client)
+    rep = client.post("/api/edits/preview", json={"city_id": cid}).get_json()["report"]
+    assert [r["entity_id"] for r in rep["relinked"]] == [11]
+    assert rep["relinked"][0]["main"] == 10
+    off = client.post("/api/edits/preview",
+                      json={"city_id": cid, "relink_chains": False}).get_json()["report"]
+    assert off["relinked"] == []
+
+
+def test_optimize_without_edits_relinks_loose_pieces(client, spy):
+    cid = _loose_city(client)
+    r = client.post("/api/optimize", json={"city_id": cid, "time_box": 5})
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()["report"]["relinked"][0]["entity_id"] == 11
+    r2 = client.post("/api/optimize", json={"city_id": cid, "time_box": 5,
+                                            "relink_chains": False})
+    assert set(r2.get_json()) == {"job_id", "options"}
