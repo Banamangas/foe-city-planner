@@ -1874,3 +1874,12 @@ Open items for the user:
 - Guide wording and screenshots: `frontend/public/guides/<lang>/<kind>-<n>.png` do not exist yet (the directory is absent); add them for en and fr.
 - French copy check: the French text was written by the assistant and needs a native read-through.
 - Browser walkthrough (Step 5 of the plan) with a real city file in both languages still to do.
+
+## User to-do: wizard wording (owner: the user)
+
+Texts live in `frontend/src/wizard/i18n/en.json` and `fr.json` (121 keys each; edit both — a test fails if a key exists in only one). To review:
+1. **Guides (`guide.*`)** — placeholder steps written without knowing Forge Hammer's buttons: `guide.export.1-3` (export your city) and `guide.import.1-3` (put the new layout back). Replace with the real steps.
+2. **Guide screenshots (optional)** — `frontend/public/guides/<lang>/export-1.png … export-3.png` and `import-1.png … import-3.png`; the guide shows them automatically when present.
+3. **French copy (all of `fr.json`)** — natural wording, "vous", game vocabulary. Priority: `run.*` (machine line "threads de processeur", phase names `phase.*`), `checks.*` (unconnected-buildings question, chain relink notice), `unknown.*` (unknown-building form), `problem.*` and `load.*` (error and file messages).
+4. **Plain-language phase names (`phase.*`)** — "Reading your city", "Sketching road networks", "Fitting buildings around the best roads", "Trying small changes", "Fine-tuning the winner": keep or rename.
+5. **Stats labels (`stat.*`)** — match the wording players know (road efficiency, coverage, free area).
