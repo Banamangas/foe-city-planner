@@ -47,6 +47,8 @@ def test_api_load_with_json_body(client):
     assert "road_estimate" in body
     assert "map_view" in body
     assert isinstance(body["stats"]["roads"], int)
+    assert body["checks"]["unconnected"] == body["stats"]["unconnected"]
+    assert isinstance(body["checks"]["loose_chain_pieces"], list)
 
 
 def test_api_load_bad_json_returns_400(client):

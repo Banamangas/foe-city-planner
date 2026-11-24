@@ -3,7 +3,7 @@ import pytest
 
 from foeopt.catalog import Catalog
 from foeopt.chains import compose, linked_groups
-from foeopt.editing import EditError, apply_edits
+from foeopt.editing import EditError, apply_edits, loose_chain_pieces
 from foeopt.legality import chain_links, check
 from foeopt.model import Building, Footprint, Layout, Region
 
@@ -261,3 +261,33 @@ def test_darkzig_remove_middle_patch_reattaches():
     assert sizes == [5, 7, 12]
     assert len(chain_links(out)) == len(chain_links(lay)) - 1
     assert check(out, out).status == "valid"
+
+
+# -- loose chain pieces --------------------------------------------------------
+
+def _moved(lay, eid, dx, dy):
+    from dataclasses import replace
+    bs = [replace(b, footprint=Footprint(b.footprint.x + dx, b.footprint.y + dy,
+                                         b.footprint.width, b.footprint.length))
+          if b.entity_id == eid else b for b in lay.buildings]
+    return Layout(lay.region, bs, lay.townhall, lay.roads)
+
+
+def test_loose_chain_pieces_reports_patch_off_its_slot():
+    lay = _moved(_city(), 11, 0, 3)
+    assert loose_chain_pieces(lay, CAT) == [11]
+
+
+def test_loose_chain_pieces_empty_for_linked_chain():
+    assert loose_chain_pieces(_city(), CAT) == []
+
+
+def test_loose_chain_pieces_ignores_chain_without_main():
+    lay = _city(farms=())
+    bs = lay.buildings + [_cat_b(40, "FIELD", 12, 5)]
+    lay = Layout(lay.region, bs, lay.townhall, lay.roads)
+    assert loose_chain_pieces(lay, CAT) == []
+
+
+def test_loose_chain_pieces_needs_a_catalog():
+    assert loose_chain_pieces(_moved(_city(), 11, 0, 3), None) == []

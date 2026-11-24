@@ -359,6 +359,20 @@ class _Editor:
         return out
 
 
+def loose_chain_pieces(layout: Layout, catalog: Catalog | None) -> list[int]:
+    """Entity ids of non-head chain pieces that take part in no active chain
+    link, in a city that holds a head of the same chain (so a slot exists for
+    them). Empty without a catalog, which is needed to tell heads from patches."""
+    if catalog is None:
+        return []
+    heads = {b.chain_id for b in layout.buildings
+             if b.chain_id and catalog.is_chain_head(b.cityentity_id)}
+    linked = {e for link in chain_links(layout) for e in link}
+    return sorted(b.entity_id for b in layout.buildings
+                  if b.chain_id in heads and b.entity_id not in linked
+                  and not catalog.is_chain_head(b.cityentity_id))
+
+
 def _int_ids(values, what: str) -> list[int]:
     try:
         return [int(v) for v in values]

@@ -11,7 +11,7 @@ from flask import Flask, Response, jsonify, request, send_from_directory
 
 import foeopt.machine as machine
 from foeopt.catalog import Catalog
-from foeopt.editing import UNPLACEABLE_TYPES, EditError, apply_edits
+from foeopt.editing import UNPLACEABLE_TYPES, EditError, apply_edits, loose_chain_pieces
 from foeopt.export_v3 import ExportError, can_export, to_v3
 from foeopt.loader import city_catalog_defs, is_v3, load_layout_from_dict, load_layout
 from foeopt.report import road_estimate
@@ -142,7 +142,9 @@ def create_app(db_path: str | None = None) -> Flask:
         layout = load_layout_from_dict(data)
         payload = json.dumps(data).encode()
         city_id = city_id_for(data)
-        buildings = _buildings_summary(layout, Catalog(city_catalog_defs(data)))
+        catalog = Catalog(city_catalog_defs(data))
+        buildings = _buildings_summary(layout, catalog)
+        stats = city_stats(layout)
         cache.store_city(city_id, payload, buildings,
                          len(layout.region.cells), road_estimate(layout), name=name)
         return {
@@ -157,7 +159,10 @@ def create_app(db_path: str | None = None) -> Flask:
             # Advisory only -- the UI must never use it to block a run.
             "screen": screen_city(layout),
             "map_view": layout_to_view(layout),
-            "stats": city_stats(layout),
+            "stats": stats,
+            # Load-time problems worth flagging to the player.
+            "checks": {"unconnected": stats["unconnected"],
+                       "loose_chain_pieces": loose_chain_pieces(layout, catalog)},
             # Edits saved for this city (survive a reload of the same file).
             "edits": cache.get_edits(city_id),
         }
