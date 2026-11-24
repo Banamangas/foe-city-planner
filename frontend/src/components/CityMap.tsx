@@ -4,7 +4,26 @@ import { fitTransform, screenToGrid, buildingAt, type Transform } from "../geome
 import type { BuildingView } from "../types";
 import { editedView, toggleRemove } from "../edits";
 
-export function CityMap() {
+export type CityMapLabels = {
+  current: string; optimized: string; fit: string; townhall: string;
+  needsRoad: string; removedClickToKeep: string;
+};
+
+const DEFAULT_LABELS: CityMapLabels = {
+  current: "Current", optimized: "Optimized", fit: "Fit", townhall: "townhall",
+  needsRoad: "needs road", removedClickToKeep: "removed (click to keep)",
+};
+
+export function mapLabels(partial?: Partial<CityMapLabels>): CityMapLabels {
+  return { ...DEFAULT_LABELS, ...partial };
+}
+
+/** A click on a building toggles its removal only in the editable current view. */
+export const clickTogglesRemoval = (editable: boolean, showOpt: boolean): boolean =>
+  editable && !showOpt;
+
+export function CityMap({ labels, editable = true }: { labels?: Partial<CityMapLabels>; editable?: boolean } = {}) {
+  const L = mapLabels(labels);
   const city = useCityStore((s) => s.city);
   const optimized = useCityStore((s) => s.optimized);
   const viewMode = useCityStore((s) => s.viewMode);
@@ -134,7 +153,7 @@ export function CityMap() {
     drag.current = null;
     const d = down.current;
     down.current = null;
-    if (!d || !view || !city || showOpt) return;
+    if (!d || !view || !city || !clickTogglesRemoval(editable, showOpt)) return;
     if (Math.abs(e.clientX - d.x) + Math.abs(e.clientY - d.y) > 4) return;
     const rect = canvasRef.current!.getBoundingClientRect();
     const { gx, gy } = screenToGrid(e.clientX - rect.left, e.clientY - rect.top, t, view.cell, view.origin);
@@ -167,12 +186,12 @@ export function CityMap() {
         {optimized && (
           <div className="switch">
             <button className={viewMode === "current" ? "on" : ""}
-              onClick={() => setViewMode("current")}>Current</button>
+              onClick={() => setViewMode("current")}>{L.current}</button>
             <button className={viewMode === "optimized" ? "on" : ""}
-              onClick={() => setViewMode("optimized")}>Optimized</button>
+              onClick={() => setViewMode("optimized")}>{L.optimized}</button>
           </div>
         )}
-        <button onClick={fit}>Fit</button>
+        <button onClick={fit}>{L.fit}</button>
       </div>
       <div className="citymap-canvas-wrap" ref={wrapRef}>
         <canvas
@@ -186,8 +205,8 @@ export function CityMap() {
         />
         {tip && (
           <div className="citymap-tip" style={{ left: tip.x + 12, top: tip.y + 12 }}>
-            {tip.b.name} ({tip.b.size}) {tip.b.townhall ? "· townhall" : tip.b.needs_road ? "· needs road" : ""}
-            {!showOpt && tip.b.id !== undefined && edits.remove.includes(Number(tip.b.id)) ? " · removed (click to keep)" : ""}
+            {tip.b.name} ({tip.b.size}) {tip.b.townhall ? `· ${L.townhall}` : tip.b.needs_road ? `· ${L.needsRoad}` : ""}
+            {!showOpt && tip.b.id !== undefined && edits.remove.includes(Number(tip.b.id)) ? ` · ${L.removedClickToKeep}` : ""}
           </div>
         )}
       </div>

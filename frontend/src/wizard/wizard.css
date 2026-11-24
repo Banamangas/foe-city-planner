@@ -30,3 +30,26 @@
 .wizard .guide-modal { background: #fff; border-radius: 8px; padding: 20px; max-width: 560px; max-height: 90vh; overflow: auto; }
 .wizard .guide-steps { padding-left: 20px; }
 .wizard .guide-step img { max-width: 100%; border: 1px solid #d8d8d0; border-radius: 4px; }
+.wizard .buildings-layout { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+.wizard .map-box { flex: 1 1 520px; min-width: 0; border: 1px solid #d8d8d0; border-radius: 6px; overflow: hidden; background: #fff; }
+.wizard .citymap { display: flex; flex-direction: column; }
+.wizard .citymap-toolbar { display: flex; gap: 12px; align-items: center; padding: 6px 10px; background: #ecece6; border-bottom: 1px solid #d8d8d0; }
+.wizard .citymap-toolbar button { padding: 4px 12px; border: 1px solid #b0b0a8; border-radius: 4px; background: #fff; color: #222; cursor: pointer; }
+.wizard .switch { display: inline-flex; gap: 4px; }
+.wizard .switch button.on { background: #2f7d4f; border-color: #2f7d4f; color: #fff; }
+.wizard .citymap-canvas-wrap { position: relative; height: 480px; overflow: hidden; }
+.wizard .citymap-canvas-wrap canvas { display: block; width: 100%; height: 100%; cursor: pointer; }
+.wizard .citymap-tip { position: absolute; pointer-events: none; padding: 4px 8px; background: rgba(30, 30, 30, 0.9); color: #fff; border-radius: 4px; font-size: 12px; white-space: nowrap; z-index: 2; }
+.wizard .changes-panel { flex: 0 0 260px; padding: 12px 16px; background: #fff; border: 1px solid #d8d8d0; border-radius: 6px; }
+.wizard .changes-panel h3 { margin-top: 0; }
+.wizard .added-list { list-style: none; padding: 0; margin: 8px 0; }
+.wizard .added-list li { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; }
+.wizard .cascade-note { color: #8a5a00; }
+.wizard .add-dialog { width: 480px; }
+.wizard .add-dialog input[type="search"] { width: 100%; padding: 6px 8px; border: 1px solid #b0b0a8; border-radius: 4px; }
+.wizard .catalog-list { list-style: none; padding: 0; margin: 8px 0; max-height: 50vh; overflow: auto; }
+.wizard .catalog-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 8px; border: none; border-bottom: 1px solid #ecece6; background: #fff; color: #222; text-align: left; cursor: pointer; font: inherit; }
+.wizard .catalog-row:hover { background: #f0f6f2; }
+.wizard .catalog-name { flex: 1; }
+.wizard .catalog-size { color: #666; }
+.wizard .catalog-stored { background: #b9d8c4; color: #1f4f33; border-radius: 10px; padding: 1px 8px; font-size: 0.85rem; }

@@ -101,8 +101,8 @@ export const apiOptions = (): Promise<OptionsResponse> => jsonGet("/api/options"
 export const apiOptimize = (
   body: { city_id: string } & Record<string, unknown>,
 ): Promise<{ job_id: string; options: Record<string, unknown> }> => jsonPost("/api/optimize", body);
-export const apiCatalog = (q: string, cityId?: string): Promise<{ results: CatalogEntry[] }> =>
-  jsonGet(`/api/catalog?q=${encodeURIComponent(q)}${cityId ? `&city_id=${encodeURIComponent(cityId)}` : ""}`);
+export const apiCatalog = (q: string, cityId?: string, lang?: string): Promise<{ results: CatalogEntry[] }> =>
+  jsonGet(`/api/catalog?q=${encodeURIComponent(q)}${cityId ? `&city_id=${encodeURIComponent(cityId)}` : ""}${lang ? `&lang=${encodeURIComponent(lang)}` : ""}`);
 export const apiPreviewEdits = (cityId: string, edits: Edits): Promise<{ report: EditReport }> =>
   jsonPost("/api/edits/preview", { city_id: cityId, edits });
 export async function apiSaveEdits(cityId: string, edits: Edits): Promise<void> {

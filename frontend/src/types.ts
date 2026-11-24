@@ -44,6 +44,7 @@ export type Edits = { remove: number[]; add: AddSpec[]; relink?: Record<string, 
 export type CatalogEntry = {
   id: string; name: string; type: string; width: number; length: number;
   needs_road: boolean; road_level: number; chain_id: string | null; is_chain_head: boolean;
+  stored?: number;
 };
 
 export type StoredBuilding = {
