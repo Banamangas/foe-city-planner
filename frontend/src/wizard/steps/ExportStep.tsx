@@ -14,7 +14,7 @@ function download(blob: Blob, filename: string) {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(url);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export function ExportStep() {
@@ -26,7 +26,7 @@ export function ExportStep() {
   const cityId = useCityStore((s) => s.city?.city_id);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [warnings, setWarnings] = useState<string[]>([]);
+  const [warnings, setWarnings] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [guide, setGuide] = useState(false);
@@ -38,10 +38,12 @@ export function ExportStep() {
     setBusy(true);
     setError(null);
     setCopied(false);
+    setSaved(false);
+    setWarnings(0);
     try {
       const r = await apiExportV3(cityId, layoutForExport(entry));
       download(r.blob, r.filename);
-      setWarnings(r.warnings);
+      setWarnings(r.warnings.length);
       setSaved(true);
     } catch (err) {
       setError(String(err instanceof Error ? err.message : err));
@@ -74,12 +76,7 @@ export function ExportStep() {
           {copied && <span className="copied"> {t("error.copied")}</span>}
         </div>
       )}
-      {warnings.length > 0 && (
-        <details className="export-notes">
-          <summary>{t("export.notes")}</summary>
-          <ul>{warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
-        </details>
-      )}
+      {warnings > 0 && <p className="cascade-note">{t("export.warnings", { n: warnings })}</p>}
       <p>
         <button type="button" className="link" onClick={() => setGuide(true)}>{t("export.howImport")}</button>
       </p>

@@ -113,7 +113,7 @@
   "export.save": "Enregistrer le fichier pour Forge Hammer",
   "export.saved": "Fichier enregistré.",
   "export.failed": "Le fichier n'a pas pu être créé.",
-  "export.notes": "Remarques",
   "export.howImport": "Comment l'importer",
-  "export.again": "Recommencer avec une autre ville"
+  "export.again": "Recommencer avec une autre ville",
+  "export.warnings": "{n} bâtiment(s) ajouté(s) n'ont pas de type Forge Hammer et ne sont pas dans le fichier enregistré."
 }

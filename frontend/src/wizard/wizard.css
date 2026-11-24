@@ -73,4 +73,3 @@
 .wizard .stats-table { border-collapse: collapse; width: 100%; }
 .wizard .stats-table th, .wizard .stats-table td { padding: 3px 6px; text-align: right; font-weight: normal; }
 .wizard .stats-table th[scope="row"], .wizard .stats-table thead th:first-child { text-align: left; }
-.wizard .export-notes { margin: 12px 0; }

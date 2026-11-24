@@ -113,7 +113,7 @@
   "export.save": "Save file for Forge Hammer",
   "export.saved": "File saved.",
   "export.failed": "The file could not be created.",
-  "export.notes": "Notes",
   "export.howImport": "How to import it",
-  "export.again": "Start again with another city"
+  "export.again": "Start again with another city",
+  "export.warnings": "{n} added building(s) have no Forge Hammer type and are not in the saved file."
 }
