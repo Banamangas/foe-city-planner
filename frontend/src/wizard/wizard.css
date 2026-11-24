@@ -16,3 +16,17 @@
 .wizard select { width: auto; background: #fff; color: #222; border: 1px solid #b0b0a8; border-radius: 4px; padding: 4px 8px; }
 .wizard .btn { color: #222; }
 .wizard .btn.primary { color: #fff; }
+.wizard .drop-zone { border: 2px dashed #b0b0a8; border-radius: 8px; padding: 28px; text-align: center; background: #fff; }
+.wizard .private-note { color: #555; font-size: 0.9rem; }
+.wizard .link { background: none; border: none; padding: 0; color: #2f7d4f; text-decoration: underline; cursor: pointer; font: inherit; }
+.wizard .problem, .wizard .unknown-form, .wizard .checks-panel { margin-top: 16px; padding: 12px 16px; border-radius: 6px; background: #fff; border: 1px solid #d8d8d0; }
+.wizard .unknown-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 8px 0; }
+.wizard .unknown-row .unknown-name { min-width: 220px; font-weight: 600; }
+.wizard .unknown-row input[type="number"] { width: 64px; margin-left: 6px; }
+.wizard .field-error { color: #a33; }
+.wizard .check-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.wizard .check-chosen, .wizard .loaded { color: #1f4f33; }
+.wizard .guide-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); display: flex; align-items: center; justify-content: center; z-index: 10; }
+.wizard .guide-modal { background: #fff; border-radius: 8px; padding: 20px; max-width: 560px; max-height: 90vh; overflow: auto; }
+.wizard .guide-steps { padding-left: 20px; }
+.wizard .guide-step img { max-width: 100%; border: 1px solid #d8d8d0; border-radius: 4px; }

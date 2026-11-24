@@ -71,6 +71,31 @@ async function jsonGet(path: string): Promise<any> {
 /** `fileName` names the Forge Hammer export (`<name>-optimized.json`). */
 export const apiLoad = (slim: unknown, fileName?: string): Promise<LoadResponse> =>
   jsonPost(fileName ? `/api/load?name=${encodeURIComponent(fileName)}` : "/api/load", slim);
+export type CustomBuildings = Record<string, { width: number; length: number; road: 0 | 1 | 2 }>;
+
+/** Like apiLoad, but never throws: the wizard needs the status and body of a refusal. */
+export async function apiLoadResult(
+  slim: unknown,
+  opts: { fileName?: string; lang: string; custom?: CustomBuildings },
+): Promise<{ ok: true; resp: LoadResponse } | { ok: false; status: number; body: any }> {
+  const q = new URLSearchParams({ lang: opts.lang });
+  if (opts.fileName) q.set("name", opts.fileName);
+  const body =
+    opts.custom && Object.keys(opts.custom).length > 0
+      ? { ...(slim as object), custom_buildings: opts.custom }
+      : slim;
+  try {
+    const r = await fetch(`/api/load?${q}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json().catch(() => ({}));
+    return r.ok ? { ok: true, resp: data } : { ok: false, status: r.status, body: data };
+  } catch (err) {
+    return { ok: false, status: 0, body: { error: String(err) } };
+  }
+}
 export const apiOptions = (): Promise<OptionsResponse> => jsonGet("/api/options");
 /** Run parameters ride along untyped: /api/options declares them, the server validates them. */
 export const apiOptimize = (
