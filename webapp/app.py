@@ -10,6 +10,7 @@ import uuid
 from flask import Flask, Response, jsonify, request, send_from_directory
 
 import foeopt.machine as machine
+from foeopt.catalog_store import start_background_check
 from foeopt.catalog import Catalog
 from foeopt.editing import UNPLACEABLE_TYPES, EditError, apply_edits, loose_chain_pieces
 from foeopt.export_v3 import ExportError, can_export, to_v3
@@ -130,6 +131,7 @@ def create_app(db_path: str | None = None) -> Flask:
     app = Flask(__name__, static_folder=_DIST, static_url_path="/assets_root")
     cache = CityCache(db_path or os.path.join(os.path.dirname(__file__), "cities.db"))
     jobs = JobManager()
+    start_background_check()  # no-op under FOEOPT_NO_UPDATE=1
 
     def _save_tmp(file_storage) -> str:
         fd, path = tempfile.mkstemp(suffix=".json")

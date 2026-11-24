@@ -44,8 +44,10 @@ CATALOG_PATH = Path(__file__).with_name("data") / "catalog.json"
 
 @lru_cache(maxsize=1)
 def _bundled_catalog() -> dict:
-    """Catalog for exports that carry none (v3); built by scripts/build_catalog.py."""
-    return json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+    """Catalog for exports that carry none (v3): the bundled list, or a newer
+    downloaded one (foeopt.catalog_store)."""
+    from foeopt.catalog_store import active_catalog_path
+    return json.loads(active_catalog_path().read_text(encoding="utf-8"))
 
 
 def is_v3(data: dict) -> bool:

@@ -1,7 +1,10 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
+
+os.environ.setdefault("FOEOPT_NO_UPDATE", "1")  # tests never reach the network
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
