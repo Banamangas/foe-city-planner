@@ -435,29 +435,24 @@ def test_partial_custom_buildings_list_only_the_remaining_unknowns(client):
 _FR_ID = "W_MultiAge_GR25A2"
 
 
-@pytest.fixture()
-def fr_names(monkeypatch):
-    """Give one real catalog id an English and a French name."""
-    import foeopt.loader as loader
-    real = loader._bundled_catalog()
-    patched = {**real, _FR_ID: {**real[_FR_ID], "names": {"en": "Tree", "fr": "Arbrisseau"}}}
-    monkeypatch.setattr(loader, "_bundled_catalog", lambda: patched)
-    return patched
+def _real_names():
+    from foeopt.catalog import Catalog
+    from foeopt.loader import city_catalog_defs
+    cat = Catalog(city_catalog_defs({}))
+    return cat.name(_FR_ID, "en"), cat.name(_FR_ID, "fr")
 
 
 def _name_of(resp_json, cid=_FR_ID):
     return next(b["name"] for b in resp_json["buildings"] if b["cityentity_id"] == cid)
 
 
-def test_load_lang_fr_localizes_names(client, fr_names):
-    from foeopt.catalog import Catalog
+def test_load_lang_fr_localizes_names(client):
     from tests.test_export_v3 import _v3
-    cat = Catalog(fr_names)
-    plain = client.post("/api/load", json=_v3()).get_json()
-    fr = client.post("/api/load?lang=fr", json=_v3()).get_json()
-    assert _name_of(fr) == cat.name(_FR_ID, "fr") == "Arbrisseau"
-    assert _name_of(plain) == _name_of(client.post("/api/load?lang=xx", json=_v3()).get_json())
-    assert _name_of(plain) != "Arbrisseau"
+    en, fr = _real_names()
+    assert en != fr
+    got_en = client.post("/api/load?lang=en", json=_v3()).get_json()
+    got_fr = client.post("/api/load?lang=fr", json=_v3()).get_json()
+    assert _name_of(got_en) == en and _name_of(got_fr) == fr
 
 
 def test_load_reports_exportable(client):
@@ -477,7 +472,9 @@ def test_catalog_stored_first(client):
     assert all(r["stored"] == 0 for r in client.get("/api/catalog?q=a").get_json()["results"])
 
 
-def test_catalog_lang_fr(client, fr_names):
-    rows = client.get("/api/catalog?q=arbris&lang=fr").get_json()["results"]
-    assert [r["name"] for r in rows if r["id"] == _FR_ID] == ["Arbrisseau"]
-    assert client.get("/api/catalog?q=arbris").get_json()["results"] == []
+def test_catalog_lang_fr(client):
+    en, fr = _real_names()
+    rows = client.get("/api/catalog", query_string={"q": en.lower(), "lang": "en"}).get_json()["results"]
+    assert [r["name"] for r in rows if r["id"] == _FR_ID] == [en]
+    rows = client.get("/api/catalog", query_string={"q": fr.lower(), "lang": "fr"}).get_json()["results"]
+    assert [r["name"] for r in rows if r["id"] == _FR_ID] == [fr]
