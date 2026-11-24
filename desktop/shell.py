@@ -78,15 +78,15 @@ def existing_instance(port: int, timeout: float = 1.0) -> bool:
     url = f"http://127.0.0.1:{port}/api/session"
     direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # never via a proxy
     try:
-        with direct.open(url, timeout=timeout) as r:
-            status, raw = r.status, r.read()
-    except urllib.error.HTTPError as exc:
-        status, raw = exc.code, exc.read()
-    except (OSError, ValueError):
-        return False
-    try:
+        try:
+            with direct.open(url, timeout=timeout) as r:
+                status, raw = r.status, r.read()
+        except urllib.error.HTTPError as exc:
+            status, raw = exc.code, exc.read()
         body = json.loads(raw)
-    except ValueError:
+    except Exception:  # anything that isn't a clean answer: not our app
+        return False
+    if not isinstance(body, dict):
         return False
     if status == 200:
         return True

@@ -17,6 +17,8 @@ import urllib.error
 import urllib.request
 
 log = logging.getLogger(__name__)
+# Local requests never go through a proxy (http_proxy set without no_proxy).
+_DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 _CITY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "selftest_city.json")
 
@@ -29,7 +31,7 @@ def _post(base: str, path: str, body: dict, timeout: float) -> tuple[int, bytes]
     req = urllib.request.Request(base + path, data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _DIRECT.open(req, timeout=timeout) as r:
             return r.status, r.read()
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read()
@@ -45,7 +47,7 @@ def _post_json(base: str, path: str, body: dict, timeout: float = 60.0) -> dict:
 def _read_done(base: str, job_id: str, deadline: float) -> dict:
     """Read the event stream until the `done` event; return its data."""
     timeout = max(1.0, deadline - time.monotonic())
-    with urllib.request.urlopen(f"{base}/api/stream/{job_id}", timeout=timeout) as r:
+    with _DIRECT.open(f"{base}/api/stream/{job_id}", timeout=timeout) as r:
         event = None
         for raw in r:
             if time.monotonic() > deadline:
@@ -63,7 +65,7 @@ def _check(base: str, deadline: float) -> str:
         city = json.load(f)
     loaded = _post_json(base, "/api/load?lang=en", city)
     before = loaded["stats"]["roads"]
-    with urllib.request.urlopen(f"{base}/api/options", timeout=30) as r:
+    with _DIRECT.open(f"{base}/api/options", timeout=30) as r:
         best = json.loads(r.read())["presets"]["best"]
     started = _post_json(base, "/api/optimize",
                          {**best, "city_id": loaded["city_id"], "time_box": 20})

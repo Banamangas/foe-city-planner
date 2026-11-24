@@ -436,3 +436,43 @@ def test_main_ignores_unknown_args(monkeypatch, tmp_path):
     assert calls == ["server", "browser", "shutdown"]
     log = (tmp_path / "app.log").read_text()
     assert "ignored" in log and "city.json" in log
+
+
+def _raw_server(reply: bytes):
+    """A socket server on 127.0.0.1 that sends `reply` to each connection and
+    closes it. Returns (port, stop)."""
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(5)
+    srv.settimeout(0.2)
+    stop = threading.Event()
+
+    def serve():
+        while not stop.is_set():
+            try:
+                conn, _ = srv.accept()
+            except OSError:
+                continue
+            with conn:
+                try:
+                    conn.recv(4096)
+                    conn.sendall(reply)
+                except OSError:
+                    pass
+        srv.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    return srv.getsockname()[1], stop.set
+
+
+@pytest.mark.parametrize("reply", [
+    b"SSH-2.0-OpenSSH_9.0\r\n",                                                # not HTTP
+    b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{\"a\":",                  # truncated body
+    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n[]",  # JSON, not an object
+])
+def test_existing_instance_false_for_other_programs(reply):
+    port, stop = _raw_server(reply)
+    try:
+        assert shell.existing_instance(port) is False
+    finally:
+        stop()
