@@ -89,6 +89,7 @@ def test_api_optimize_defaults_to_validated_worker_config(client, monkeypatch):
         captured.append(kwargs)
         return "fake-job-id"
     monkeypatch.setattr(app_mod.JobManager, "submit", spy_submit)
+    _fake_machine(monkeypatch, workers=6, probe_workers=2)
 
     r_load = client.post("/api/load", json=_combined_payload())
     city_id = r_load.get_json()["city_id"]
@@ -98,6 +99,47 @@ def test_api_optimize_defaults_to_validated_worker_config(client, monkeypatch):
     assert captured[0]["workers"] == 6
     assert captured[0]["probe_workers"] == 2
     assert captured[0]["concurrent_levels"] == 4
+
+
+def _fake_machine(monkeypatch, **info):
+    import foeopt.machine as machine
+    monkeypatch.setattr(machine, "machine_info", lambda: dict(
+        {"workers": 3, "probe_workers": 2, "threads": 6, "logical_cpus": 8,
+         "reduced": True, "warn": False}, **info))
+
+
+def test_api_options_reports_the_machine(client):
+    r = client.get("/api/options")
+    assert r.get_json()["machine"]["workers"] >= 1
+
+
+def test_api_optimize_sizes_workers_to_the_machine(client, monkeypatch):
+    import webapp.app as app_mod
+    _fake_machine(monkeypatch)
+    captured = []
+    def spy_submit(self, layout, **kwargs):
+        captured.append(kwargs)
+        return "fake-job-id"
+    monkeypatch.setattr(app_mod.JobManager, "submit", spy_submit)
+    city_id = client.post("/api/load", json=_combined_payload()).get_json()["city_id"]
+    r = client.post("/api/optimize", json={"city_id": city_id, "time_box": 1.0})
+    assert r.status_code == 200
+    assert (captured[0]["workers"], captured[0]["probe_workers"]) == (3, 2)
+
+
+def test_api_optimize_explicit_workers_beat_the_machine(client, monkeypatch):
+    import webapp.app as app_mod
+    _fake_machine(monkeypatch)
+    captured = []
+    def spy_submit(self, layout, **kwargs):
+        captured.append(kwargs)
+        return "fake-job-id"
+    monkeypatch.setattr(app_mod.JobManager, "submit", spy_submit)
+    city_id = client.post("/api/load", json=_combined_payload()).get_json()["city_id"]
+    r = client.post("/api/optimize", json={"city_id": city_id, "time_box": 1.0,
+                                           "workers": 5})
+    assert r.status_code == 200
+    assert (captured[0]["workers"], captured[0]["probe_workers"]) == (5, 2)
 
 
 def test_api_optimize_worker_config_still_overridable(client, monkeypatch):

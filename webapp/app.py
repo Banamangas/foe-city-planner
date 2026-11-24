@@ -9,6 +9,7 @@ import uuid
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 
+import foeopt.machine as machine
 from foeopt.catalog import Catalog
 from foeopt.editing import UNPLACEABLE_TYPES, EditError, apply_edits
 from foeopt.export_v3 import ExportError, can_export, to_v3
@@ -224,7 +225,8 @@ def create_app(db_path: str | None = None) -> Flask:
         range, default, help text and the CLI flag it mirrors.
         """
         return jsonify(options=OPTION_SPECS, groups=GROUP_LABELS,
-                       presets={"smoke": SMOKE_PRESET, "best": BEST_PRESET})
+                       presets={"smoke": SMOKE_PRESET, "best": BEST_PRESET},
+                       machine=machine.machine_info())
 
     @app.post("/api/optimize")
     def api_optimize():
@@ -241,6 +243,11 @@ def create_app(db_path: str | None = None) -> Flask:
             options = parse_options(data)
         except OptionError as exc:
             return jsonify(error=str(exc)), 400
+        # Size parallelism to this machine unless the request chose it.
+        sized = machine.machine_info()
+        for key in ("workers", "probe_workers"):
+            if key not in data:
+                options[key] = sized[key]
         edits = data.get("edits")
         if not edits or (isinstance(edits, dict) and not edits.get("remove")
                          and not edits.get("add")):
