@@ -135,6 +135,7 @@ export type OptionsResponse = {
   options: OptionSpec[];
   groups: Record<string, string>;
   presets: Record<string, Record<string, number | string | boolean | null>>;
+  machine?: import("./wizard/types").MachineInfo;
 };
 
 /** Form state: text inputs stay strings until submit; the server coerces. */

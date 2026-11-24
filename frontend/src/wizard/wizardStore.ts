@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { useCityStore } from "../stores/cityStore";
+import { mergeLayouts } from "./run";
 import { detectLang, translate } from "./i18n";
 import type { LayoutEntry, RunState } from "./types";
 
@@ -56,8 +57,7 @@ export const useWizardStore = create<WizardState>((set) => ({
       run: patch === null ? null : s.run ? { ...s.run, ...patch } : (patch as RunState),
     })),
   layouts: [],
-  // Plain append for now; Task 6 swaps in mergeLayouts.
-  addLayouts: (entries) => set((s) => ({ layouts: [...s.layouts, ...entries] })),
+  addLayouts: (entries) => set((s) => ({ layouts: mergeLayouts(s.layouts, entries) })),
   selectedId: null,
   select: (id) => set({ selectedId: id }),
   reset: () => {

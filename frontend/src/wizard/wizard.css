@@ -53,3 +53,17 @@
 .wizard .catalog-name { flex: 1; }
 .wizard .catalog-size { color: #666; }
 .wizard .catalog-stored { background: #b9d8c4; color: #1f4f33; border-radius: 10px; padding: 1px 8px; font-size: 0.85rem; }
+.wizard .run-presets { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+.wizard .run-presets .btn.on { background: #2f7d4f; border-color: #2f7d4f; color: #fff; }
+.wizard .run-custom { display: inline-flex; align-items: center; gap: 6px; }
+.wizard .run-custom input { width: 72px; }
+.wizard .progress-bar { height: 14px; background: #ecece6; border: 1px solid #d8d8d0; border-radius: 7px; overflow: hidden; margin: 12px 0; }
+.wizard .progress-fill { height: 100%; background: #2f7d4f; transition: width 0.4s; }
+.wizard .phase-list { list-style: none; padding: 0; margin: 8px 0; }
+.wizard .phase { padding: 3px 0; color: #777; }
+.wizard .phase.done { color: #1f4f33; }
+.wizard .phase.current { color: #222; font-weight: 600; }
+.wizard .phase-mark { display: inline-block; width: 1.4em; }
+.wizard .run-numbers { display: flex; gap: 24px; flex-wrap: wrap; margin: 12px 0; }
+.wizard .run-numbers dt { color: #555; font-size: 0.85rem; }
+.wizard .run-numbers dd { margin: 0; font-size: 1.4rem; font-weight: 600; }

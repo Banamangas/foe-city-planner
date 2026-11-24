@@ -3,6 +3,7 @@ import type {
   BuildingSummary, BuildingView, RoadView, Palette, OptionsResponse,
   CatalogEntry, EditReport, Edits,
 } from "./types";
+import type { LayoutEntry } from "./wizard/types";
 
 export function parseSSE(buffer: string): { event: string; data: any }[] {
   const out: { event: string; data: any }[] = [];
@@ -101,6 +102,22 @@ export const apiOptions = (): Promise<OptionsResponse> => jsonGet("/api/options"
 export const apiOptimize = (
   body: { city_id: string } & Record<string, unknown>,
 ): Promise<{ job_id: string; options: Record<string, unknown> }> => jsonPost("/api/optimize", body);
+/** Like apiOptimize, but never throws: the wizard needs the status and body of a refusal. */
+export async function apiOptimizeResult(
+  body: Record<string, unknown>,
+): Promise<{ ok: true; job_id: string } | { ok: false; status: number; body: any }> {
+  try {
+    const r = await fetch("/api/optimize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json().catch(() => ({}));
+    return r.ok ? { ok: true, job_id: data.job_id } : { ok: false, status: r.status, body: data };
+  } catch (err) {
+    return { ok: false, status: 0, body: { error: String(err) } };
+  }
+}
 export const apiCatalog = (q: string, cityId?: string, lang?: string): Promise<{ results: CatalogEntry[] }> =>
   jsonGet(`/api/catalog?q=${encodeURIComponent(q)}${cityId ? `&city_id=${encodeURIComponent(cityId)}` : ""}${lang ? `&lang=${encodeURIComponent(lang)}` : ""}`);
 export const apiPreviewEdits = (cityId: string, edits: Edits): Promise<{ report: EditReport }> =>
@@ -154,11 +171,13 @@ export function openStream(
   handlers: {
     onImprovement?: (data: Improvement) => void;
     onHeartbeat?: (data: any) => void;
+    onLayout?: (entry: LayoutEntry) => void;
     onDone?: (data: any) => void;
   },
 ): EventSource {
   const es = new EventSource(`/api/stream/${jobId}`);
   es.addEventListener("improvement", (e) => handlers.onImprovement?.(JSON.parse((e as MessageEvent).data)));
+  es.addEventListener("layout", (e) => handlers.onLayout?.(JSON.parse((e as MessageEvent).data)));
   es.addEventListener("heartbeat", (e) => handlers.onHeartbeat?.(JSON.parse((e as MessageEvent).data)));
   es.addEventListener("done", (e) => {
     handlers.onDone?.(JSON.parse((e as MessageEvent).data));
