@@ -56,7 +56,15 @@ jobs:
           echo "src=$src" >> "$GITHUB_OUTPUT"
 
           mkdir -p prev
-          if gh release view catalog >/dev/null 2>&1; then
+          out=$(gh release view catalog 2>&1) && have=1 || {
+            if grep -qi 'release not found' <<<"$out"; then
+              have=0
+            else
+              echo "could not check the catalog release"
+              exit 1
+            fi
+          }
+          if [ "$have" = 1 ]; then
             gh release download catalog -p catalog-manifest.json -p catalog.json.gz -D prev
           else
             echo "No release yet (first run)."
