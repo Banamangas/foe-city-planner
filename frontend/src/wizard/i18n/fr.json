@@ -1,0 +1,15 @@
+{
+  "_language": "Français",
+  "app.title": "Optimiseur de routes",
+  "lang.label": "Langue",
+  "nav.back": "Retour",
+  "nav.next": "Suivant",
+  "step.load": "Charger la ville",
+  "step.buildings": "Bâtiments",
+  "step.optimize": "Optimiser",
+  "step.choose": "Choisir",
+  "step.export": "Exporter",
+  "error.copyDetails": "Copier les détails pour un rapport de bug",
+  "error.copied": "Copié",
+  "run.machine": "Cet ordinateur : {cpus} threads de processeur, dont {threads} utilisés (votre ordinateur reste utilisable)"
+}

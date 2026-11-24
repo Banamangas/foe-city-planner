@@ -1,0 +1,15 @@
+{
+  "_language": "English",
+  "app.title": "City road optimizer",
+  "lang.label": "Language",
+  "nav.back": "Back",
+  "nav.next": "Next",
+  "step.load": "Load city",
+  "step.buildings": "Buildings",
+  "step.optimize": "Optimize",
+  "step.choose": "Choose",
+  "step.export": "Export",
+  "error.copyDetails": "Copy details for a bug report",
+  "error.copied": "Copied",
+  "run.machine": "This computer: {cpus} processor threads, using {threads} (your computer stays usable)"
+}
