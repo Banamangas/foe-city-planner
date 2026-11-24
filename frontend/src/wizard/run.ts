@@ -50,6 +50,25 @@ export function buildOptimizeBody(a: {
   };
 }
 
+/** JSON with object keys sorted, so equal values always serialize the same way. */
+function stableStringify(v: unknown): string {
+  return JSON.stringify(v, (_k, x) =>
+    x && typeof x === "object" && !Array.isArray(x)
+      ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, x[k]]))
+      : x,
+  );
+}
+
+/** Identifies a run's inputs (city, the edits the server receives, kept unconnected buildings):
+ *  results stay valid only while the current inputs give the same key. */
+export function runKey(cityId: string, edits: Edits, keepUnconnected: number[]): string {
+  return stableStringify({
+    city_id: cityId,
+    edits,
+    keep_unconnected: [...keepUnconnected].sort((a, b) => a - b),
+  });
+}
+
 /** Unique by id (incoming wins), sorted by roads then id, so the order is stable while layouts stream in. */
 export function mergeLayouts(existing: LayoutEntry[], incoming: LayoutEntry[]): LayoutEntry[] {
   const byId = new Map<number, LayoutEntry>();

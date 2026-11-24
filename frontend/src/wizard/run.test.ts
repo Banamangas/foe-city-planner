@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  afterRun, buildOptimizeBody, mergeLayouts, phaseIndex, progressPct, startDecision, timeLeft,
+  afterRun, buildOptimizeBody, mergeLayouts, phaseIndex, progressPct, runKey, startDecision, timeLeft,
 } from "./run";
 import type { LayoutEntry } from "./types";
 
@@ -72,5 +72,19 @@ describe("afterRun", () => {
     expect(afterRun([], "done")).toBe("none_found");
     expect(afterRun([entry(1, 5)], "done")).toBe("choose");
     expect(afterRun([], "error")).toBe("failed");
+  });
+});
+
+describe("runKey", () => {
+  const edits = { remove: [3, 1], add: [{ cityentity_id: "X", count: 1 }], relink: {} };
+  it("is stable for equal inputs, whatever the key order or keep order", () => {
+    const same = { add: [{ count: 1, cityentity_id: "X" }], relink: {}, remove: [3, 1] };
+    expect(runKey("c1", edits, [2, 1])).toBe(runKey("c1", same, [1, 2]));
+  });
+  it("changes when the edits, the kept buildings or the city change", () => {
+    const base = runKey("c1", edits, [1]);
+    expect(runKey("c1", { ...edits, remove: [3] }, [1])).not.toBe(base);
+    expect(runKey("c1", edits, [])).not.toBe(base);
+    expect(runKey("c2", edits, [1])).not.toBe(base);
   });
 });

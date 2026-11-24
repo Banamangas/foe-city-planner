@@ -1,7 +1,8 @@
 import { create } from "zustand";
 import { useCityStore } from "../stores/cityStore";
-import { mergeLayouts } from "./run";
+import { mergeLayouts, runKey } from "./run";
 import { detectLang, translate } from "./i18n";
+import type { Edits } from "../types";
 import type { LayoutEntry, RunState } from "./types";
 
 const LANG_KEY = "foeopt.lang";
@@ -33,12 +34,16 @@ type WizardState = {
   layouts: LayoutEntry[];
   addLayouts: (entries: LayoutEntry[]) => void;
   clearLayouts: () => void;
+  /** Drops the run and its layouts (and the layout drawn on the map). */
+  invalidateRun: () => void;
+  /** True when the stored run was made from the current city, edits and keep choice. */
+  resultsAreCurrent: () => boolean;
   selectedId: number | "player" | null;
   select: (id: number | "player" | null) => void;
   reset: () => void;
 };
 
-export const useWizardStore = create<WizardState>((set) => ({
+export const useWizardStore = create<WizardState>((set, get) => ({
   step: 1,
   go: (step) => set({ step }),
   lang: initialLang(),
@@ -60,6 +65,15 @@ export const useWizardStore = create<WizardState>((set) => ({
   layouts: [],
   addLayouts: (entries) => set((s) => ({ layouts: mergeLayouts(s.layouts, entries) })),
   clearLayouts: () => set({ layouts: [], selectedId: null }),
+  invalidateRun: () => {
+    set({ run: null, layouts: [], selectedId: null });
+    useCityStore.getState().clearOptimized();
+  },
+  resultsAreCurrent: () => {
+    const run = get().run;
+    const { city, edits } = useCityStore.getState();
+    return !!run && !!city && run.key === currentRunKey(city.city_id, edits, get().keepUnconnected);
+  },
   selectedId: null,
   select: (id) => set({ selectedId: id }),
   reset: () => {
@@ -73,6 +87,20 @@ export const useWizardStore = create<WizardState>((set) => ({
     useCityStore.getState().reset();
   },
 }));
+
+function currentRunKey(cityId: string, edits: Edits, keepUnconnected: number[] | null): string {
+  return runKey(cityId, edits, keepUnconnected ?? []);
+}
+
+/** resultsAreCurrent() as a hook: re-renders when the run or any of its inputs changes. */
+export function useResultsAreCurrent(): boolean {
+  const runKeyStored = useWizardStore((s) => s.run?.key ?? null);
+  const keepUnconnected = useWizardStore((s) => s.keepUnconnected);
+  const cityId = useCityStore((s) => s.city?.city_id ?? null);
+  const edits = useCityStore((s) => s.edits);
+  return runKeyStored !== null && cityId !== null
+    && runKeyStored === currentRunKey(cityId, edits, keepUnconnected);
+}
 
 export function useT(): (key: string, vars?: Record<string, string | number>) => string {
   const lang = useWizardStore((s) => s.lang);

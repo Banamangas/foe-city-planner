@@ -97,6 +97,14 @@ describe("report notices and result names", () => {
     expect(m.get("99")?.name).toBe("House (new)");
     expect(m.get("99")?.needs_road).toBe(true);
   });
+
+  it("takes the added-name suffix as a parameter", () => {
+    const m = withAdded(new Map(), [{
+      entity_id: 99, cityentity_id: "HOUSE", name: "Maison", width: 2, length: 2,
+      needs_road: true, road_level: 1, chain_id: null, link_to: null, placed: true, x: 0, y: 0,
+    }], " (nouveau)");
+    expect(m.get("99")?.name).toBe("Maison (nouveau)");
+  });
 });
 
 describe("editedView: what the current map shows for an edit set", () => {

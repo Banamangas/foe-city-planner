@@ -43,6 +43,8 @@ export function ExportStep() {
     try {
       const r = await apiExportV3(cityId, layoutForExport(entry));
       download(r.blob, r.filename);
+      // export.warnings counts every warning as "added by size only", the only kind the export
+      // emits today; a new warning kind needs its own message.
       setWarnings(r.warnings.length);
       setSaved(true);
     } catch (err) {

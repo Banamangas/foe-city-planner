@@ -18,6 +18,10 @@ export function BuildingsStep() {
   const setEditReport = useCityStore((s) => s.setEditReport);
   const [adding, setAdding] = useState(false);
   const [previewFailed, setPreviewFailed] = useState(false);
+  const setViewMode = useCityStore((s) => s.setViewMode);
+
+  // Back from Choose leaves the optimized layout on the map; clicks remove buildings only on the current one.
+  useEffect(() => { setViewMode("current"); }, [setViewMode]);
 
   const cityId = city?.city_id;
   useEffect(() => {

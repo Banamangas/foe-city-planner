@@ -37,7 +37,8 @@ type CityState = {
   setCity: (resp: LoadResponse) => void;
   /** `jobId`: drop the improvement unless it belongs to the current job of the
    *  current city (a stream from a previous city/run must not leak in). */
-  applyImprovement: (imp: Improvement, jobId?: string) => void;
+  /** `newSuffix` is appended to added buildings' names (default " (new)"). */
+  applyImprovement: (imp: Improvement, jobId?: string, newSuffix?: string) => void;
   clearOptimized: () => void;
   setJob: (job: Job | null) => void;
   setViewMode: (mode: ViewMode) => void;
@@ -68,7 +69,7 @@ export const useCityStore = create<CityState>((set, get) => ({
       job: null,
       viewMode: "current",
     }),
-  applyImprovement: (imp, jobId) => {
+  applyImprovement: (imp, jobId, newSuffix) => {
     const city = get().city;
     if (!city) return;
     if (jobId !== undefined) {
@@ -77,7 +78,7 @@ export const useCityStore = create<CityState>((set, get) => ({
     }
     const mv = city.map_view;
     const { optimized_roads, buildings } = improvementToView(
-      imp, withAdded(get().summaryById, imp.added), mv.origin, mv.cell, mv.palette,
+      imp, withAdded(get().summaryById, imp.added, newSuffix), mv.origin, mv.cell, mv.palette,
     );
     set({
       optimized: { roads: optimized_roads, buildings, k: imp.k, achieved: imp.achieved },

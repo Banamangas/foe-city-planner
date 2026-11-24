@@ -13,6 +13,17 @@ async function loadRoot(): Promise<React.ReactElement> {
   return <Wizard />;
 }
 
-loadRoot().then((root) => {
-  ReactDOM.createRoot(document.getElementById("root")!).render(<React.StrictMode>{root}</React.StrictMode>);
-});
+// A fixed bilingual line: if the app's code can't load, its translations can't either.
+const START_FAILED =
+  "The app could not start. Please reload. / L'application n'a pas pu démarrer. Rechargez la page.";
+
+loadRoot()
+  .then((root) => {
+    ReactDOM.createRoot(document.getElementById("root")!).render(<React.StrictMode>{root}</React.StrictMode>);
+  })
+  .catch(() => {
+    const p = document.createElement("p");
+    p.textContent = START_FAILED;
+    p.style.cssText = "font-family: sans-serif; padding: 16px;";
+    document.getElementById("root")!.replaceChildren(p);
+  });

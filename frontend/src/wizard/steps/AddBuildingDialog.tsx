@@ -15,16 +15,26 @@ export function AddBuildingDialog({ cityId, onPick, onClose }: Props) {
   const [q, setQ] = useState("");
   const [rows, setRows] = useState<CatalogEntry[]>([]);
   const [failed, setFailed] = useState(false);
+  const [pending, setPending] = useState(true);
 
   useEffect(() => {
     let stale = false;
+    setPending(true);
     const timer = setTimeout(() => {
       apiCatalog(q.trim(), cityId, lang)
-        .then((r) => { if (!stale) { setRows(r.results); setFailed(false); } })
-        .catch(() => { if (!stale) setFailed(true); });
+        .then((r) => { if (!stale) { setRows(r.results); setFailed(false); setPending(false); } })
+        .catch(() => { if (!stale) { setFailed(true); setPending(false); } });
     }, 300);
     return () => { stale = true; clearTimeout(timer); };
   }, [q, cityId, lang]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const empty = !pending && !failed && rows.length === 0;
 
   return (
     <div className="guide-backdrop" role="dialog" aria-modal="true" aria-label={t("buildings.addTitle")}>
@@ -35,6 +45,10 @@ export function AddBuildingDialog({ cityId, onPick, onClose }: Props) {
           aria-label={t("buildings.search")} onChange={(e) => setQ(e.target.value)}
         />
         {failed && <p className="field-error">{t("buildings.catalogError")}</p>}
+        {pending && <p className="private-note">{t("buildings.searching")}</p>}
+        {empty && (
+          <p className="private-note">{t(q.trim() === "" ? "buildings.searchHint" : "buildings.noneFound")}</p>
+        )}
         <ul className="catalog-list">
           {rows.map((r) => (
             <li key={r.id}>

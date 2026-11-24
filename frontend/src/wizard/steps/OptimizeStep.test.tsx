@@ -159,4 +159,43 @@ describe("OptimizeStep", () => {
     const b = screen.getByText("Stopping…") as HTMLButtonElement;
     expect(b.disabled).toBe(true);
   });
+
+  it("keeps the results when nothing changed, drops them when the edits changed", async () => {
+    vi.spyOn(api, "apiOptimizeResult").mockResolvedValue({ ok: true, job_id: "j" });
+    const { unmount } = render(<OptimizeStep />);
+    await waitFor(() => expect((screen.getByText("Start") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByText("Start"));
+    await screen.findByRole("progressbar");
+    act(() => handlers.onDone!({ state: "done", result: { layouts: [{ id: 0, stats: { roads: 66 } }] }, elapsed: 1 }));
+    unmount();
+    // Back and Next again without a change: the results stay reachable.
+    useWizardStore.getState().go(3);
+    const again = render(<OptimizeStep />);
+    expect(useWizardStore.getState().resultsAreCurrent()).toBe(true);
+    expect((screen.getByText("Next") as HTMLButtonElement).disabled).toBe(false);
+    again.unmount();
+    // A building removed in step 2: the old layouts are gone and Next is off.
+    act(() => useCityStore.getState().setEdits({ remove: [7], add: [], relink: {} }));
+    expect(useWizardStore.getState().resultsAreCurrent()).toBe(false);
+    render(<OptimizeStep />);
+    await waitFor(() => expect(useWizardStore.getState().layouts).toEqual([]));
+    expect(useWizardStore.getState().run).toBeNull();
+    expect(useWizardStore.getState().selectedId).toBeNull();
+    expect((screen.getByText("Next") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("drops the results when the keep-unconnected choice changed", async () => {
+    vi.spyOn(api, "apiOptimizeResult").mockResolvedValue({ ok: true, job_id: "j" });
+    const { unmount } = render(<OptimizeStep />);
+    await waitFor(() => expect((screen.getByText("Start") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByText("Start"));
+    await screen.findByRole("progressbar");
+    act(() => handlers.onDone!({ state: "done", result: { layouts: [{ id: 0, stats: { roads: 66 } }] }, elapsed: 1 }));
+    unmount();
+    useWizardStore.getState().setKeepUnconnected([4]);
+    useWizardStore.getState().go(3);
+    render(<OptimizeStep />);
+    await waitFor(() => expect(useWizardStore.getState().layouts).toEqual([]));
+    expect((screen.getByText("Next") as HTMLButtonElement).disabled).toBe(true);
+  });
 });

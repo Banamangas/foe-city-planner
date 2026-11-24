@@ -48,4 +48,19 @@ describe("ChooseStep", () => {
     fireEvent.click(screen.getByText("Your city: 92"));
     expect((screen.getByText("Next") as HTMLButtonElement).disabled).toBe(true);
   });
+
+  it("names added buildings with the translated suffix on the map", () => {
+    useWizardStore.getState().setLang("fr");
+    const added = [{
+      entity_id: 99, cityentity_id: "HOUSE", name: "Maison", width: 2, length: 2,
+      needs_road: true, road_level: 1, chain_id: null, link_to: null, placed: true, x: 0, y: 0,
+    }];
+    act(() => useWizardStore.getState().addLayouts([{
+      ...mk(5, 60), buildings: { "99": [0, 0, 2, 2] }, added,
+    } as LayoutEntry]));
+    useWizardStore.getState().select(5);
+    render(<ChooseStep />);
+    const b = useCityStore.getState().optimized?.buildings.find((x: any) => String(x.id) === "99");
+    expect(b?.name).toBe("Maison (nouveau)");
+  });
 });

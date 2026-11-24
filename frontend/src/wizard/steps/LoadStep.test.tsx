@@ -137,4 +137,19 @@ describe("LoadStep orchestration", () => {
     expect((screen.getByText("Next") as HTMLButtonElement).disabled).toBe(false);
     expect(useWizardStore.getState().keepUnconnected).toEqual([1]);
   });
+
+  it("loading another city drops the previous city's results", async () => {
+    useWizardStore.setState({
+      run: { key: "old" } as any, layouts: [{ id: 1, stats: { roads: 5 } } as any], selectedId: 1,
+    });
+    vi.spyOn(api, "apiLoadResult").mockResolvedValue({
+      ok: true, resp: city("Y", { checks: { unconnected: [], loose_chain_pieces: [] } }),
+    });
+    render(<LoadStep />);
+    pick("other.city");
+    await waitFor(() => expect(useCityStore.getState().city?.city_id).toBe("Y"));
+    expect(useWizardStore.getState().layouts).toEqual([]);
+    expect(useWizardStore.getState().run).toBeNull();
+    expect(useWizardStore.getState().selectedId).toBeNull();
+  });
 });

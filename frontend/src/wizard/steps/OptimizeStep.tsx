@@ -3,11 +3,11 @@ import { apiOptimizeResult, apiOptions, apiStop, openStream } from "../../api";
 import { useCityStore } from "../../stores/cityStore";
 import {
   afterRun, buildOptimizeBody, CUSTOM_MAX, CUSTOM_MIN, DEFAULT_MINUTES, PHASE_STEPS, phaseIndex,
-  progressPct, RUN_PRESETS_MIN, startDecision, timeLeft,
+  progressPct, RUN_PRESETS_MIN, runKey, startDecision, timeLeft,
 } from "../run";
 import { StepNav } from "../StepNav";
 import type { LayoutEntry, MachineInfo } from "../types";
-import { useT, useWizardStore } from "../wizardStore";
+import { useResultsAreCurrent, useT, useWizardStore } from "../wizardStore";
 
 type Notice = { kind: "none_found" | "failed" | "overflow" | "busy" | "lost"; n?: number; details?: string } | null;
 
@@ -75,6 +75,13 @@ export function OptimizeStep() {
   }, []);
 
   const running = run?.state === "running";
+  const current = useResultsAreCurrent();
+  const invalidateRun = useWizardStore((s) => s.invalidateRun);
+
+  // The city, its edits or the keep choice changed since the last run: its layouts no longer apply.
+  useEffect(() => {
+    if (run && !running && !current) invalidateRun();
+  }, [run, running, current, invalidateRun]);
 
   useEffect(() => {
     if (!running) return;
@@ -177,7 +184,9 @@ export function OptimizeStep() {
     }
     clearLayouts();
     setRun({
-      jobId: r.job_id, state: "running", stopped: false, elapsed: 0, timeBoxS: minutes * 60,
+      jobId: r.job_id,
+      key: runKey(city.city_id, edits, keepUnconnected ?? []),
+      state: "running", stopped: false, elapsed: 0, timeBoxS: minutes * 60,
       phase: null, maxPhaseIdx: 0, layoutsFound: 0, error: null,
     });
     attach(r.job_id, minutes * 60);
@@ -320,7 +329,7 @@ export function OptimizeStep() {
           )}
         </div>
       )}
-      <StepNav canBack={!running && !starting} canNext={!running && !starting && layouts.length > 0} onBack={() => go(2)} onNext={() => {
+      <StepNav canBack={!running && !starting} canNext={!running && !starting && current && layouts.length > 0} onBack={() => go(2)} onNext={() => {
           if (useWizardStore.getState().selectedId === null) select(layouts[0].id);
           go(4);
         }} />

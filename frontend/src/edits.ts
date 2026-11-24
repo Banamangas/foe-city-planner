@@ -125,12 +125,13 @@ export function chainNotices(
 /** summaryById extended with the buildings a run added (named from the catalog). */
 export function withAdded(
   summaryById: Map<string, BuildingSummary>, added: AddedBuilding[] | undefined,
+  newSuffix = " (new)",
 ): Map<string, BuildingSummary> {
   if (!added || added.length === 0) return summaryById;
   const m = new Map(summaryById);
   for (const a of added) {
     m.set(String(a.entity_id), {
-      entity_id: a.entity_id, name: `${a.name} (new)`, width: a.width, length: a.length,
+      entity_id: a.entity_id, name: `${a.name}${newSuffix}`, width: a.width, length: a.length,
       needs_road: a.needs_road, is_townhall: false, cityentity_id: a.cityentity_id,
       chain_id: a.chain_id,
     });

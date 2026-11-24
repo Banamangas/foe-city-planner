@@ -72,7 +72,11 @@ def _safe_stem(name: str | None, fallback: str) -> str:
 
 
 def _lang() -> str | None:
-    """The `lang` query parameter when it is a supported language, else None."""
+    """The `lang` query parameter when it is a supported language, else None.
+
+    Server-side building names exist only for en/fr: a new UI language (one
+    more wizard translation file) gets None here, so names fall back to the
+    catalog default."""
     lang = request.args.get("lang")
     return lang if lang in ("en", "fr") else None
 

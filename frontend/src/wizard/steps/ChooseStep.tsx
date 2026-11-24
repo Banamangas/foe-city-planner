@@ -25,12 +25,12 @@ export function ChooseStep() {
       applyImprovement({
         k: entry.k ?? 0, achieved: entry.achieved, roads: entry.roads, buildings: entry.buildings,
         to_store: entry.to_store, added: entry.added,
-      });
+      }, undefined, ` ${t("map.newSuffix")}`);
     } else if (onPlayer) {
       setViewMode("current");
     }
-    // The entry object is stable per id; re-apply only when the choice changes.
-  }, [entry?.id, onPlayer, applyImprovement, setViewMode]); // eslint-disable-line react-hooks/exhaustive-deps
+    // The entry object is stable per id; re-apply only when the choice (or the language) changes.
+  }, [entry?.id, onPlayer, lang, applyImprovement, setViewMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const labels = {
     current: t("map.current"), optimized: t("map.optimized"), fit: t("map.fit"),

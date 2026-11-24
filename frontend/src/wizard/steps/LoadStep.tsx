@@ -82,6 +82,7 @@ export function LoadStep() {
   const seqRef = useRef(0);
 
   const finish = (resp: NonNullable<typeof city>) => {
+    useWizardStore.getState().invalidateRun();
     setCity(resp);
     const unconnected = resp.checks?.unconnected ?? [];
     // Nothing to ask when everything is connected; otherwise wait for the player's choice.
@@ -111,6 +112,7 @@ export function LoadStep() {
     setProblem(null);
     setBusy(true);
     useCityStore.getState().reset();
+    useWizardStore.getState().invalidateRun();
     useWizardStore.setState({ keepUnconnected: null });
     const worker = new Worker(new URL("../../workers/stripCity.worker.ts", import.meta.url), {
       type: "module",

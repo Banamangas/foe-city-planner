@@ -38,6 +38,8 @@ export type LayoutEntry = {
 
 export type RunState = {
   jobId: string;
+  /** runKey() of the inputs the run started with. */
+  key: string;
   state: "running" | "done" | "error";
   stopped: boolean;
   elapsed: number;
