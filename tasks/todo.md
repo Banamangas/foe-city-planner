@@ -1799,6 +1799,15 @@ and mapData), so it can't rebuild a full v3 file either.
 Profile (FR16 300 s): 12 threads configured, 9.6 busy on average; 4 of the 16 logical
 CPUs never used (Ryzen 7 9700X: 8 cores / 16 threads). Mutation climb loses 556
 thread-s (empty 6th slot + slowest-probe tail); the walk only 42.
-- [ ] Paired A/B: `preset` vs `w8:workers=8` (probe_workers stays 2; polish threads
+- [x] Paired A/B: `preset` vs `w8:workers=8` (probe_workers stays 2; polish threads
       follow workers x probe_workers = 16), darkzig/FR16/FR17, 120 s and 300 s, 2 reps.
-- [ ] Gate: adopt only if never worse in any pair and better in at least one.
+      Stopped at 21/24 on the user's call (output/bench/2026-11-24-w8/runs.jsonl).
+- [x] Gate: FAILED -- not adopted, default stays 6x2.
+
+Review (2026-11-24): all 21 results legal. 8x2 better in 6 pairs, equal in 4, worse
+in 2 (300 s FR16 rep0 66->67, darkzig rep1 88->91). 120 s: never worse, often -1.
+Same-config noise is +/-1-3 roads (preset darkzig 300 s: 90 vs 88), as large as the
+arm gap: fixed seeds do not make multi-threaded, wall-clock-limited CP-SAT
+repeatable. User's decision: stop -- gains are small, and 8x2 claims all 16 logical
+CPUs, so it only helps on an idle machine; a user working while it runs would
+likely lose the gain or do worse. Not worth pursuing.
