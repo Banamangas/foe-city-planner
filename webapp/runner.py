@@ -83,6 +83,7 @@ class JobManager:
                exact_finish_workers: int = 0,
                probe_model: str = "position",
                military: str = "connect",
+               off_road: frozenset[int] = frozenset(),
                rebase_s: float = 0.0,
                rebase_iterate: bool = False,
                road_witness: bool = False,
@@ -104,7 +105,9 @@ class JobManager:
         Flask layer can splat parse_options() straight in here. `edit_info`
         (plan E: buildings to store, buildings added) rides along on every
         published layout and on the result; `layout` is then the EDITED city,
-        which every result is legality-checked against.
+        which every result is legality-checked against. `off_road`: entity ids
+        the player keeps off the road (not an option spec; /api/optimize
+        builds it from `keep_unconnected`).
         """
         job_id = uuid.uuid4().hex
         stop_event = threading.Event()
@@ -127,7 +130,8 @@ class JobManager:
         def on_improvement(best_layout, k, achieved):
             # Every published layout carries its full game-legality verdict
             # (two-lane tiles, chain links, inventory...) and the policy used.
-            leg = check_legality(best_layout, layout, military=military).as_dict()
+            leg = check_legality(best_layout, layout, military=military,
+                                 off_road=off_road).as_dict()
             leg["military"] = military
             last_legality.clear()
             last_legality.update(leg)
@@ -181,6 +185,7 @@ class JobManager:
                     exact_finish_workers=exact_finish_workers,
                     probe_model=probe_model,
                     military=military,
+                    off_road=off_road,
                     rebase_s=rebase_s,
                     rebase_iterate=rebase_iterate,
                     road_witness=road_witness,

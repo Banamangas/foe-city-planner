@@ -155,7 +155,8 @@ def solve_union(search, plan: dict, *, limit: float, threads: int,
         return row, None
     row["after"] = vach
     src = getattr(search, "source_layout", search.layout)
-    rep = legality_check(vlay, src, military=getattr(search, "military", "connect"))
+    rep = legality_check(vlay, src, military=getattr(search, "military", "connect"),
+                         off_road=getattr(search, "off_road", frozenset()))
     row["legality"] = rep.status
     if rep.status != "valid":
         return row, None

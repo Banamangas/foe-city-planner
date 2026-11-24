@@ -86,6 +86,13 @@ def _buildings_summary(layout, catalog: Catalog | None = None) -> list[dict]:
 MAX_CATALOG_RESULTS = 30
 
 
+def _off_road(layout, keep: list[int]) -> frozenset[int]:
+    """The requested ids of buildings in `layout` that need a road; removed,
+    unknown and road-free ids are dropped."""
+    needing = {b.entity_id for b in layout.road_needing()}
+    return frozenset(i for i in keep if i in needing)
+
+
 def _catalog_row(catalog: Catalog, cid: str) -> dict | None:
     etype = catalog.entity_type(cid)
     size = catalog.size(cid)
@@ -256,6 +263,10 @@ def create_app(db_path: str | None = None) -> Flask:
         for key in ("workers", "probe_workers"):
             if key not in data:
                 options[key] = sized[key]
+        keep = data.get("keep_unconnected", [])
+        if not isinstance(keep, list) or not all(
+                isinstance(i, int) and not isinstance(i, bool) for i in keep):
+            return jsonify(error="keep_unconnected must be a list of entity ids"), 400
         edits = data.get("edits")
         relink_chains = data.get("relink_chains", True) is not False
         layout = load_layout_from_dict(city["payload"])
@@ -265,7 +276,7 @@ def create_app(db_path: str | None = None) -> Flask:
                                             and not edits.get("add"))):
             # Unedited city: exactly the historical path.
             try:
-                job_id = jobs.submit(layout, **options)
+                job_id = jobs.submit(layout, off_road=_off_road(layout, keep), **options)
             except JobBusy as exc:
                 return jsonify(error=str(exc), active_job_id=exc.job_id), 409
             # Echo the resolved options so the client can show exactly what ran.
@@ -288,7 +299,8 @@ def create_app(db_path: str | None = None) -> Flask:
         # so the export lists the buildings to store.
         edit_info = {"to_store": report["to_store"], "added": report["added"]}
         try:
-            job_id = jobs.submit(layout, edit_info=edit_info, **options)
+            job_id = jobs.submit(layout, edit_info=edit_info,
+                                 off_road=_off_road(layout, keep), **options)
         except JobBusy as exc:
             return jsonify(error=str(exc), active_job_id=exc.job_id), 409
         return jsonify(job_id=job_id, options=options, edits=edits, report=report)

@@ -105,6 +105,7 @@ class _Climb:
                                      "position")
         self.src = getattr(search, "source_layout", search.layout)
         self.military = getattr(search, "military", "connect")
+        self.off_road = getattr(search, "off_road", frozenset())
         self.evals = self.cold_batches = 0
 
     def stopped(self) -> bool:
@@ -150,7 +151,8 @@ class _Climb:
         return out
 
     def legal(self, lay) -> bool:
-        return legality_check(lay, self.src, military=self.military).status == "valid"
+        return legality_check(lay, self.src, military=self.military,
+                              off_road=self.off_road).status == "valid"
 
     def climb(self, start, end, rng) -> dict:
         """(1+lambda) hill climb from one start until `end`."""

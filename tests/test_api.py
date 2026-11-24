@@ -312,3 +312,35 @@ def test_best_preset_seed_polish_cannot_overrun_the_time_box():
     assert sp * limit <= 60.0, (
         f"BEST_PRESET seed_polish={sp} at probe_limit={limit}s can add "
         f"{sp * limit:.0f}s beyond the box")
+
+
+def test_api_optimize_keep_unconnected_filters_to_road_buildings(client, monkeypatch):
+    """Ids removed by the edits, decorations and unknown ids are dropped; a
+    road-needing building of the city is kept off the road."""
+    import webapp.app as app_mod
+    from tests.test_api_edits import _payload
+    captured = []
+
+    def spy_submit(self, layout, **kwargs):
+        captured.append(kwargs)
+        return "fake-job-id"
+    monkeypatch.setattr(app_mod.JobManager, "submit", spy_submit)
+    city_id = client.post("/api/load", json=_payload()).get_json()["city_id"]
+
+    r = client.post("/api/optimize", json={"city_id": city_id, "time_box": 1.0})
+    assert r.status_code == 200 and captured[-1]["off_road"] == frozenset()
+
+    r = client.post("/api/optimize", json={"city_id": city_id, "time_box": 1.0,
+                                           "edits": {"remove": [2]},
+                                           "keep_unconnected": [2, 3]})
+    assert r.status_code == 200, r.get_json()
+    assert captured[-1]["off_road"] == frozenset()
+
+    r = client.post("/api/optimize", json={"city_id": city_id, "time_box": 1.0,
+                                           "keep_unconnected": [2, 3, 999]})
+    assert r.status_code == 200, r.get_json()
+    assert captured[-1]["off_road"] == frozenset({2})
+
+    r = client.post("/api/optimize", json={"city_id": city_id, "time_box": 1.0,
+                                           "keep_unconnected": "2"})
+    assert r.status_code == 400

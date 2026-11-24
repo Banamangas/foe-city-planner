@@ -2234,6 +2234,7 @@ class RoadsFirstSearch:
                  probe_model: str = "position",
                  keep_chains: bool = True,
                  military: str = "connect",
+                 off_road: frozenset[int] = frozenset(),
                  rebase_s: float = 0.0,
                  rebase_iterate: bool = False,
                  road_witness: bool = False,
@@ -2300,15 +2301,23 @@ class RoadsFirstSearch:
                              "and probe_model='position'")
         self.chain_anchors = chain_anchors
         self.source_layout = layout
-        if military == "unconnected":
-            # Explicit per-run choice: two-lane buildings are left off the road
-            # and packed like any building that needs none.
-            layout = Layout(layout.region,
+        # Buildings the player keeps off the road: packed like any building
+        # that needs none; every legality check exempts them.
+        self.off_road = frozenset(off_road)
+        if military == "unconnected" or self.off_road:
+            # Explicit per-run choice: two-lane buildings (military="unconnected")
+            # and the off-road ones are left off the road and packed like any
+            # building that needs none.
+            src = layout
+            layout = Layout(src.region,
                             [replace(b, needs_road=False)
-                             if b.needs_road and b.road_level >= 2 else b
-                             for b in layout.buildings],
-                            layout.townhall, dict(layout.roads))
-        elif probe_model != "position" and any(
+                             if b.needs_road and (b.entity_id in self.off_road or (
+                                 military == "unconnected" and b.road_level >= 2))
+                             else b
+                             for b in src.buildings],
+                            src.townhall, dict(src.roads))
+            layout.catalog_known = getattr(src, "catalog_known", True)
+        if probe_model != "position" and any(
                 b.road_level >= 2 for b in layout.road_needing()):
             raise ValueError("a two-lane building with military='connect' needs "
                              "probe_model='position' (the item model has no "
@@ -2436,12 +2445,15 @@ class RoadsFirstSearch:
         src = self.source_layout
         if not src.roads or src.townhall is None:
             return {"used": False, "reason": "no roads"}
-        rep = legality_check(src, src, military=self.military)
+        rep = legality_check(src, src, military=self.military, off_road=self.off_road)
         if rep.status != "valid":
             return {"used": False, "reason": rep.status, "violations": rep.violations[:3]}
         n = len(src.roads)
-        on_improvement(Layout(src.region, list(src.buildings), src.townhall, dict(src.roads)),
-                       n, n)
+        # Off-road buildings carry needs_road=False as in the search's own
+        # layouts, so the finishing phases never route a road to them.
+        buildings = [replace(b, needs_road=False) if b.entity_id in self.off_road else b
+                     for b in src.buildings]
+        on_improvement(Layout(src.region, buildings, src.townhall, dict(src.roads)), n, n)
         return {"used": True, "roads": n}
 
     def _polish_threads(self) -> int:
