@@ -287,6 +287,18 @@ class JobManager:
         if job is not None:
             job["stop_event"].set()
 
+    def stop_all(self) -> None:
+        """Ask every job that is not done to stop."""
+        with self._lock:
+            jobs = list(self._jobs.values())
+        for job in jobs:
+            if job["state"]["state"] not in ("done", "error"):
+                job["stop_event"].set()
+
+    def any_running(self) -> bool:
+        with self._lock:
+            return any(j["state"]["state"] == "running" for j in self._jobs.values())
+
     def elapsed(self, job_id: str) -> float:
         with self._lock:
             job = self._jobs.get(job_id)

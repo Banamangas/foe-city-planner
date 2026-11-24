@@ -155,6 +155,13 @@ class CityCache:
             self._conn.commit()
             return cur.rowcount > 0
 
+    def keep_only_city(self, city_id: str) -> None:
+        """Delete every other city and every layout not of this city."""
+        with self._lock:
+            self._conn.execute("DELETE FROM cities WHERE id != ?", (city_id,))
+            self._conn.execute("DELETE FROM layouts WHERE city_id != ?", (city_id,))
+            self._conn.commit()
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()

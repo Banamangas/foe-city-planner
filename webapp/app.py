@@ -7,7 +7,7 @@ import tempfile
 import time
 import uuid
 
-from flask import Flask, Response, jsonify, request, send_from_directory
+from flask import Flask, abort, Response, jsonify, request, send_from_directory
 
 import foeopt.machine as machine
 from foeopt.catalog_store import start_background_check
@@ -155,10 +155,19 @@ def search_catalog(catalog: Catalog, q: str, limit: int = MAX_CATALOG_RESULTS,
     return [h[5] for h in hits[:limit]]
 
 
-def create_app(db_path: str | None = None) -> Flask:
+_SESSION_MAX_BYTES = 5 * 1024 * 1024
+
+
+def create_app(db_path: str | None = None, *, data_dir: str | None = None) -> Flask:
+    """`data_dir` switches on desktop mode: the city db lives there, only the
+    last city is kept, and the session/ping routes exist."""
     app = Flask(__name__, static_folder=_DIST, static_url_path="/assets_root")
+    if data_dir is not None:
+        os.makedirs(data_dir, exist_ok=True)
+        db_path = os.path.join(data_dir, "cities.db")
     cache = CityCache(db_path or os.path.join(os.path.dirname(__file__), "cities.db"))
     jobs = JobManager()
+    app.extensions["foeopt_jobs"] = jobs
     start_background_check()  # no-op under FOEOPT_NO_UPDATE=1
 
     def _save_tmp(file_storage) -> str:
@@ -224,6 +233,8 @@ def create_app(db_path: str | None = None) -> Flask:
         stats = city_stats(layout)
         cache.store_city(city_id, payload, buildings,
                          len(layout.region.cells), road_estimate(layout), name=name)
+        if data_dir is not None:
+            cache.keep_only_city(city_id)
         return {
             "city_id": city_id,
             "buildings": _buildings_summary(layout, catalog, lang) if lang else buildings,
@@ -584,6 +595,55 @@ def create_app(db_path: str | None = None) -> Flask:
         if city is None:
             return jsonify(error="the layout's city is no longer cached"), 400
         return _export_v3(city, rec["layout"])
+
+    session_path = os.path.join(data_dir, "last-session.json") if data_dir is not None else None
+
+    @app.route("/api/session", methods=["GET", "PUT", "DELETE"])
+    def api_session():
+        if session_path is None:
+            abort(404)
+        if request.method == "GET":
+            try:
+                with open(session_path, "rb") as f:
+                    return Response(f.read(), mimetype="application/json")
+            except FileNotFoundError:
+                return jsonify(error="no session"), 404
+        if request.method == "DELETE":
+            try:
+                os.remove(session_path)
+            except FileNotFoundError:
+                pass
+            return "", 204
+        if request.content_length is not None and request.content_length > _SESSION_MAX_BYTES:
+            return jsonify(error="session too large"), 400
+        raw = request.get_data()
+        if len(raw) > _SESSION_MAX_BYTES:
+            return jsonify(error="session too large"), 400
+        try:
+            body = json.loads(raw)
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            return jsonify(error="expected a JSON object"), 400
+        fd, tmp = tempfile.mkstemp(dir=data_dir, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(raw)
+            os.replace(tmp, session_path)
+        except BaseException:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
+        return "", 204
+
+    @app.post("/api/ping")
+    def api_ping():
+        if data_dir is None:
+            abort(404)
+        app.config["LAST_PING"] = time.monotonic()
+        return "", 204
 
     @app.get("/assets/<path:filename>")
     def spa_assets(filename):
