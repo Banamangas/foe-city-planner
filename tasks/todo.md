@@ -1832,3 +1832,22 @@ Known deferred minors:
 - Callback errors are swallowed silently in on_phase / report_layout.
 - Relinked pieces lack a `placed` flag.
 - The edit-preview seed check ignores off_road.
+
+## Review (plan N2) -- building list kept up to date (2026-11-24)
+Built:
+- Converter plus `foeopt/catalog_build.py` that turns the game-data export into the app's building list.
+- Bundled list refreshed to 2937 buildings, with en/fr names where known.
+- Background update: the app downloads a newer list on start, checked with sha256 and size; failures are silent and never block startup.
+- Buildings the list doesn't know are asked for: 422 plus `custom_buildings`.
+- Daily GitHub workflow publishing the list, with a content-hash change marker so unchanged data publishes nothing.
+
+Tests: pytest 907 passed, 3 skipped (113 s). Webapp started without FOEOPT_NO_UPDATE
+(scratch cache and db) and answered HTTP 200 at once. One real `check_for_update()`
+(scratch cache) printed `failed` with no traceback: the `catalog` release doesn't exist yet.
+
+Owner's next steps:
+1. Create a dedicated read-only key in the FOE Buildings API.
+2. Add it as repository secret FOE_API_KEY (Settings -> Secrets and variables -> Actions -> New repository secret).
+3. After pushing main, run the workflow once (Actions -> "Building list" -> Run workflow).
+4. Check that the "catalog" release has catalog.json.gz and catalog-manifest.json.
+Then `check_for_update()` should return `updated`.
