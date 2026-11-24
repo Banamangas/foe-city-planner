@@ -67,3 +67,10 @@
 .wizard .run-numbers { display: flex; gap: 24px; flex-wrap: wrap; margin: 12px 0; }
 .wizard .run-numbers dt { color: #555; font-size: 0.85rem; }
 .wizard .run-numbers dd { margin: 0; font-size: 1.4rem; font-weight: 600; }
+.wizard .layout-cards { display: flex; gap: 8px; overflow-x: auto; padding: 8px 0; margin-bottom: 8px; }
+.wizard .layout-card { flex: 0 0 auto; padding: 10px 16px; border: 1px solid #b0b0a8; border-radius: 6px; background: #fff; color: #222; font: inherit; cursor: pointer; white-space: nowrap; }
+.wizard .layout-card.on { background: #2f7d4f; border-color: #2f7d4f; color: #fff; }
+.wizard .stats-table { border-collapse: collapse; width: 100%; }
+.wizard .stats-table th, .wizard .stats-table td { padding: 3px 6px; text-align: right; font-weight: normal; }
+.wizard .stats-table th[scope="row"], .wizard .stats-table thead th:first-child { text-align: left; }
+.wizard .export-notes { margin: 12px 0; }
