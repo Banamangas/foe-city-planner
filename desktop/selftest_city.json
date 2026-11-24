@@ -1,0 +1,297 @@
+{
+ "version": 3,
+ "player": {
+  "id": 1,
+  "name": "selftest"
+ },
+ "region": "fr",
+ "cityData": {
+  "1": {
+   "id": 1,
+   "cityentity_id": "H_ProgressiveEra_Townhall",
+   "type": "main_building",
+   "era": "ProgressiveEra"
+  },
+  "2": {
+   "id": 2,
+   "cityentity_id": "W_MultiAge_WILD21A8b",
+   "type": "residential",
+   "x": 6,
+   "y": 3,
+   "era": "IronAge",
+   "level": 3
+  },
+  "3": {
+   "id": 3,
+   "cityentity_id": "W_MultiAge_GR25A2",
+   "type": "production",
+   "x": 12,
+   "y": 4,
+   "era": "BronzeAge"
+  },
+  "4": {
+   "id": 4,
+   "cityentity_id": "M_ArcticFuture_Military2",
+   "type": "military",
+   "x": 6,
+   "y": 9,
+   "era": "ArcticFuture"
+  },
+  "5": {
+   "id": 5,
+   "cityentity_id": "D_HighMiddleAge_Gargoyle",
+   "type": "decoration",
+   "x": 19,
+   "y": 13,
+   "era": "HighMiddleAge"
+  },
+  "6": {
+   "id": 6,
+   "cityentity_id": "Z_Unknown_Ship",
+   "type": "outpost_ship",
+   "x": 500,
+   "y": 500,
+   "era": "X"
+  },
+  "100": {
+   "id": 100,
+   "cityentity_id": "S_BronzeAge_Street",
+   "type": "street",
+   "x": 0,
+   "y": 7,
+   "era": "BronzeAge"
+  },
+  "101": {
+   "id": 101,
+   "cityentity_id": "S_BronzeAge_Street",
+   "type": "street",
+   "x": 1,
+   "y": 7,
+   "era": "BronzeAge"
+  },
+  "102": {
+   "id": 102,
+   "cityentity_id": "S_BronzeAge_Street",
+   "type": "street",
+   "x": 2,
+   "y": 7,
+   "era": "BronzeAge"
+  },
+  "103": {
+   "id": 103,
+   "cityentity_id": "S_BronzeAge_Street",
+   "type": "street",
+   "x": 3,
+   "y": 7,
+   "era": "BronzeAge"
+  },
+  "104": {
+   "id": 104,
+   "cityentity_id": "S_BronzeAge_Street",
+   "type": "street",
+   "x": 12,
+   "y": 7,
+   "era": "BronzeAge"
+  },
+  "105": {
+   "id": 105,
+   "cityentity_id": "S_BronzeAge_Street",
+   "type": "street",
+   "x": 13,
+   "y": 7,
+   "era": "BronzeAge"
+  },
+  "106": {
+   "id": 106,
+   "cityentity_id": "S_BronzeAge_Street",
+   "type": "street",
+   "x": 14,
+   "y": 7,
+   "era": "BronzeAge"
+  },
+  "107": {
+   "id": 107,
+   "cityentity_id": "S_BronzeAge_Street",
+   "type": "street",
+   "x": 15,
+   "y": 7,
+   "era": "BronzeAge"
+  },
+  "108": {
+   "id": 108,
+   "cityentity_id": "S_ProgressiveEra_CarStreet1",
+   "type": "street",
+   "x": 4,
+   "y": 7,
+   "era": "ProgressiveEra"
+  },
+  "109": {
+   "id": 109,
+   "cityentity_id": "S_ProgressiveEra_CarStreet1",
+   "type": "street",
+   "x": 6,
+   "y": 7,
+   "era": "ProgressiveEra"
+  },
+  "110": {
+   "id": 110,
+   "cityentity_id": "S_ProgressiveEra_CarStreet1",
+   "type": "street",
+   "x": 8,
+   "y": 7,
+   "era": "ProgressiveEra"
+  },
+  "111": {
+   "id": 111,
+   "cityentity_id": "S_ProgressiveEra_CarStreet1",
+   "type": "street",
+   "x": 10,
+   "y": 7,
+   "era": "ProgressiveEra"
+  }
+ },
+ "mapData": [
+  {
+   "width": 16,
+   "length": 14
+  },
+  {
+   "x": 16,
+   "width": 4,
+   "length": 14
+  }
+ ],
+ "currentEra": "ProgressiveEra",
+ "mapBuildings": [
+  {
+   "metaId": "H_ProgressiveEra_Townhall",
+   "era": "ProgressiveEra",
+   "custom": false
+  },
+  {
+   "metaId": "W_MultiAge_WILD21A8b",
+   "x": 6,
+   "y": 3,
+   "era": "IronAge",
+   "custom": false
+  },
+  {
+   "metaId": "W_MultiAge_GR25A2",
+   "x": 12,
+   "y": 4,
+   "era": "BronzeAge",
+   "custom": false
+  },
+  {
+   "metaId": "M_ArcticFuture_Military2",
+   "x": 6,
+   "y": 9,
+   "era": "ArcticFuture",
+   "custom": false
+  },
+  {
+   "metaId": "D_HighMiddleAge_Gargoyle",
+   "x": 19,
+   "y": 13,
+   "era": "HighMiddleAge",
+   "custom": false
+  },
+  {
+   "metaId": "S_BronzeAge_Street",
+   "y": 7,
+   "era": "BronzeAge",
+   "custom": false
+  },
+  {
+   "metaId": "S_BronzeAge_Street",
+   "x": 1,
+   "y": 7,
+   "era": "BronzeAge",
+   "custom": false
+  },
+  {
+   "metaId": "S_BronzeAge_Street",
+   "x": 2,
+   "y": 7,
+   "era": "BronzeAge",
+   "custom": false
+  },
+  {
+   "metaId": "S_BronzeAge_Street",
+   "x": 3,
+   "y": 7,
+   "era": "BronzeAge",
+   "custom": false
+  },
+  {
+   "metaId": "S_BronzeAge_Street",
+   "x": 12,
+   "y": 7,
+   "era": "BronzeAge",
+   "custom": false
+  },
+  {
+   "metaId": "S_BronzeAge_Street",
+   "x": 13,
+   "y": 7,
+   "era": "BronzeAge",
+   "custom": false
+  },
+  {
+   "metaId": "S_BronzeAge_Street",
+   "x": 14,
+   "y": 7,
+   "era": "BronzeAge",
+   "custom": false
+  },
+  {
+   "metaId": "S_BronzeAge_Street",
+   "x": 15,
+   "y": 7,
+   "era": "BronzeAge",
+   "custom": false
+  },
+  {
+   "metaId": "S_ProgressiveEra_CarStreet1",
+   "x": 4,
+   "y": 7,
+   "era": "ProgressiveEra",
+   "custom": false
+  },
+  {
+   "metaId": "S_ProgressiveEra_CarStreet1",
+   "x": 6,
+   "y": 7,
+   "era": "ProgressiveEra",
+   "custom": false
+  },
+  {
+   "metaId": "S_ProgressiveEra_CarStreet1",
+   "x": 8,
+   "y": 7,
+   "era": "ProgressiveEra",
+   "custom": false
+  },
+  {
+   "metaId": "S_ProgressiveEra_CarStreet1",
+   "x": 10,
+   "y": 7,
+   "era": "ProgressiveEra",
+   "custom": false
+  }
+ ],
+ "storedBuildings": [
+  {
+   "metaId": "D_HighMiddleAge_Gargoyle",
+   "x": 0,
+   "y": 0,
+   "era": "HighMiddleAge",
+   "custom": true
+  }
+ ],
+ "deletedBuildings": [],
+ "camX": -1.5,
+ "camY": 2.5,
+ "zoomScale": 0.4,
+ "rotated": false
+}

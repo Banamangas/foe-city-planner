@@ -9,9 +9,12 @@ dependencies = ["flask>=3", "ortools>=9"]
 # Optional: the ML/RL training stack (rl/). The core + the foeopt.rlenv
 # environment stay pure-stdlib; install with `uv sync --extra rl` to train.
 rl = ["torch>=2", "numpy>=1.24"]
+# The desktop app window (desktop/). Without it the app opens the browser.
+desktop = ["pywebview>=5"]
 
 [dependency-groups]
 dev = ["pytest>=8"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["slow: real optimizer runs (several seconds)"]
