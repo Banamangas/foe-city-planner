@@ -1893,3 +1893,16 @@ Texts live in `frontend/src/wizard/i18n/en.json` and `fr.json` (121 keys each; e
 4. `macos-2.png` — the "are you sure you want to open it" box with **Open**.
 5. `macos-3.png` — System Settings → Privacy & Security with **Open Anyway**.
 6. `linux-1.png` — the file's Properties with "Allow executing file as program" turned on.
+
+## Review (plan N4: desktop app)
+
+Built: desktop mode on the server (keeps only the last city + one last-session file in the per-system app-data folder), "Continue where you left off" in the wizard, a desktop shell (own window on Windows/macOS with the built-in close confirmation during a search; default browser on Linux or when no window is possible, quitting itself ~2 min after the page is closed; remembered port so the language choice survives restarts), a headless `--self-test` (real 20 s search + export, plus a window-component check on Windows/macOS), PyInstaller packaging, and the "Desktop app" GitHub workflow.
+Tests: pytest 969 passed / 3 skipped; vitest 170/170; frontend build OK. Clean-worktree Linux build: 71.6 MB, `--self-test` → `SELFTEST OK roads=24->4 layouts=30`.
+CI: on "Run workflow" it builds Windows, macOS (Apple chip) and Linux and self-tests each (app.log shown even on failure); on a pushed `v*` tag it also creates a DRAFT release with the three files.
+
+### Owner's next steps
+1. Push main (when ready).
+2. GitHub → Actions → "Desktop app" → Run workflow; check all three self-tests pass (Windows and macOS have never been built yet — this run is their first real test).
+3. Download the Windows file from the run's artifacts and try it on a real Windows PC (including the "Windows protected your PC" steps).
+4. Add the screenshots listed above for `docs/download.md`.
+5. When happy: tag `v0.1.0`, push the tag, then review and publish the draft release.
