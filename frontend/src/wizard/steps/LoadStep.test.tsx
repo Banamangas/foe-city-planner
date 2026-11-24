@@ -6,6 +6,7 @@ import { useCityStore } from "../../stores/cityStore";
 import { LoadStep, ProblemView } from "./LoadStep";
 import * as api from "../../api";
 import { UnknownBuildingsForm } from "./UnknownBuildingsForm";
+import type { Session } from "../session";
 
 beforeEach(() => useWizardStore.getState().setLang("en"));
 afterEach(cleanup);
@@ -151,5 +152,77 @@ describe("LoadStep orchestration", () => {
     expect(useWizardStore.getState().layouts).toEqual([]);
     expect(useWizardStore.getState().run).toBeNull();
     expect(useWizardStore.getState().selectedId).toBeNull();
+  });
+});
+
+describe("LoadStep continue card", () => {
+  const saved: Session = {
+    version: 1, cityId: "c1", fileName: "mine.json", step: 3, edits: { remove: [], add: [], relink: {} },
+    keepUnconnected: [], layouts: [], selectedId: null, runKey: null,
+  };
+
+  beforeEach(() => {
+    useWizardStore.getState().reset();
+    useWizardStore.getState().setLang("en");
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("is not shown without a saved session", () => {
+    render(<LoadStep />);
+    expect(screen.queryByText("Continue where you left off")).toBeNull();
+    expect(screen.getByText("Drop your city file here")).toBeTruthy();
+  });
+
+  it("continues the saved session", async () => {
+    vi.spyOn(api, "apiCity").mockResolvedValue({ id: "c1", payload: { p: 1 } });
+    vi.spyOn(api, "apiLoadResult").mockResolvedValue({
+      ok: true, resp: { city_id: "c1", buildings: [], checks: { unconnected: [], loose_chain_pieces: [] } } as any,
+    });
+    useWizardStore.getState().setResume({ ...saved });
+    render(<LoadStep />);
+    expect(screen.getByText("Continue where you left off")).toBeTruthy();
+    expect(screen.getByText(/mine\.json/)).toBeTruthy();
+    expect(screen.queryByText("Drop your city file here")).toBeNull();
+    fireEvent.click(screen.getByText("Continue"));
+    await waitFor(() => expect(useWizardStore.getState().step).toBe(3));
+    expect(useCityStore.getState().city?.city_id).toBe("c1");
+    expect(useWizardStore.getState().resume).toBeNull();
+  });
+
+  it("starts over with another city", async () => {
+    const del = vi.spyOn(api, "apiSessionDelete").mockResolvedValue();
+    useWizardStore.getState().setResume({ ...saved });
+    render(<LoadStep />);
+    fireEvent.click(screen.getByText("Start with another city"));
+    expect(del).toHaveBeenCalled();
+    expect(await screen.findByText("Drop your city file here")).toBeTruthy();
+    expect(useWizardStore.getState().resume).toBeNull();
+  });
+
+  it("falls back to the drop zone when the city can't be reopened", async () => {
+    vi.spyOn(api, "apiCity").mockRejectedValue(new Error("gone"));
+    vi.spyOn(api, "apiSessionDelete").mockResolvedValue();
+    useWizardStore.getState().setResume({ ...saved });
+    render(<LoadStep />);
+    fireEvent.click(screen.getByText("Continue"));
+    expect(await screen.findByText(/couldn't reopen your last city/)).toBeTruthy();
+    expect(screen.getByText("Drop your city file here")).toBeTruthy();
+  });
+
+  it("remembers the loaded file's name", async () => {
+    vi.stubGlobal("Worker", class {
+      onmessage: ((e: any) => void) | null = null;
+      postMessage() { queueMicrotask(() => this.onmessage?.({ data: { phase: "done", slim: {} } })); }
+      terminate() {}
+    });
+    vi.spyOn(api, "apiLoadResult").mockResolvedValue({
+      ok: true, resp: { city_id: "c9", buildings: [], checks: { unconnected: [], loose_chain_pieces: [] } } as any,
+    });
+    render(<LoadStep />);
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    Object.defineProperty(input, "files", { value: [new File(["x"], "town.json")], configurable: true });
+    fireEvent.change(input);
+    await waitFor(() => expect(useCityStore.getState().city?.city_id).toBe("c9"));
+    expect(useWizardStore.getState().fileName).toBe("town.json");
   });
 });

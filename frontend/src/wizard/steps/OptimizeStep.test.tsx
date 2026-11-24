@@ -198,4 +198,26 @@ describe("OptimizeStep", () => {
     await waitFor(() => expect(useWizardStore.getState().layouts).toEqual([]));
     expect((screen.getByText("Next") as HTMLButtonElement).disabled).toBe(true);
   });
+
+  it("flags a running search to the desktop shell, and clears it on unmount", async () => {
+    const set_running = vi.fn();
+    (window as any).pywebview = { api: { set_running } };
+    try {
+      vi.spyOn(api, "apiOptimizeResult").mockResolvedValue({ ok: true, job_id: "j" });
+      const { unmount } = render(<OptimizeStep />);
+      await waitFor(() => expect((screen.getByText("Start") as HTMLButtonElement).disabled).toBe(false));
+      expect(set_running).toHaveBeenLastCalledWith(false, expect.any(String), expect.any(String));
+      fireEvent.click(screen.getByText("Start"));
+      await screen.findByRole("progressbar");
+      expect(set_running).toHaveBeenLastCalledWith(
+        true,
+        "A search is running",
+        "Closing now stops the search and loses what it found since the last saved step. Close anyway?",
+      );
+      unmount();
+      expect(set_running.mock.lastCall?.[0]).toBe(false);
+    } finally {
+      delete (window as any).pywebview;
+    }
+  });
 });

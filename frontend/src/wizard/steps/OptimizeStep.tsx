@@ -5,6 +5,7 @@ import {
   afterRun, buildOptimizeBody, CUSTOM_MAX, CUSTOM_MIN, DEFAULT_MINUTES, PHASE_STEPS, phaseIndex,
   progressPct, RUN_PRESETS_MIN, runKey, startDecision, timeLeft,
 } from "../run";
+import { setRunningFlag } from "../desktop";
 import { StepNav } from "../StepNav";
 import type { LayoutEntry, MachineInfo } from "../types";
 import { useResultsAreCurrent, useT, useWizardStore } from "../wizardStore";
@@ -77,6 +78,13 @@ export function OptimizeStep() {
   const running = run?.state === "running";
   const current = useResultsAreCurrent();
   const invalidateRun = useWizardStore((s) => s.invalidateRun);
+  const lang = useWizardStore((s) => s.lang);
+
+  // The desktop shell (and the browser) ask before closing while a search runs.
+  useEffect(() => {
+    setRunningFlag(running, t("close.title"), t("close.message"));
+  }, [running, lang]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => setRunningFlag(false, "", ""), []);
 
   // The city, its edits or the keep choice changed since the last run: its layouts no longer apply.
   useEffect(() => {

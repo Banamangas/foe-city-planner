@@ -119,5 +119,12 @@
   "export.failed": "Le fichier n'a pas pu être créé.",
   "export.howImport": "Comment l'importer",
   "export.again": "Recommencer avec une autre ville",
-  "export.warnings": "{n} bâtiment(s) ajouté(s) n'ont pas de type Forge Hammer et ne sont pas dans le fichier enregistré."
+  "export.warnings": "{n} bâtiment(s) ajouté(s) n'ont pas de type Forge Hammer et ne sont pas dans le fichier enregistré.",
+  "resume.title": "Reprendre là où vous en étiez",
+  "resume.file": "Dernière ville : {name}",
+  "resume.continue": "Continuer",
+  "resume.another": "Commencer avec une autre ville",
+  "resume.failed": "Impossible de rouvrir votre dernière ville. Chargez à nouveau le fichier de votre ville.",
+  "close.title": "Une recherche est en cours",
+  "close.message": "Si vous fermez maintenant, la recherche s'arrête et vous perdez ce qu'elle a trouvé depuis la dernière étape enregistrée. Fermer quand même ?"
 }

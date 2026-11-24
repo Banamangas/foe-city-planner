@@ -119,5 +119,12 @@
   "export.failed": "The file could not be created.",
   "export.howImport": "How to import it",
   "export.again": "Start again with another city",
-  "export.warnings": "{n} added building(s) have no Forge Hammer type and are not in the saved file."
+  "export.warnings": "{n} added building(s) have no Forge Hammer type and are not in the saved file.",
+  "resume.title": "Continue where you left off",
+  "resume.file": "Last city: {name}",
+  "resume.continue": "Continue",
+  "resume.another": "Start with another city",
+  "resume.failed": "We couldn't reopen your last city. Please load your city file again.",
+  "close.title": "A search is running",
+  "close.message": "Closing now stops the search and loses what it found since the last saved step. Close anyway?"
 }

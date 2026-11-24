@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { LANGS, languageName, translate } from "./i18n";
+import { startDesktopSession } from "./session";
 import { BuildingsStep } from "./steps/BuildingsStep";
 import { ChooseStep } from "./steps/ChooseStep";
 import { ExportStep } from "./steps/ExportStep";
@@ -16,6 +17,9 @@ export function Wizard() {
   const step = useWizardStore((s) => s.step);
   const lang = useWizardStore((s) => s.lang);
   const setLang = useWizardStore((s) => s.setLang);
+
+  // Desktop app only: continue where you left off, keep the session saved, ping the server.
+  useEffect(() => startDesktopSession(), []);
 
   useEffect(() => {
     document.title = translate(lang, "app.title");

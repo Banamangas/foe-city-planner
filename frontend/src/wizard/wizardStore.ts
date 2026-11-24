@@ -4,6 +4,7 @@ import { mergeLayouts, runKey } from "./run";
 import { detectLang, translate } from "./i18n";
 import type { Edits } from "../types";
 import type { LayoutEntry, RunState } from "./types";
+import type { Session } from "./session";
 
 const LANG_KEY = "foeopt.lang";
 
@@ -40,6 +41,12 @@ type WizardState = {
   resultsAreCurrent: () => boolean;
   selectedId: number | "player" | null;
   select: (id: number | "player" | null) => void;
+  /** Name of the loaded city file (kept for "continue where you left off"). */
+  fileName: string | null;
+  setFileName: (name: string | null) => void;
+  /** Desktop app: the last session, offered on step 1 until the player decides. */
+  resume: Session | null;
+  setResume: (s: Session | null) => void;
   reset: () => void;
 };
 
@@ -76,6 +83,10 @@ export const useWizardStore = create<WizardState>((set, get) => ({
   },
   selectedId: null,
   select: (id) => set({ selectedId: id }),
+  fileName: null,
+  setFileName: (name) => set({ fileName: name }),
+  resume: null,
+  setResume: (s) => set({ resume: s }),
   reset: () => {
     set({
       step: 1,
@@ -83,6 +94,8 @@ export const useWizardStore = create<WizardState>((set, get) => ({
       run: null,
       layouts: [],
       selectedId: null,
+      fileName: null,
+      resume: null,
     });
     useCityStore.getState().reset();
   },

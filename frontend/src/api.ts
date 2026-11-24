@@ -129,6 +129,31 @@ export async function apiSaveEdits(cityId: string, edits: Edits): Promise<void> 
 }
 export const apiStop = (jobId: string): Promise<any> => jsonPost(`/api/stop/${jobId}`, {});
 export const apiCities = (): Promise<CityListItem[]> => jsonGet("/api/cities");
+/** Desktop mode is told apart from the developer setup (where these routes are plain 404 pages)
+ *  by the exact body of the "no session" answer. Never throws. */
+export async function apiSessionGet(): Promise<{ desktop: false } | { desktop: true; session: unknown | null }> {
+  try {
+    const r = await fetch("/api/session");
+    const data = await r.json().catch(() => undefined);
+    if (r.ok && data !== undefined) return { desktop: true, session: data };
+    if (r.status === 404 && data?.error === "no session") return { desktop: true, session: null };
+  } catch {
+    /* network error: not the desktop app */
+  }
+  return { desktop: false };
+}
+export async function apiSessionPut(session: unknown): Promise<void> {
+  const r = await fetch("/api/session", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(session),
+  });
+  if (!r.ok) throw new Error(`session save failed (${r.status})`);
+}
+export async function apiSessionDelete(): Promise<void> {
+  await fetch("/api/session", { method: "DELETE" });
+}
+export async function apiPing(): Promise<void> {
+  await fetch("/api/ping", { method: "POST" });
+}
 export const apiCity = (id: string): Promise<any> => jsonGet(`/api/cities/${id}`);
 export const apiLayouts = (cityId?: string): Promise<LayoutListItem[]> =>
   jsonGet(cityId ? `/api/layouts?city_id=${encodeURIComponent(cityId)}` : "/api/layouts");

@@ -1,8 +1,9 @@
 import { useRef, useState } from "react";
-import { apiLoadResult } from "../../api";
+import { apiLoadResult, apiSessionDelete } from "../../api";
 import { useCityStore } from "../../stores/cityStore";
 import { Guide } from "../Guide";
 import { classifyLoadProblem, type CustomBuildings, type LoadProblem } from "../loadCity";
+import { restoreSession } from "../session";
 import { StepNav } from "../StepNav";
 import { useT, useWizardStore } from "../wizardStore";
 import { ChecksPanel } from "./ChecksPanel";
@@ -69,12 +70,15 @@ export function LoadStep() {
   const go = useWizardStore((s) => s.go);
   const keepUnconnected = useWizardStore((s) => s.keepUnconnected);
   const setKeepUnconnected = useWizardStore((s) => s.setKeepUnconnected);
+  const resume = useWizardStore((s) => s.resume);
   const city = useCityStore((s) => s.city);
   const setCity = useCityStore((s) => s.setCity);
 
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<LoadProblem | null>(null);
   const [guide, setGuide] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const [restoreFailed, setRestoreFailed] = useState(false);
   const slimRef = useRef<{ slim: unknown; name: string } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const workerRef = useRef<Worker | null>(null);
@@ -84,6 +88,7 @@ export function LoadStep() {
   const finish = (resp: NonNullable<typeof city>) => {
     useWizardStore.getState().invalidateRun();
     setCity(resp);
+    useWizardStore.getState().setFileName(slimRef.current?.name ?? null);
     const unconnected = resp.checks?.unconnected ?? [];
     // Nothing to ask when everything is connected; otherwise wait for the player's choice.
     setKeepUnconnected(unconnected.length === 0 ? [] : null);
@@ -104,6 +109,22 @@ export function LoadStep() {
     const p = classifyLoadProblem(r.ok ? { resp: r.resp } : r);
     setProblem(p);
     if (r.ok && !p) finish(r.resp);
+  };
+
+  const startOver = () => {
+    useWizardStore.getState().setResume(null);
+    void apiSessionDelete().catch(() => undefined);
+  };
+
+  const continueSession = async () => {
+    if (!resume || restoring) return;
+    setRestoring(true);
+    const ok = await restoreSession(resume, useWizardStore.getState().lang);
+    setRestoring(false);
+    if (!ok) {
+      setRestoreFailed(true);
+      startOver();
+    }
   };
 
   const onFile = (file: File) => {
@@ -151,6 +172,19 @@ export function LoadStep() {
   return (
     <section className="step-body">
       <h2>{t("load.title")}</h2>
+      {resume && !city ? (
+        <div className="resume-card">
+          <h3>{t("resume.title")}</h3>
+          <p>{t("resume.file", { name: resume.fileName })}</p>
+          <button type="button" className="btn primary" disabled={restoring} onClick={continueSession}>
+            {t("resume.continue")}
+          </button>{" "}
+          <button type="button" className="btn" disabled={restoring} onClick={startOver}>
+            {t("resume.another")}
+          </button>
+          {restoring && <p className="busy">{t("load.busy")}</p>}
+        </div>
+      ) : (
       <div
         className="drop-zone"
         onDragOver={(e) => e.preventDefault()}
@@ -171,6 +205,8 @@ export function LoadStep() {
             e.target.value = "";
           }} />
       </div>
+      )}
+      {restoreFailed && !resume && !city && <p className="field-error">{t("resume.failed")}</p>}
       <p className="private-note">{t("load.private")}</p>
       <button type="button" className="link" onClick={() => setGuide(true)}>
         {t("load.guideLink")}
