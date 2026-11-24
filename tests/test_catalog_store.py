@@ -137,3 +137,24 @@ def test_no_update_env_disables_background_check(monkeypatch):
 
 def test_cache_dir_override(tmp_path):
     assert cs.cache_dir() == tmp_path / "cache"
+
+
+def test_hanging_server_fails_within_timeout():
+    import socket
+    import time
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(5)  # accepts connections at the OS level, never answers
+    try:
+        t0 = time.time()
+        assert cs.check_for_update(f"http://127.0.0.1:{srv.getsockname()[1]}/", timeout=1) == "failed"
+        assert time.time() - t0 < 5
+    finally:
+        srv.close()
+
+
+def test_oversized_decompressed_payload_fails(tmp_path, server, cache, monkeypatch):
+    monkeypatch.setattr(cs, "_MAX_UNZIPPED", 1000)
+    _release(tmp_path, _newer(tmp_path))
+    assert cs.check_for_update(server["url"]) == "failed"
+    assert not cache.exists()

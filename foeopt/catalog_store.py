@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import io
 import json
 import os
 import sys
@@ -20,6 +21,7 @@ from foeopt.catalog_build import sanity
 RELEASE_BASE = "https://github.com/Banamangas/foe-city-planner/releases/download/catalog/"
 _DATA = Path(__file__).with_name("data")
 _MAX_BYTES = 20 * 1024 * 1024
+_MAX_UNZIPPED = 50 * 1024 * 1024
 _APP = "foe-city-planner"
 
 
@@ -107,7 +109,10 @@ def check_for_update(base_url: str = RELEASE_BASE, timeout: float = 10.0) -> str
             return "failed"
         if remote["built_at"] <= active_built:
             return "current"
-        raw = gzip.decompress(_get(base_url + "catalog.json.gz", timeout))
+        with gzip.GzipFile(fileobj=io.BytesIO(_get(base_url + "catalog.json.gz", timeout))) as gz:
+            raw = gz.read(_MAX_UNZIPPED + 1)
+        if len(raw) > _MAX_UNZIPPED:
+            return "failed"
         if hashlib.sha256(raw).hexdigest() != remote["sha256"]:
             return "failed"
         new = json.loads(raw)

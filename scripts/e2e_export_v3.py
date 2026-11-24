@@ -20,6 +20,8 @@ from collections import Counter
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+os.environ.setdefault("FOEOPT_NO_UPDATE", "1")  # no GitHub check from this script
+
 from foeopt.export_v3 import plan_as_city  # noqa: E402
 from foeopt.legality import check  # noqa: E402
 from foeopt.loader import load_layout_from_dict, read_json  # noqa: E402
