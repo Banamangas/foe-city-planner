@@ -26,7 +26,7 @@ type WizardState = {
   lang: string;
   setLang: (lang: string) => void;
   keepUnconnected: number[] | null;
-  setKeepUnconnected: (ids: number[]) => void;
+  setKeepUnconnected: (ids: number[] | null) => void;
   run: RunState | null;
   setRun: (patch: Partial<RunState> | null) => void;
   layouts: LayoutEntry[];

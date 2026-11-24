@@ -34,7 +34,9 @@ export function ProblemView({
   );
   switch (problem.kind) {
     case "unknown_buildings":
-      return <UnknownBuildingsForm items={problem.items} onSubmit={onSubmitCustom} />;
+      return <UnknownBuildingsForm
+          key={problem.items.map((i) => i.cityentity_id).join(",")}
+          items={problem.items} onSubmit={onSubmitCustom} />;
     case "not_forge_hammer":
       return (
         <div className="problem">
@@ -64,7 +66,6 @@ export function ProblemView({
 
 export function LoadStep() {
   const t = useT();
-  const lang = useWizardStore((s) => s.lang);
   const go = useWizardStore((s) => s.go);
   const keepUnconnected = useWizardStore((s) => s.keepUnconnected);
   const setKeepUnconnected = useWizardStore((s) => s.setKeepUnconnected);
@@ -76,20 +77,28 @@ export function LoadStep() {
   const [guide, setGuide] = useState(false);
   const slimRef = useRef<{ slim: unknown; name: string } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const workerRef = useRef<Worker | null>(null);
+  // Bumped by every new file: results of an older file are dropped.
+  const seqRef = useRef(0);
 
   const finish = (resp: NonNullable<typeof city>) => {
     setCity(resp);
     const unconnected = resp.checks?.unconnected ?? [];
     // Nothing to ask when everything is connected; otherwise wait for the player's choice.
-    if (unconnected.length === 0) setKeepUnconnected([]);
-    else useWizardStore.setState({ keepUnconnected: null });
+    setKeepUnconnected(unconnected.length === 0 ? [] : null);
   };
 
   const load = async (custom?: CustomBuildings) => {
     const src = slimRef.current;
     if (!src) return;
+    const seq = seqRef.current;
     setBusy(true);
-    const r = await apiLoadResult(src.slim, { fileName: src.name, lang, custom });
+    const r = await apiLoadResult(src.slim, {
+      fileName: src.name,
+      lang: useWizardStore.getState().lang,
+      custom,
+    });
+    if (seq !== seqRef.current) return;
     setBusy(false);
     const p = classifyLoadProblem(r.ok ? { resp: r.resp } : r);
     setProblem(p);
@@ -97,6 +106,8 @@ export function LoadStep() {
   };
 
   const onFile = (file: File) => {
+    workerRef.current?.terminate();
+    const seq = ++seqRef.current;
     setProblem(null);
     setBusy(true);
     useCityStore.getState().reset();
@@ -104,7 +115,12 @@ export function LoadStep() {
     const worker = new Worker(new URL("../../workers/stripCity.worker.ts", import.meta.url), {
       type: "module",
     });
+    workerRef.current = worker;
     worker.onmessage = (e: MessageEvent<any>) => {
+      if (seq !== seqRef.current) {
+        worker.terminate();
+        return;
+      }
       const msg = e.data;
       if (msg.phase === "error") {
         worker.terminate();
@@ -118,6 +134,7 @@ export function LoadStep() {
     };
     worker.onerror = () => {
       worker.terminate();
+      if (seq !== seqRef.current) return;
       setBusy(false);
       setProblem({ kind: "unreadable", details: "reader failed" });
     };
@@ -146,7 +163,11 @@ export function LoadStep() {
           {t("load.choose")}
         </button>
         <input ref={inputRef} type="file" hidden
-          onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} />
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) onFile(f);
+            e.target.value = "";
+          }} />
       </div>
       <p className="private-note">{t("load.private")}</p>
       <button type="button" className="link" onClick={() => setGuide(true)}>
@@ -159,7 +180,7 @@ export function LoadStep() {
       {city && !problem && !busy && (
         <>
           <p className="loaded">{t("load.loaded", { n: city.buildings.length })}</p>
-          {checks && (
+          {checks && (checks.unconnected.length > 0 || checks.loose_chain_pieces.length > 0) && (
             <ChecksPanel
               checks={checks}
               chosen={chosen}
