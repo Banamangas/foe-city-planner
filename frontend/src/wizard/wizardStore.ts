@@ -32,6 +32,7 @@ type WizardState = {
   setRun: (patch: Partial<RunState> | null) => void;
   layouts: LayoutEntry[];
   addLayouts: (entries: LayoutEntry[]) => void;
+  clearLayouts: () => void;
   selectedId: number | "player" | null;
   select: (id: number | "player" | null) => void;
   reset: () => void;
@@ -58,6 +59,7 @@ export const useWizardStore = create<WizardState>((set) => ({
     })),
   layouts: [],
   addLayouts: (entries) => set((s) => ({ layouts: mergeLayouts(s.layouts, entries) })),
+  clearLayouts: () => set({ layouts: [], selectedId: null }),
   selectedId: null,
   select: (id) => set({ selectedId: id }),
   reset: () => {

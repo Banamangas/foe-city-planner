@@ -172,6 +172,8 @@ export function openStream(
     onImprovement?: (data: Improvement) => void;
     onHeartbeat?: (data: any) => void;
     onLayout?: (entry: LayoutEntry) => void;
+    /** The connection failed; check `es.readyState === 2` (CLOSED) for a stream that will not come back. */
+    onError?: (es: EventSource) => void;
     onDone?: (data: any) => void;
   },
 ): EventSource {
@@ -183,5 +185,6 @@ export function openStream(
     handlers.onDone?.(JSON.parse((e as MessageEvent).data));
     es.close();
   });
+  es.onerror = () => handlers.onError?.(es);
   return es;
 }

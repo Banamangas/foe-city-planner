@@ -96,4 +96,67 @@ describe("OptimizeStep", () => {
     unmount();
     expect(close).toHaveBeenCalled();
   });
+
+  it("a second run does not inherit the first run's layouts", async () => {
+    vi.spyOn(api, "apiOptimizeResult").mockResolvedValue({ ok: true, job_id: "j" });
+    render(<OptimizeStep />);
+    await waitFor(() => expect((screen.getByText("Start") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByText("Start"));
+    await screen.findByRole("progressbar");
+    act(() => handlers.onDone!({ state: "done", result: { layouts: [{ id: 0, stats: { roads: 66 } }] }, elapsed: 1 }));
+    useWizardStore.getState().go(3);
+    await waitFor(() => expect((screen.getByText("Start") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByText("Start"));
+    await screen.findByRole("progressbar");
+    expect(useWizardStore.getState().layouts).toEqual([]);
+    act(() => handlers.onDone!({ state: "done", result: { layouts: [] }, elapsed: 1 }));
+    expect(await screen.findByText(/No layout was found this time/)).toBeTruthy();
+    expect(useWizardStore.getState().layouts).toEqual([]);
+  });
+
+  it("treats a permanently closed stream as a lost run", async () => {
+    vi.spyOn(api, "apiOptimizeResult").mockResolvedValue({ ok: true, job_id: "j" });
+    render(<OptimizeStep />);
+    await waitFor(() => expect((screen.getByText("Start") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByText("Start"));
+    await screen.findByRole("progressbar");
+    act(() => handlers.onError!({ readyState: 0 } as EventSource));
+    expect(screen.queryByText(/connection to the optimizer/)).toBeNull();
+    act(() => handlers.onError!({ readyState: 2 } as EventSource));
+    expect(await screen.findByText("The connection to the optimizer was lost.")).toBeTruthy();
+    expect(close).toHaveBeenCalled();
+    expect((screen.getByText("Back") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("treats 20 s of silence as a lost run", async () => {
+    vi.spyOn(api, "apiOptimizeResult").mockResolvedValue({ ok: true, job_id: "j" });
+    render(<OptimizeStep />);
+    await waitFor(() => expect((screen.getByText("Start") as HTMLButtonElement).disabled).toBe(false));
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    try {
+      fireEvent.click(screen.getByText("Start"));
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+      expect(screen.getByRole("progressbar")).toBeTruthy();
+      act(() => { vi.advanceTimersByTime(15_000); });
+      act(() => handlers.onHeartbeat!({ elapsed: 15, phase: "walk", layouts_found: 0 }));
+      act(() => { vi.advanceTimersByTime(15_000); });
+      expect(screen.queryByText(/connection to the optimizer/)).toBeNull();
+      act(() => { vi.advanceTimersByTime(7_000); });
+      expect(screen.getByText("The connection to the optimizer was lost.")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("disables Stop once pressed", async () => {
+    vi.spyOn(api, "apiOptimizeResult").mockResolvedValue({ ok: true, job_id: "j" });
+    vi.spyOn(api, "apiStop").mockResolvedValue({ ok: true });
+    render(<OptimizeStep />);
+    await waitFor(() => expect((screen.getByText("Start") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByText("Start"));
+    await screen.findByRole("progressbar");
+    fireEvent.click(screen.getByText("Stop now and keep what's found"));
+    const b = screen.getByText("Stopping…") as HTMLButtonElement;
+    expect(b.disabled).toBe(true);
+  });
 });

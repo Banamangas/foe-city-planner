@@ -9,22 +9,26 @@ import { StepNav } from "../StepNav";
 import type { LayoutEntry, MachineInfo } from "../types";
 import { useT, useWizardStore } from "../wizardStore";
 
-type Notice = { kind: "none_found" | "failed" | "overflow"; n?: number; details?: string } | null;
+type Notice = { kind: "none_found" | "failed" | "overflow" | "busy" | "lost"; n?: number; details?: string } | null;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Stop an old job and wait (max 10 s) until the server reports it finished. */
-async function stopAndWait(jobId: string): Promise<void> {
+const SILENCE_MS = 20_000;
+
+/** Resolves true once the old job reported finished, false after the 10 s wait. */
+async function stopAndWait(jobId: string): Promise<boolean> {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
     try {
       const r = await apiStop(jobId);
-      if (r?.already_done) return;
+      if (r?.already_done) return true;
     } catch {
-      return;
+      return true;
     }
     await sleep(500);
   }
+  return false;
 }
 
 export function OptimizeStep() {
@@ -35,6 +39,7 @@ export function OptimizeStep() {
   const layouts = useWizardStore((s) => s.layouts);
   const addLayouts = useWizardStore((s) => s.addLayouts);
   const select = useWizardStore((s) => s.select);
+  const clearLayouts = useWizardStore((s) => s.clearLayouts);
   const keepUnconnected = useWizardStore((s) => s.keepUnconnected);
   const city = useCityStore((s) => s.city);
   const edits = useCityStore((s) => s.edits);
@@ -46,6 +51,8 @@ export function OptimizeStep() {
   const [starting, setStarting] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
   const [copied, setCopied] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const lastSeenRef = useRef(0);
   const esRef = useRef<EventSource | null>(null);
   const aliveRef = useRef(true);
 
@@ -57,8 +64,8 @@ export function OptimizeStep() {
         setBest(o.presets.best);
         setMachine(o.machine ?? null);
       })
-      .catch(() => {
-        if (aliveRef.current) setNotice({ kind: "failed" });
+      .catch((err) => {
+        if (aliveRef.current) setNotice({ kind: "failed", details: String(err) });
       });
     return () => {
       aliveRef.current = false;
@@ -68,6 +75,15 @@ export function OptimizeStep() {
   }, []);
 
   const running = run?.state === "running";
+
+  useEffect(() => {
+    if (!running) return;
+    const id = setInterval(() => {
+      if (Date.now() - lastSeenRef.current > SILENCE_MS) lose();
+    }, 1000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running]);
   const bestRoads = layouts.length ? Math.min(...layouts.map((l) => l.stats.roads)) : null;
 
   const finish = (state: "done" | "error", extra: LayoutEntry[], details?: string) => {
@@ -84,11 +100,29 @@ export function OptimizeStep() {
     }
   };
 
+  const lose = () => {
+    esRef.current?.close();
+    esRef.current = null;
+    if (!aliveRef.current) return;
+    setRun({ state: "error" });
+    setNotice({ kind: "lost" });
+  };
+
   const attach = (jobId: string, timeBoxS: number) => {
+    lastSeenRef.current = Date.now();
+    setStopping(false);
     esRef.current = openStream(jobId, {
-      onLayout: (e) => aliveRef.current && addLayouts([e]),
+      onError: (es) => {
+        if (es.readyState === 2) lose();
+      },
+      onLayout: (e) => {
+        if (!aliveRef.current) return;
+        lastSeenRef.current = Date.now();
+        addLayouts([e]);
+      },
       onHeartbeat: (d) => {
         if (!aliveRef.current) return;
+        lastSeenRef.current = Date.now();
         const prev = useWizardStore.getState().run?.maxPhaseIdx ?? 0;
         setRun({
           elapsed: d.elapsed ?? 0,
@@ -120,7 +154,13 @@ export function OptimizeStep() {
     let r = await apiOptimizeResult(body);
     let decision = startDecision(r, false);
     if (typeof decision === "object") {
-      await stopAndWait(decision.stopThenRetry);
+      const finished = await stopAndWait(decision.stopThenRetry);
+      if (!aliveRef.current) return;
+      if (!finished) {
+        setStarting(false);
+        setNotice({ kind: "busy" });
+        return;
+      }
       r = await apiOptimizeResult(body);
       decision = startDecision(r, true);
     }
@@ -135,6 +175,7 @@ export function OptimizeStep() {
       }
       return;
     }
+    clearLayouts();
     setRun({
       jobId: r.job_id, state: "running", stopped: false, elapsed: 0, timeBoxS: minutes * 60,
       phase: null, maxPhaseIdx: 0, layoutsFound: 0, error: null,
@@ -161,7 +202,11 @@ export function OptimizeStep() {
       ? t("buildings.overflow", { n: notice.n ?? 0 })
       : notice.kind === "none_found"
         ? t("run.noneFound")
-        : t("run.failed")
+        : notice.kind === "busy"
+          ? t("run.busy")
+          : notice.kind === "lost"
+            ? t("run.lost")
+            : t("run.failed")
     : null;
 
   return (
@@ -252,8 +297,13 @@ export function OptimizeStep() {
             <div><dt>{t("run.layouts")}</dt><dd data-testid="layouts-found">{run.layoutsFound}</dd></div>
             <div><dt>{t("run.timeLeft")}</dt><dd data-testid="time-left">{timeLeft(run.elapsed, run.timeBoxS)}</dd></div>
           </dl>
-          <button type="button" className="btn" onClick={() => { void apiStop(run.jobId).catch(() => undefined); }}>
-            {t("run.stop")}
+          <button
+            type="button"
+            className="btn"
+            disabled={stopping}
+            onClick={() => { setStopping(true); void apiStop(run.jobId).catch(() => undefined); }}
+          >
+            {stopping ? t("run.stopping") : t("run.stop")}
           </button>
         </div>
       )}
@@ -270,7 +320,10 @@ export function OptimizeStep() {
           )}
         </div>
       )}
-      <StepNav canBack={!running && !starting} canNext={false} onBack={() => go(2)} onNext={() => go(4)} />
+      <StepNav canBack={!running && !starting} canNext={!running && !starting && layouts.length > 0} onBack={() => go(2)} onNext={() => {
+          if (useWizardStore.getState().selectedId === null) select(layouts[0].id);
+          go(4);
+        }} />
     </section>
   );
 }

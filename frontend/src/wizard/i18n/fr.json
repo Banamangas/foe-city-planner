@@ -91,5 +91,8 @@
   "phase.sketching": "Esquisse des réseaux de routes",
   "phase.fitting": "Placement des bâtiments autour des meilleures routes",
   "phase.trying": "Essai de petites modifications",
-  "phase.finishing": "Dernières retouches sur le meilleur plan"
+  "phase.finishing": "Dernières retouches sur le meilleur plan",
+  "run.busy": "Une recherche précédente se termine encore. Réessayez dans un instant.",
+  "run.lost": "La connexion à l'optimiseur a été perdue.",
+  "run.stopping": "Arrêt en cours…"
 }

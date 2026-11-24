@@ -91,5 +91,8 @@
   "phase.sketching": "Sketching road networks",
   "phase.fitting": "Fitting buildings around the best roads",
   "phase.trying": "Trying small changes",
-  "phase.finishing": "Fine-tuning the winner"
+  "phase.finishing": "Fine-tuning the winner",
+  "run.busy": "An earlier search is still finishing. Try again in a moment.",
+  "run.lost": "The connection to the optimizer was lost.",
+  "run.stopping": "Stopping…"
 }
