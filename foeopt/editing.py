@@ -541,6 +541,9 @@ def apply_edits(layout: Layout, remove_ids, add: list | None = None,
                                 placed=a["entity_id"] not in unplaced,
                                 x=b.footprint.x, y=b.footprint.y))
 
+    relinked = [{**r, "placed": r["entity_id"] not in unplaced}
+                for r in ed.loose_relinked]
+
     if unplaced:
         seed = {"possible": False,
                 "reason": f"{len(unplaced)} new or relinked building(s) do not fit in the "
@@ -567,6 +570,6 @@ def apply_edits(layout: Layout, remove_ids, add: list | None = None,
     report = {"removed": sorted(set(remove)), "to_store": ed.stored,
               "reattached": ed.reattached, "cascades": ed.cascades, "added": added_info,
               "warnings": ed.warnings, "not_composable": not_composable, "seed": seed,
-              "space": space, "relinked": ed.loose_relinked,
+              "space": space, "relinked": relinked,
               "relink_failed": ed.loose_failed}
     return out, report

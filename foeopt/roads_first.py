@@ -4,8 +4,10 @@ import itertools
 import json
 import multiprocessing
 import random
+import sys
 import threading
 import time
+import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from types import SimpleNamespace
@@ -2052,6 +2054,24 @@ def _generate_levels(layout, region, consumers, ks, rng, params, log, *,
     return state
 
 
+def note_callback_error(errors: dict | None, name: str) -> None:
+    """Record a swallowed callback exception (count + first message) and print
+    its traceback to stderr once per callback per run."""
+    if errors is None:
+        return
+    exc = sys.exc_info()[1]
+    errors["count"] += 1
+    if errors["first"] is None:
+        errors["first"] = f"{name}: {exc!r}"
+    if name not in errors["printed"]:
+        errors["printed"].add(name)
+        traceback.print_exc()
+
+
+def _callback_errors(errors: dict) -> dict:
+    return {"count": errors["count"], "first": errors["first"]}
+
+
 def report_layout(owner, layout: Layout, k, achieved: int) -> None:
     """Offer one validated layout to the run's `on_layout` (read off `owner`:
     the search, or the walk's params), before any strict-improvement test.
@@ -2062,7 +2082,7 @@ def report_layout(owner, layout: Layout, k, achieved: int) -> None:
     try:
         cb(layout, k, achieved)
     except Exception:
-        pass
+        note_callback_error(getattr(owner, "_cb_errors", None), "on_layout")
 
 
 def _result_handler(state, params, log, *, on_improvement=None, corpus=None,
@@ -2227,6 +2247,7 @@ def _probe_level(layout, region, consumers, k, rng, params, log, pool=None,
 
 
 class RoadsFirstSearch:
+    _cb_errors = None
     _on_layout = None   # run()'s on_layout; polish phases read it off the search
 
     def __init__(self, layout: Layout, *, time_box: float, patterns: int = 200,
@@ -2637,6 +2658,8 @@ class RoadsFirstSearch:
         self.profile = profile
         self._on_layout = on_layout          # every validated layout (report_layout)
         last_phase: list[str | None] = [None]
+        cb_errors = {"count": 0, "first": None, "printed": set()}
+        self._cb_errors = cb_errors
 
         def _phase(name: str) -> None:
             """Report a phase start once; a phase re-entered back to back
@@ -2648,7 +2671,7 @@ class RoadsFirstSearch:
             try:
                 on_phase(name)
             except Exception:
-                pass
+                note_callback_error(cb_errors, "on_phase")
         profile.on_enter = lambda name: _phase(name.removeprefix("finish_"))
 
         def on_improvement(vlay, k, achieved):  # noqa: F811 -- wraps the caller's
@@ -2742,6 +2765,7 @@ class RoadsFirstSearch:
         )
         params.profile = profile
         params._on_layout = self._on_layout
+        params._cb_errors = cb_errors
 
         results: dict[int, tuple[str, int | None]] = {}
 
@@ -3043,6 +3067,7 @@ class RoadsFirstSearch:
                             "deadline_hit": _should_stop(), "results": results,
                             "boundary_descent": boundary_info["probed"],
                             "profile": profile.as_dict(self.workers),
+                            "callback_errors": _callback_errors(cb_errors),
                             "filler_failures": summarise_fillers(filler_stats),
                             "level_coverage": level_coverage,
                             "undersampled_levels": sum(
@@ -3156,6 +3181,7 @@ class RoadsFirstSearch:
                     "seed_polish": polish_info,
                     "boundary_descent": boundary_info["probed"],
                     "profile": profile.as_dict(self.workers),
+                    "callback_errors": _callback_errors(cb_errors),
                     "objective_polish": objective_info,
                     "rebased_polish": rebase_info,
                     "union_polish": union_info,

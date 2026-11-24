@@ -31,7 +31,7 @@ def test_stats_connected_city():
 def test_stats_no_roads():
     s = city_stats(_city(roads=False))
     assert s["roads"] == 0 and s["road_efficiency_pct"] is None
-    assert s["unconnected"] == [2]
+    assert s["unconnected"] == [2] and s["with_roads"] == 0
 
 
 def test_stats_two_lane_counts_double():
@@ -51,4 +51,4 @@ def test_stats_reference_supplies_player_road_needs():
     assert city_stats(lay)["unconnected"] == []
     s = city_stats(lay, reference=ref)
     assert s["unconnected"] == [2]
-    assert s["without_roads"] == 1 and s["with_roads"] == 1
+    assert s["without_roads"] == 1 and s["with_roads"] == 0

@@ -301,7 +301,8 @@ def test_relink_loose_attaches_piece_at_chain_end():
     lay = _moved(_city(), 13, 0, 5)
     assert loose_chain_pieces(lay, CAT) == [13]
     out, rep = apply_edits(lay, [], catalog=CAT, relink_loose=True)
-    assert rep["relinked"] == [{"entity_id": 13, "name": "Field#13", "main": 10}]
+    assert rep["relinked"] == [{"entity_id": 13, "name": "Field#13", "main": 10,
+                              "placed": True}]
     assert rep["relink_failed"] == []
     assert _ids(out) == _ids(lay)                      # entity id kept
     assert _pos(out, 13) == (14, 0)                    # the end of the chain

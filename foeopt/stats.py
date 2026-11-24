@@ -47,7 +47,7 @@ def city_stats(layout: Layout, reference: Layout | None = None) -> dict:
         "roads_pct": _pct(road_cells, area) if area else 0.0,
         "free_pct": _pct(free, area) if area else 0.0,
         "free_cells": free,
-        "with_roads": len(needing),
+        "with_roads": len(connected),
         "without_roads": len([b for b in layout.buildings
                               if not b.needs_road and not b.is_townhall]),
         "unconnected": sorted(bad),

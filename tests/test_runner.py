@@ -210,7 +210,7 @@ def test_run_with_off_road_publishes_valid_layouts():
     for e in imps + snap["result"]["layouts"]:
         assert e["legality"]["status"] == "valid"
         # the off-road building keeps the player's road need in the stats
-        assert e["stats"]["with_roads"] == 3
+        assert e["stats"]["with_roads"] == 3 - len(e["stats"]["unconnected"])
 
 
 def test_stopped_run_still_has_layouts_key():

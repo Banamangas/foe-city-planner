@@ -74,3 +74,26 @@ def test_timed_calls_on_enter_and_a_raising_phase_callback_never_breaks_run(monk
         raise RuntimeError(name)
     res = rf.RoadsFirstSearch(lay, time_box=5, workers=1, k_start=5).run(on_phase=boom)
     assert "verdict" in res
+
+
+def test_finishing_phases_are_reported_after_the_walk():
+    from tests.test_runner import _small_city
+    seen: list[str] = []
+    rf.RoadsFirstSearch(_small_city(), time_box=30.0, patterns=5, probe_limit=1.0,
+                        workers=1, rebase_s=5.0, exact_finish=True).run(on_phase=seen.append)
+    assert "walk" in seen and "exact" in seen
+    assert seen.index("exact") > seen.index("walk")
+
+
+def test_raising_callbacks_do_not_break_the_run(capsys):
+    from tests.test_runner import _small_city
+
+    def boom(*a):
+        raise RuntimeError("ui bug")
+
+    res = rf.RoadsFirstSearch(_small_city(), time_box=3.0, patterns=5, probe_limit=1.0,
+                              workers=1).run(on_phase=boom, on_layout=boom)
+    assert res["verdict"] in ("DONE", "FAMILY_TOO_WEAK")
+    ce = res["callback_errors"]
+    assert ce["count"] >= 1 and "ui bug" in ce["first"]
+    assert capsys.readouterr().err.count("Traceback") <= 2   # once per callback
