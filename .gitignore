@@ -36,3 +36,7 @@ webapp/cities.db
 # Player city exports (contain player names/ids; never commit)
 cities/
 .superpowers/
+
+# Desktop build outputs
+build/
+dist-desktop/
