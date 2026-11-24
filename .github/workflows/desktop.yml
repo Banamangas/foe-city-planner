@@ -63,28 +63,31 @@ jobs:
       - name: Build the app
         run: python desktop/build.py
 
+      - name: Prepare the self-test data folder
+        shell: bash
+        run: |
+          set -euo pipefail
+          data="$RUNNER_TEMP/foeopt-selftest"
+          mkdir -p "$data"
+          if command -v cygpath >/dev/null; then data=$(cygpath -m "$data"); fi
+          echo "FOEOPT_DATA_DIR=$data" >> "$GITHUB_ENV"
+
       # bash on every system: on Windows the exe has no console, so PowerShell
       # would neither wait for it nor get its exit code; Git Bash does both.
-      # A windowed build prints nothing, so app.log (with the SELFTEST line)
-      # is always shown.
       - name: Self-test the build
         shell: bash
         timeout-minutes: 10
         env:
           FOEOPT_NO_UPDATE: "1"
           BINARY: ${{ matrix.binary }}
-        run: |
-          set -uo pipefail
-          data="$RUNNER_TEMP/foeopt-selftest"
-          mkdir -p "$data"
-          if command -v cygpath >/dev/null; then data=$(cygpath -m "$data"); fi
-          export FOEOPT_DATA_DIR="$data"
-          "./$BINARY" --self-test
-          status=$?
-          echo "--- app.log ---"
-          cat "$FOEOPT_DATA_DIR/app.log" || echo "(no app.log)"
-          echo "self-test exit code: $status"
-          exit $status
+        run: '"./$BINARY" --self-test'
+
+      # A windowed build prints nothing: app.log holds the SELFTEST line and
+      # any error. Shown even when the self-test failed or timed out.
+      - name: Show the self-test log
+        if: always()
+        shell: bash
+        run: cat "$FOEOPT_DATA_DIR/app.log" || echo "(no app.log)"
 
       - name: Zip the macOS app
         if: runner.os == 'macOS'
@@ -100,13 +103,12 @@ jobs:
   release:
     name: Draft release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Tag pushes only: a manual run started from a tag must not draft a release.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-
       - uses: actions/download-artifact@v4
         with:
           path: release
@@ -116,12 +118,27 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
+          GUIDE: ${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/docs/download.md
         run: |
           set -euo pipefail
           files=(release/FoE-City-Planner-Windows.exe release/FoE-City-Planner-macOS.zip release/FoE-City-Planner-Linux)
           ls -l "${files[@]}"
+          notes="$RUNNER_TEMP/release-notes.md"
+          cat > "$notes" <<EOF
+          Download **one** file, the one for your computer:
+
+          | Your computer | File to download |
+          |---|---|
+          | Windows 10 or 11 | \`FoE-City-Planner-Windows.exe\` |
+          | Mac with an Apple chip (M1, M2, M3, M4...) | \`FoE-City-Planner-macOS.zip\` |
+          | Linux | \`FoE-City-Planner-Linux\` |
+
+          The first time you open it, your computer warns you that it does not
+          know the app. [How to open it the first time]($GUIDE)
+          EOF
           gh release create "$TAG" --draft --verify-tag \
             --title "FoE City Planner $TAG" \
-            --notes-file docs/download.md \
+            --notes-file "$notes" \
             "${files[@]}"

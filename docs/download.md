@@ -47,7 +47,7 @@ for example to your Desktop.
 
    ![The box asking if you are sure, with the Open button](download/macos-2.png)
 
-If your Mac only offers **Move to Bin** or **Done**, click **Done**, then
+If your Mac only offers **Move to Trash** (or **Bin**) or **Done**, click **Done**, then
 open **System Settings** → **Privacy & Security**, scroll down, and click
 **Open Anyway** next to the line about FoE City Planner.
 

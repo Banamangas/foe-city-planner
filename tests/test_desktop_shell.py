@@ -297,6 +297,7 @@ def test_main_survives_unusable_data_dir(monkeypatch):
 
 def test_selftest_restores_update_env(monkeypatch):
     from desktop import selftest
+    monkeypatch.setattr(selftest, "_window_problem", lambda: None)
     monkeypatch.delenv("FOEOPT_NO_UPDATE", raising=False)
     seen = []
 
@@ -319,6 +320,7 @@ def test_main_version(capsys):
 def test_selftest_runs_real_optimizer(capsys, tmp_path, monkeypatch):
     monkeypatch.setenv("FOEOPT_DATA_DIR", str(tmp_path))
     from desktop import selftest
+    monkeypatch.setattr(selftest, "_window_problem", lambda: None)
     assert selftest.run() == 0
     out = capsys.readouterr().out
     assert "SELFTEST OK roads=" in out
