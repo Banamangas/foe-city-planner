@@ -1,142 +1,100 @@
-# FoE City Layout Optimizer
+# FoE City Planner
 
-Minimizes the number of road tiles in a Forge of Empires city while keeping every
-road-needing building connected to the Townhall.
+Rearranges your Forge of Empires city so it needs as few roads as possible.
 
-## Download the app
+## Why
 
-Not a developer? Get the ready-made app for Windows, Mac or Linux from the
-[Releases page](../../releases/latest) (nothing else to install), and see
-[docs/download.md](docs/download.md) for which file to pick and how to open
-it the first time.
+Every road tile in a Forge of Empires city is a tile that holds no building.
+Fitting a city around fewer roads by hand is slow and hard. This tool does it
+for you: it finds layouts with fewer roads, where every building that needs a
+road is still connected to the Town Hall.
 
-## Setup
+It runs on your own computer. Your city never leaves it, and there are no
+accounts, telemetry or uploads. The only thing the app downloads is the public
+list of game buildings.
+
+## What it does
+
+1. **Reads your city** from the file the Forge Hammer planner exports.
+2. **Checks it:** points out buildings that need a road but have none (you say
+   whether that's intended), relinks chain pieces that came apart, and asks the
+   size of any building it doesn't know yet.
+3. **Lets you edit it:** remove buildings, or add buildings from your storage
+   or from the full building list.
+4. **Optimizes it** for the time you choose (minutes, not hours), showing the
+   progress and the road count as it improves.
+5. **Shows every layout it found**, best first, next to your current city, with
+   before → after numbers: roads, road efficiency, coverage, free area, and
+   buildings with and without roads.
+6. **Saves the layout you pick** as a file you load back into Forge Hammer.
+
+Every layout passes a full check against the game's rules before you see it.
+Buildings never rotate, and nothing is lost or left disconnected.
+
+## How it works
+
+- **The optimizer** (Python, `foeopt/`) works roads-first: it proposes many road
+  networks of a given size, then asks a constraint solver (CP-SAT, from Google
+  OR-Tools) whether every building can fit around one. It keeps shrinking the
+  network while the buildings still fit. Polishing steps then re-solve the best
+  networks and try small changes to remove more roads. The work is spread over
+  several processes, sized to your computer so it stays usable during a search.
+- **The app** is a small local web server (Flask) with a React + TypeScript
+  interface, in French and English. The desktop version packs Python, the
+  solver and the interface into one file per system (PyInstaller) and shows
+  them in the app's own window (pywebview), or in your browser on Linux.
+- **The building list:** Forge Hammer files only carry each building's game id.
+  Names, sizes, road needs and chains come from a building list that a daily
+  GitHub job refreshes from the game data. The app picks up new buildings at
+  startup, with no new release needed.
+- **Builds:** GitHub Actions builds and tests the Windows, macOS and Linux apps,
+  and publishes them on the Releases page.
+
+## Use it
+
+### Players: the app (nothing to install)
+
+1. Download the file for your computer from the
+   [Releases page](../../releases/latest). The [download guide](docs/download.md)
+   shows which file to pick and how to get past the "unknown app" warning
+   Windows and macOS show the first time.
+2. In Forge Hammer, export your city to a file.
+3. Open the app and follow its five steps:
+   - **Load city:** drop the file.
+   - **Buildings:** remove or add buildings, or just press Next.
+   - **Optimize:** pick a run time and press Start. Longer runs usually find
+     fewer roads. You can stop early and keep what was found.
+   - **Choose:** compare the layouts and pick one.
+   - **Export:** save the file, then import it into Forge Hammer.
+
+The app remembers your last city and where you were, so closing it loses
+nothing. It keeps only that one city: it doesn't fill your disk.
+
+### Advanced: install from source
+
+You need Python 3.12+ with [uv](https://docs.astral.sh/uv/), and Node 18+ for
+the interface.
+
+    git clone https://github.com/Banamangas/foe-city-planner.git
+    cd foe-city-planner
     uv sync
+    cd frontend && npm ci && npm run build && cd ..
+    uv run python -m webapp.app      # then open http://localhost:5000
 
-This installs everything the CLI, the optimizer, and the Flask API need (including
-`ortools`, used by the roads-first solver). For the web app's frontend you also need
-Node 18+ and one `npm install` (see [Web app](#web-app)).
+From there you can:
 
-## Your city files are not bundled
+- **Use the same wizard in your browser**, at `http://localhost:5000`.
+- **Tune the optimizer** on the advanced page (`/advanced`): every option,
+  presets, a city library and saved layouts. It also reads FOE Helper exports.
+- **Script it from the command line:** view a city, optimize roads with
+  buildings fixed, re-pack a city, check a layout's legality, and run long
+  searches.
+- **Run or build the desktop app** for your own system.
+- **Refresh the building list** yourself.
 
-You run the tool on your own FoE export. The large exports are gitignored and **not**
-committed to this repo — download them from the game / FOE Helper and drop them in the
-project root. The examples below reference `darkzig.json` and `city-user-data-foe-helper.json`
-as stand-ins for your files. See [Input formats](#input-formats) and [Inputs](#inputs).
+The commands for all of these are in the
+[command line and developer reference](docs/cli.md). For the daily building
+list job, see [docs/building-list.md](docs/building-list.md).
 
-## CLI
-
-Every command auto-detects the export format — pass a single combined file, or the
-two-file split export.
-
-View the current city as an interactive map:
-
-    uv run python -m foeopt.cli view darkzig.json -o output/current.html
-
-Optimize roads with buildings fixed (Phase 1):
-
-    uv run python -m foeopt.cli roads city-user-data.json city-user-data-foe-helper.json -o output/roads.html --diff output/roads-diff.json
-
-Re-pack the whole city to minimize roads (moves buildings):
-
-    uv run python -m foeopt.cli layout darkzig.json -o output/layout.html --thorough
-
-Lower the road count by moving buildings (local search; keeps everything else valid):
-
-    uv run python -m foeopt.cli improve darkzig.json -o output/improve.html --thorough
-
-`improve` starts from your current layout and only makes moves that keep the city valid and
-reduce roads, so the result is never worse than what you have. Savings depend on free space:
-a city with empty cells can cluster road-needing buildings and save more; a near-full city
-saves little or nothing but stays valid. Produces a before/after map (toggle current vs improved).
-
-For a deeper search that can escape the plateau where hill-climbing stalls, add `--anneal`
-(simulated annealing on the real road count — accepts some worse moves to find a better one):
-
-    uv run python -m foeopt.cli improve darkzig.json --anneal --thorough -o output/anneal.html
-
-`--anneal` is deterministic for a given `--seed` (default 0) and is still never worse than your
-current layout. The time budget defaults to 30s (`--thorough` raises it to 120s); set it
-explicitly with `--budget SECONDS` (overrides both), e.g. a 10-minute anneal:
-
-    uv run python -m foeopt.cli improve darkzig.json --anneal --budget 600 -o output/anneal.html
-
-Open the generated `.html` in a browser; hover a building to see its name and size, and toggle
-current vs optimized roads. Very dense cities (little empty space) may not fit a full re-pack,
-in which case the tool reports the buildings it could not place rather than emitting an invalid
-layout.
-
-## Roads-first optimizer
-
-The strongest method. Instead of moving buildings around a fixed road network, it searches for
-a *road skeleton* of a target size `k` and asks a CP-SAT solver (OR-Tools) whether all
-road-needing buildings can be placed against it, walking `k` downward while the layout stays
-feasible. On the `darkzig` benchmark this reaches **~106 roads**, well below the local-search
-floor (~158) and the input (250).
-
-    # feasibility k-walk on a city (writes best layouts + a probe log under output/roads-first/)
-    uv run python scripts/exp_roads_first.py darkzig.json --th-anchors full --time-box 600
-
-    # quick sanity checks
-    uv run python scripts/exp_roads_first.py --selftest
-    uv run python scripts/exp_roads_first.py darkzig.json --smoke
-
-Key flags: `--time-box SECONDS` (overall budget), `--probe-limit SECONDS` (per-CP-SAT-probe cap),
-`--patterns N`, `--th-anchors coarse|full`, `--workers`/`--probe-workers`, `--k-start auto|INT`.
-The same engine (`foeopt.roads_first.RoadsFirstSearch`) powers the web app's optimize button.
-
-## Web app
-
-A React + Vite single-page app backed by a Flask JSON API. Load a city, view it on an
-interactive pan/zoom map, run the roads-first optimizer time-boxed with best-so-far
-improvements streamed live (SSE), and save / export layouts (cached server-side in SQLite).
-The large export is slimmed in the browser (a Web Worker strips the bloated `CityEntities`
-fields to a ~5MB payload) before upload.
-
-Dev (hot reload):
-
-    cd frontend && npm install && npm run dev     # Vite dev server on http://localhost:5173 (proxies /api → :5000)
-    uv run python -m webapp.app                    # Flask JSON API on :5000
-    # open http://localhost:5173
-
-Production build:
-
-    cd frontend && npm run build                   # outputs to webapp/dist/
-    uv run python -m webapp.app                     # Flask serves the built SPA + API on :5000
-    # open http://localhost:5000
-
-The API is under `/api/...` (load, optimize, stream, cities, layouts). If you open `/` before
-building the frontend, Flask returns a 503 JSON hint reminding you to run `npm run build`.
-
-## Input formats
-
-Every command auto-detects the export format — just pass the file(s):
-
-    # single combined FOE-Helper export (CityMapData + UnlockedAreas + CityEntities)
-    uv run python -m foeopt.cli improve darkzig.json --anneal -o output/out.html
-
-    # older split export (two files)
-    uv run python -m foeopt.cli roads city-user-data.json city-user-data-foe-helper.json
-
-Supported: the two-file split export, a single combined file with old-style entities, and the
-newer combined file with `coords`/`size`/`needsStreet` entities (UTF-8 BOM tolerated). The
-`needsStreet` flag, when present, is used directly as the road requirement.
-
-## Tests
-    uv run pytest
-
-Tests that depend on the large user exports skip automatically when those files are absent, so a
-fresh clone stays green. (Two long RL-gate tests are usually excluded:
-`--ignore=tests/test_rl_anneal.py --ignore=tests/test_rl_gate.py`.)
-
-## Inputs
-- `city-user-data.json` — live game CityMap response (bundled; small). A building needs a road
-  iff it has the `connected` key and is currently road-adjacent.
-- `city-user-data-foe-helper.json` — FOE Helper export with building definitions
-  (sizes, levels, sets/chains) under `CityEntities`. **User-supplied / gitignored** — required
-  for the split-format path.
-- Combined exports (e.g. `darkzig.json`, `CityMap-*.json`) — single-file exports that embed
-  `CityEntities`. **User-supplied / gitignored.**
-- `metadata-grid.json` — static grid geometry (reference; bundled).
-
-See `docs/superpowers/specs/` for the full design and `tasks/lessons.md` for data-model notes.
+Your own city files contain player names and ids. The usual file names are
+already ignored by git; keep any others out of commits too.
