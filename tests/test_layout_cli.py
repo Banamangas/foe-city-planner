@@ -1,5 +1,7 @@
 import pytest
 
+from tests.conftest import require_data
+
 from foeopt.build import build_layout
 from foeopt.packer import repack
 from foeopt.report import road_estimate
@@ -67,7 +69,7 @@ def test_layout_lns_writes_comparison_html(tmp_path, monkeypatch, repo_root):
     if not helper.exists():
         pytest.skip("city-user-data-foe-helper.json not present")
     monkeypatch.chdir(tmp_path)  # output/lns lands under tmp_path
-    rc = main(["layout", str(repo_root / "city-user-data.json"),
+    rc = main(["layout", str(require_data("city-user-data.json")),
                str(helper),
                "--budget", "2", "--anneal-budget", "1", "--lns", "2",
                "-o", str(tmp_path / "layout.html")])

@@ -1,5 +1,7 @@
 import pytest
 
+from tests.conftest import require_data
+
 from foeopt.model import Building, Footprint, Layout, Region
 from foeopt.quality import (
     filler_road_adjacencies,
@@ -143,7 +145,7 @@ def test_bundled_city_sharing_regression(repo_root):
     helper = repo_root / "city-user-data-foe-helper.json"
     if not helper.exists():
         pytest.skip("city-user-data-foe-helper.json not present")
-    lay = load_layout(str(repo_root / "city-user-data.json"), str(helper))
+    lay = load_layout(str(require_data("city-user-data.json")), str(helper))
     load = road_cell_load(lay)
     hist = sharing_histogram(lay)
     assert len(load) == 142

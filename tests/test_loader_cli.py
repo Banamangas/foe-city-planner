@@ -22,7 +22,7 @@ def test_view_accepts_single_combined_file(tmp_path):
 
 def test_roads_accepts_two_file_split(tmp_path):
     out = tmp_path / "roads.html"
-    rc = main(["roads", str(REPO / "city-user-data.json"),
+    rc = main(["roads", str(_require("city-user-data.json")),
                str(_require("city-user-data-foe-helper.json")), "-o", str(out)])
     assert rc == 0
     assert out.exists()

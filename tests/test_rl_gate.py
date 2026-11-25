@@ -9,7 +9,9 @@ def test_gate_verdict_stuck_when_policy_cannot_place(tmp_path):
     # we only assert the verdict vocabulary and that roads/status are returned.
     from rl.policy import PlacementPolicy
     from foeopt.loader import load_layout
-    layout = load_layout("city-user-data.json", "city-user-data-foe-helper.json")
+    from tests.conftest import require_data
+    layout = load_layout(str(require_data("city-user-data.json")),
+                         str(require_data("city-user-data-foe-helper.json")))
     ckpt = tmp_path / "c.pt"
     torch.save({"state_dict": PlacementPolicy(hidden=64).state_dict(), "hidden": 64}, ckpt)
     r = run_gate(str(ckpt), "city-user-data.json", helper="city-user-data-foe-helper.json",

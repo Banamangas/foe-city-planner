@@ -1,5 +1,7 @@
 import pytest
 
+from tests.conftest import require_data
+
 from foeopt.bounds import bound_adjacency, report_bounds
 from foeopt.loader import load_layout
 from foeopt.model import Building, Footprint, Layout, Region
@@ -37,7 +39,7 @@ def test_bounds_below_known_achievable_on_user_city(repo_root):
     helper = repo_root / "city-user-data-foe-helper.json"
     if not helper.exists():
         pytest.skip("city-user-data-foe-helper.json not present")
-    lay = load_layout(str(repo_root / "city-user-data.json"), str(helper))
+    lay = load_layout(str(require_data("city-user-data.json")), str(helper))
     assert report_bounds(lay)["max"] <= 142      # expert-real road count
 
 
@@ -92,7 +94,7 @@ def test_pick_k_start_on_user_city(repo_root):
     helper = repo_root / "city-user-data-foe-helper.json"
     if not helper.exists():
         pytest.skip("city-user-data-foe-helper.json not present")
-    lay = load_layout(str(repo_root / "city-user-data.json"), str(helper))
+    lay = load_layout(str(require_data("city-user-data.json")), str(helper))
     assert pick_k_start(lay) == 145
 
 

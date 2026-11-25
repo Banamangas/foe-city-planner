@@ -135,7 +135,7 @@ def test_build_combined_old_schema_connected_not_adjacent_to_road():
 
 
 def test_load_layout_split_old_matches_build_layout():
-    layout = load_layout(str(REPO / "city-user-data.json"),
+    layout = load_layout(str(_require("city-user-data.json")),
                          str(_require("city-user-data-foe-helper.json")))
     assert len(layout.buildings) == 314
     assert len(layout.roads) == 142
@@ -144,7 +144,7 @@ def test_load_layout_split_old_matches_build_layout():
 
 def test_load_layout_split_old_requires_helper():
     with pytest.raises(ValueError):
-        load_layout(str(REPO / "city-user-data.json"))     # helper missing
+        load_layout(str(_require("city-user-data.json")))     # helper missing
 
 
 def test_load_layout_combined_old_city_txt():
@@ -175,7 +175,7 @@ def test_route_output_unchanged_after_prune_speedup():
     road counts as before (darkzig 236, sample 142)."""
     from foeopt.router import route
     assert len(route(load_layout(str(_require("darkzig.json"))))) == 236
-    assert len(route(load_layout(str(REPO / "city-user-data.json"),
+    assert len(route(load_layout(str(_require("city-user-data.json")),
                                  str(_require("city-user-data-foe-helper.json"))))) == 142
 
 
