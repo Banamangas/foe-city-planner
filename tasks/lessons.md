@@ -2960,3 +2960,6 @@ That is a modelling gap (fillers outside the model), not a scheduling one.
 - A Python thread inside `CpSolver.solve` is blocked waiting on CP-SAT's C++ threads, so py-spy's default (idle samples dropped) shows almost no solver time and makes Python look dominant. CP-SAT's own threads are never sampled at all.
 - **Rule:** to split Python vs solver cost, run `py-spy record --idle --subprocesses` AND measure real CPU per process from /proc (utime+stime, all threads, every descendant). Forkserver pool workers are not your children, so `RUSAGE_CHILDREN` reports 0 for them.
 - Never `pkill -f <pattern>` where the pattern also appears in the calling shell's command line: it kills the shell (exit 144). Kill by pid.
+
+## History rewrites: list every ref, not just branches (2026-11-25)
+When removing a file from history, list `git ls-remote origin` (branches AND tags, e.g. the `catalog` release tag) before planning the force-push, and verify with a fresh clone (`git log --all -- <file>` = 0). I planned branches only and missed a tag holding the old history.
